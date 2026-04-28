@@ -1,0 +1,374 @@
+
+const request = require('supertest');
+const bcrypt = require('bcryptjs');
+const { randomUUID } = require('crypto');
+
+const app = require('../src/index');
+const pool = require('../src/config/db');
+const holidayData = require('../src/data/hu-holidays.json');
+
+function buildFutureIsoDate({
+  daysAhead = 7,
+  hour = 18,
+  minute = 0
+} = {}) {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + daysAhead);
+  date.setUTCHours(hour, minute, 0, 0);
+  return date.toISOString();
+}
+
+function getNextHolidayStartAt() {
+  const now = new Date();
+  const futureHolidayDate = Object.keys(holidayData.dates)
+    .sort()
+    .find(date => new Date(`${date}T17:00:00.000Z`).getTime() > now.getTime());
+
+  if (!futureHolidayDate) {
+    throw new Error('Nincs jövőbeli ünnepnap a hu-holidays fixture-ben.');
+  }
+
+  return {
+    occursOn: futureHolidayDate,
+    startAt: `${futureHolidayDate}T17:00:00.000Z`
+  };
+}
+
+describe('Event series E2E', () => {
+  const password = 'teszt123';
+
+  let captainUserId;
+  let memberUserId;
+  let teamId;
+
+  let captainEmail;
+  let memberEmail;
+
+  let captainToken;
+  let memberToken;
+  let nextHoliday;
+
+  const created = {
+    series: [],
+    events: [],
+    teams: [],
+    users: []
+  };
+
+  async function createUser({ name, email }) {
+    const id = randomUUID();
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    created.users.push(id);
+
+    await pool.query(
+      `
+      insert into users (
+        id, name, email, status, password_hash, created_at, updated_at
+      )
+      values ($1, $2, $3, 'active', $4, now(), now())
+      `,
+      [id, name, email, passwordHash]
+    );
+
+    return id;
+  }
+
+  async function login(email) {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email, password });
+
+    expect(res.status).toBe(200);
+    return res.body.token;
+  }
+
+  async function createTeamMembership(userId, role) {
+    await pool.query(
+      `
+      insert into team_members (
+        id, team_id, user_id, role, membership_status, joined_at, created_at, updated_at
+      )
+      values ($1, $2, $3, $4, 'active', now(), now(), now())
+      `,
+      [randomUUID(), teamId, userId, role]
+    );
+  }
+
+  beforeEach(async () => {
+    nextHoliday = getNextHolidayStartAt();
+
+    captainEmail = `captain_series_${randomUUID()}@example.com`;
+    memberEmail = `member_series_${randomUUID()}@example.com`;
+
+    captainUserId = await createUser({
+      name: 'Captain Series User',
+      email: captainEmail
+    });
+
+    memberUserId = await createUser({
+      name: 'Member Series User',
+      email: memberEmail
+    });
+
+    teamId = randomUUID();
+    created.teams.push(teamId);
+
+    await pool.query(
+      `
+      insert into teams (
+        id, name, created_by_user_id, status, created_at, updated_at
+      )
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Sorozat FC', captainUserId]
+    );
+
+    await createTeamMembership(captainUserId, 'team_admin');
+    await createTeamMembership(memberUserId, 'member');
+
+    captainToken = await login(captainEmail);
+    memberToken = await login(memberEmail);
+  });
+
+  afterEach(async () => {
+    if (created.events.length > 0) {
+      await pool.query(
+        `delete from event_registrations where event_id = any($1::uuid[])`,
+        [created.events]
+      );
+
+      await pool.query(
+        `delete from event_settings where event_id = any($1::uuid[])`,
+        [created.events]
+      );
+
+      await pool.query(
+        `delete from events where id = any($1::uuid[])`,
+        [created.events]
+      );
+    }
+
+    if (created.series.length > 0) {
+      await pool.query(
+        `delete from event_series where id = any($1::uuid[])`,
+        [created.series]
+      );
+    }
+
+    if (created.teams.length > 0) {
+      await pool.query(
+        `delete from team_members where team_id = any($1::uuid[])`,
+        [created.teams]
+      );
+
+      await pool.query(
+        `delete from teams where id = any($1::uuid[])`,
+        [created.teams]
+      );
+    }
+
+    if (created.users.length > 0) {
+      await pool.query(
+        `delete from users where id = any($1::uuid[])`,
+        [created.users]
+      );
+    }
+
+    created.series.length = 0;
+    created.events.length = 0;
+    created.teams.length = 0;
+    created.users.length = 0;
+  });
+
+  test('captain can create weekly event series and generated events are listable', async () => {
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${captainToken}`)
+      .send({
+        title: 'Keddi esti foci',
+        description: 'Heti sorozat',
+        startAt: buildFutureIsoDate({ daysAhead: 8, hour: 18, minute: 0 }),
+        locationName: 'Sorozat pálya',
+        locationAddress: 'Budapest, Teszt utca 1.',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: true,
+        substitutesCount: 2,
+        initialStatus: 'published',
+        recurrenceType: 'weekly',
+        seriesEndType: 'occurrence_count',
+        seriesOccurrenceCount: 4
+      });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.ok).toBe(true);
+    expect(createRes.body.generatedCount).toBe(4);
+    expect(createRes.body.series.recurrence_type).toBe('weekly');
+
+    const seriesId = createRes.body.series.id;
+    created.series.push(seriesId);
+
+    createRes.body.generatedEvents.forEach(item => {
+      created.events.push(item.event.id);
+    });
+
+    const eventsRes = await request(app)
+      .get(`/api/teams/${teamId}/event-series/${seriesId}/events`)
+      .set('Authorization', `Bearer ${captainToken}`);
+
+    expect(eventsRes.status).toBe(200);
+    expect(eventsRes.body.count).toBe(4);
+    expect(eventsRes.body.events[0].occurrence_index).toBe(1);
+    expect(eventsRes.body.events[1].occurrence_index).toBe(2);
+
+    const firstStart = new Date(eventsRes.body.events[0].start_at).getTime();
+    const secondStart = new Date(eventsRes.body.events[1].start_at).getTime();
+
+    expect(secondStart - firstStart).toBe(7 * 24 * 60 * 60 * 1000);
+
+    const listRes = await request(app)
+      .get(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${captainToken}`);
+
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.count).toBe(1);
+    expect(listRes.body.series[0].id).toBe(seriesId);
+  });
+
+  test('generated occurrence can be registered just like a normal event', async () => {
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${captainToken}`)
+      .send({
+        title: 'Csütörtöki foci',
+        startAt: buildFutureIsoDate({ daysAhead: 9, hour: 18, minute: 30 }),
+        locationName: 'Műfüves pálya',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: false,
+        initialStatus: 'published',
+        recurrenceType: 'weekly',
+        seriesEndType: 'occurrence_count',
+        seriesOccurrenceCount: 2
+      });
+
+    expect(createRes.status).toBe(201);
+
+    const seriesId = createRes.body.series.id;
+    created.series.push(seriesId);
+
+    createRes.body.generatedEvents.forEach(item => {
+      created.events.push(item.event.id);
+    });
+
+    const firstEventId = createRes.body.generatedEvents[0].event.id;
+
+    const registerRes = await request(app)
+      .post(`/api/events/${firstEventId}/register`)
+      .set('Authorization', `Bearer ${memberToken}`);
+
+    expect(registerRes.status).toBe(201);
+    expect(registerRes.body.ok).toBe(true);
+    expect(registerRes.body.registration.registration_status).toBe('going');
+  });
+
+  test('holiday warning is returned but does not block creation', async () => {
+    const blockedRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${captainToken}`)
+      .send({
+        title: 'Ünnepnapi foci',
+        startAt: nextHoliday.startAt,
+        locationName: 'Ünnepi pálya',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: false,
+        initialStatus: 'published',
+        recurrenceType: 'weekly',
+        seriesEndType: 'occurrence_count',
+        seriesOccurrenceCount: 2
+      });
+
+    expect(blockedRes.status).toBe(409);
+    expect(blockedRes.body.requiresHolidayConfirmation).toBe(true);
+    expect(Array.isArray(blockedRes.body.holidayWarnings)).toBe(true);
+    expect(blockedRes.body.holidayWarnings[0].occursOn).toBe(nextHoliday.occursOn);
+
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${captainToken}`)
+      .send({
+        title: 'Ünnepnapi foci',
+        startAt: nextHoliday.startAt,
+        locationName: 'Ünnepi pálya',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: false,
+        initialStatus: 'published',
+        recurrenceType: 'weekly',
+        seriesEndType: 'occurrence_count',
+        seriesOccurrenceCount: 2,
+        confirmHolidayOverride: true
+      });
+
+    expect(createRes.status).toBe(201);
+    expect(Array.isArray(createRes.body.holidayWarnings)).toBe(true);
+    expect(createRes.body.holidayWarnings.length).toBeGreaterThan(0);
+
+    const seriesId = createRes.body.series.id;
+    created.series.push(seriesId);
+    createRes.body.generatedEvents.forEach(item => created.events.push(item.event.id));
+
+    expect(createRes.body.holidayWarnings[0].occursOn).toBe(nextHoliday.occursOn);
+    expect(createRes.body.holidayWarnings[0].message).toContain('munkaszüneti');
+  });
+
+  test('member cannot create series and captain can stop it', async () => {
+    const forbiddenRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({
+        title: 'Tiltott sorozat',
+        startAt: buildFutureIsoDate({ daysAhead: 12, hour: 18, minute: 0 }),
+        locationName: 'Tiltott pálya',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: false,
+        recurrenceType: 'weekly',
+        seriesEndType: 'occurrence_count',
+        seriesOccurrenceCount: 2
+      });
+
+    expect(forbiddenRes.status).toBe(403);
+
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${captainToken}`)
+      .send({
+        title: 'Leállítandó sorozat',
+        startAt: buildFutureIsoDate({ daysAhead: 13, hour: 18, minute: 0 }),
+        locationName: 'Leállítás pálya',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: false,
+        recurrenceType: 'biweekly',
+        seriesEndType: 'occurrence_count',
+        seriesOccurrenceCount: 3,
+        confirmHolidayOverride: true
+      });
+
+    expect(createRes.status).toBe(201);
+
+    const seriesId = createRes.body.series.id;
+    created.series.push(seriesId);
+    createRes.body.generatedEvents.forEach(item => created.events.push(item.event.id));
+
+    const stopRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series/${seriesId}/stop`)
+      .set('Authorization', `Bearer ${captainToken}`);
+
+    expect(stopRes.status).toBe(200);
+    expect(stopRes.body.series.is_active).toBe(false);
+  });
+});

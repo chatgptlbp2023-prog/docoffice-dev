@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Foci App – Pilot dashboard</title>
+  <link rel="stylesheet" href="./styles.css?v=sidebar-20260413d" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <button id="sidebarToggle" class="sidebar-toggle" type="button" hidden>
+        <span class="sidebar-toggle-label">Profiladatok</span>
+      </button>
+      <div>
+        <h1>Foci App</h1>
+        <p class="muted">Pilot dashboard a működő backend flow-k gyors kezelésére.</p>
+      </div>
+
+      <div class="card compact">
+        <strong>Visszajelz&eacute;sek</strong>
+        <div class="small muted top-space">Itt jelennek meg a sikeres ment&eacute;sek, figyelmeztet&eacute;sek &eacute;s hib&aacute;k.</div>
+        <div id="sidebarMessage" class="message message-dock hidden" aria-live="polite" aria-hidden="true"></div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-btn active" data-view="authView">Belépés / regisztráció</button>
+        <button class="nav-btn" data-view="adminView">Csapat admin</button>
+        <button class="nav-btn" data-view="userView">Játékos nézet</button>
+      </nav>
+
+      <div class="card compact">
+        <div class="row between">
+          <strong>Session</strong>
+          <span id="sessionBadge" class="badge badge-muted">Nincs belépve</span>
+        </div>
+        <div id="sessionInfo" class="session-info muted">Nincs aktív felhasználó.</div>
+        <button id="logoutBtn" class="btn btn-danger full" disabled>Kijelentkezés</button>
+      </div>
+
+
+      <div id="profilePanel" class="card profile-panel" hidden>
+        <div class="small muted">Profil betĂ¶ltĂ©se...</div>
+      </div>
+
+      <div class="card compact note-card">
+        <strong>Fontos</strong>
+        <p class="muted small">
+          A rendszer már támogatja a meghívásos csapatbeléptetést.
+          A csapathoz csatlakozás elsődleges útvonala a meghívás elfogadása.
+        </p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div id="globalMessage" class="message hidden" aria-hidden="true"></div>
+
+      <section id="authView" class="view active">
+        <div class="auth-shell">
+          <div class="card">
+            <h2>Bejelentkezés</h2>
+            <form id="loginForm" class="stack">
+              <div>
+                <label class="label" for="loginEmail">Email</label>
+                <input id="loginEmail" name="email" type="email" autocomplete="username" required />
+              </div>
+              <div>
+                <label class="label" for="loginPassword">Jelszó</label>
+                <input id="loginPassword" name="password" type="password" required />
+              </div>
+              <button class="btn" type="submit">Belépés</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h2>Regisztráció</h2>
+            <form id="registerForm" class="stack">
+              <div>
+                <label class="label" for="registerName">Név</label>
+                <input id="registerName" name="name" type="text" required />
+              </div>
+              <div>
+                <label class="label" for="registerEmail">Email</label>
+                <input id="registerEmail" name="email" type="email" autocomplete="off" required />
+              </div>
+              <div>
+                <label class="label" for="registerPassword">Jelszó</label>
+                <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="6" required />
+              </div>
+              <button class="btn" type="submit">Regisztráció</button>
+            </form>
+          </div>
+        </div>
+
+        <section class="top-space hidden" hidden data-auth-finance-placeholder="true">
+          <div class="grid two-col">
+            <div class="card">
+              <h2>Pénzügy / csapat kassza</h2>
+              <div class="small muted section-note">A lezárt vagy megvalósult eseményekből származó könyvelt összegek egy helyen. Ez külön admin munkatérként jelenik meg, hogy ne keveredjen az eseményszervezéssel.</div>
+              <div id="adminFinanceContentGhost" class="stack top-space"></div>
+            </div>
+            <div class="card">
+              <h2>Esemény elszámolása</h2>
+              <div class="small muted section-note">A kiválasztott eseményt itt tudod lezárni, jelenlétet rögzíteni és a befizetéseket lekönyvelni.</div>
+              <div id="adminAttendanceContentGhost" class="stack top-space"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="adminView" class="view" data-surface-layout="true">
+        <div class="view-header card compact" data-layout-item data-layout-key="admin-overview" data-default-col-span="12" data-default-row-span="1" data-min-col-span="12" data-max-col-span="12">
+          <div>
+            <h2>Csapat admin</h2>
+            <p class="muted small">Itt kezeled a kiválasztott csapatot: meghívók, tagok, kapitányi szerep és események.</p>
+          </div>
+          <div id="adminOverviewCards" class="overview-grid compact-overview"></div>
+        </div>
+
+        <div class="card compact admin-subnav-card top-space">
+          <div class="admin-subnav">
+            <button class="subnav-btn active" type="button" data-admin-workspace="home">Kezdőlap</button>
+            <button class="subnav-btn" type="button" data-admin-workspace="team">Csapat</button>
+            <button class="subnav-btn" type="button" data-admin-workspace="events">Események</button>
+            <button class="subnav-btn" type="button" data-admin-workspace="finance">Pénzügy</button>
+          </div>
+        </div>
+
+        <section data-admin-workspace-panel="home" class="top-space">
+          <div class="grid two-col">
+            <div class="card">
+              <h2>Kezdő admin iránytű</h2>
+              <div class="small muted section-note">Ez a nyitó nézet segít megérteni, hol tart a csapat setupja és mi a következő ajánlott lépés.</div>
+              <div id="adminHomeContent" class="stack top-space"></div>
+            </div>
+            <div class="card">
+              <h2>Gyors áttekintés</h2>
+              <div class="small muted section-note">Itt csak a legfontosabb állapotokat látod, hogy első ránézésre is érthető legyen a működés.</div>
+              <div id="adminHomeSummary" class="stack top-space"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="grid two-col" data-layout-item data-layout-key="admin-workspace" data-default-col-span="12" data-default-row-span="3" data-min-col-span="12" data-max-col-span="12">
+          <div class="card hidden" hidden data-admin-workspace-panel="team">
+            <h2>Csapat kontextus</h2>
+            <div class="small muted section-note">Válassz vagy hozz létre egy csapatot. A kiválasztott csapat lesz az admin és játékos nézet közös fókusza.</div>
+            <form id="teamLoadForm" class="stack">
+              <div>
+                <label class="label" for="teamIdInput">Melyik csapattal dolgozol most?</label>
+                <select id="teamIdInput">
+                  <option value="">Válassz csapatot...</option>
+                </select>
+              </div>
+              <div class="row gap">
+                <button class="btn btn-secondary" type="submit">Csapat betöltése</button>
+                <button id="useSavedTeamBtn" class="btn btn-ghost" type="button">Mentett ID használata</button>
+              </div>
+            </form>
+
+            <hr />
+
+            <div id="createTeamPanel">
+            <form id="createTeamForm" class="stack">
+              <div>
+                <label class="label" for="teamName">Új csapat neve</label>
+                <input id="teamName" type="text" placeholder="Teszt FC" required />
+              </div>
+              <button class="btn" type="submit">Csapat létrehozása</button>
+            </form>
+            </div>
+
+            <div id="teamSummary" class="stack top-space"></div>
+
+            <div class="card compact admin-subnav-card top-space">
+              <div class="admin-subnav">
+                <button class="subnav-btn active" type="button" data-admin-team-section="invites">Meghívások</button>
+                <button class="subnav-btn" type="button" data-admin-team-section="members">Tagok</button>
+                <button class="subnav-btn" type="button" data-admin-team-section="draw">CsapatsorsolĂˇs</button>
+                <button class="subnav-btn" type="button" data-admin-team-section="advanced">Haladó beállítások</button>
+              </div>
+            </div>
+
+            <section class="top-space" data-admin-team-panel="invites">
+
+            <div class="top-space">
+              <h3>Tag meghívása</h3>
+              <form id="createInviteForm" class="stack">
+                <div>
+                  <label class="label" for="inviteEmail">Meghívandó email</label>
+                  <input id="inviteEmail" type="email" placeholder="anna@example.com" />
+                </div>
+                <div>
+                  <label class="label" for="inviteRole">Szerepkör</label>
+                  <select id="inviteRole">
+                    <option value="member">member</option>
+                    <option value="team_manager">team_manager</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="label" for="inviteMessage">Üzenet</label>
+                  <textarea id="inviteMessage" rows="2" placeholder="Gyere a csapatba"></textarea>
+                </div>
+                <button class="btn" type="submit">Meghívó küldése</button>
+              </form>
+            </div>
+
+            <div class="top-space">
+              <h3>Csapat meghívói</h3>
+              <div class="small muted section-note">A lista a függő, elfogadott, elutasított és visszavont meghívókat is mutatja.</div>
+              <div id="teamInvitesAdminList" class="stack"></div>
+            </div>
+
+            </section>
+
+            <section class="top-space hidden" hidden data-admin-team-panel="members">
+            <details class="admin-collapse top-space">
+              <summary>
+                <span>Csapattagok kezelése</span>
+              </summary>
+              <div class="admin-collapse-body stack">
+                <div class="small muted section-note">A captain külön védett. A meghívás marad az elsődleges belépési út.</div>
+                <div class="small muted">
+                  Ez a régi közvetlen admin beléptetés. Pilot fallbackként marad, de az elsődleges út a meghívás.
+                </div>
+                <form id="addMemberForm" class="stack top-space">
+                  <div>
+                    <label class="label" for="memberEmail">User email</label>
+                    <input id="memberEmail" type="email" placeholder="peter@example.com" required />
+                  </div>
+                  <div>
+                    <label class="label" for="memberRole">Szerepkör</label>
+                    <select id="memberRole">
+                      <option value="member">member</option>
+                      <option value="vice_captain">vice_captain</option>
+                    </select>
+                  </div>
+                  <button class="btn btn-ghost" type="submit">Tag hozzáadása közvetlenül</button>
+                </form>
+
+                <div id="teamMembersAdminList" class="stack top-space"></div>
+              </div>
+            </details>
+            </section>
+
+            <section class="top-space hidden" hidden data-admin-team-panel="draw">
+              <div class="small muted section-note">Itt csak a kivĂˇlasztott esemĂ©nyhez kapcsolĂłdĂł csapatgenerĂˇlĂˇs Ă©s csapatsorsolĂˇs jelenik meg.</div>
+              <div id="teamDrawContent" class="stack top-space"></div>
+            </section>
+
+            <section class="top-space hidden" hidden data-admin-team-panel="advanced">
+              <div class="small muted section-note">Itt jelennek meg a rangmodul, a skill modul és a csapatleosztási előnézet haladó beállításai.</div>
+              <div id="teamAdvancedContent" class="stack top-space"></div>
+            </section>
+          </div>
+
+          <div id="adminEventEditorCard" class="card">
+            <h2>Új esemény</h2>
+            <div class="small muted section-note">Az új esemény az aktuálisan kiválasztott csapathoz készül.</div>
+            <form id="createEventForm" class="stack">
+              <div class="grid two-col inner-grid">
+                <div>
+                  <label class="label" for="eventTitle">Cím</label>
+                  <input id="eventTitle" type="text" required />
+                </div>
+                <div>
+                  <label class="label" for="eventStatus">Kezdő státusz</label>
+                  <select id="eventStatus">
+                    <option value="published">published</option>
+                    <option value="draft">draft</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="label" for="eventDescription">Leírás</label>
+                <textarea id="eventDescription" rows="3"></textarea>
+              </div>
+
+              <div class="grid two-col inner-grid">
+                <div>
+                  <label class="label" for="eventStartAt">Kezdés</label>
+                  <input id="eventStartAt" type="datetime-local" required />
+                </div>
+                <div>
+                  <label class="label" for="eventLocation">Helyszín</label>
+                  <input id="eventLocation" type="text" required />
+                </div>
+              </div>
+
+              <div class="grid three-col inner-grid">
+                <div>
+                  <label class="label" for="eventMinPlayers">Min játékos</label>
+                  <input id="eventMinPlayers" type="number" min="1" value="10" required />
+                </div>
+                <div>
+                  <label class="label" for="eventPlayersOnField">Pályán</label>
+                  <input id="eventPlayersOnField" type="number" min="1" value="10" required />
+                </div>
+                <div>
+                  <label class="label" for="eventSubstitutes">Cserék</label>
+                  <input id="eventSubstitutes" type="number" min="0" value="0" required />
+                </div>
+              </div>
+
+              <div>
+                <label class="label" for="eventRulesText">Szabályok</label>
+                <textarea id="eventRulesText" rows="2"></textarea>
+              </div>
+
+              <details class="admin-collapse notification-collapse" open>
+                <summary>
+                  <span>Értesítési paletta</span>
+                </summary>
+                <div class="admin-collapse-body">
+                  <div class="notification-box">
+                    <div class="small muted section-note">Az ajánlott értesítések alapból be vannak kapcsolva, a zajosabb push-ok csak külön kérésre mennek.</div>
+
+                    <div class="notification-prefs-grid">
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Csapat értesítése új eseményről</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyTeamOnCreate" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-disabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Minden tag értesítése új jelentkezőről</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyAllOnNewRegistration" />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Értesítés, ha már csak 2 hely maradt</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyAllWhenTwoSpotsLeft" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Értesítés, ha betelt az esemény</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyAllWhenFull" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Várólistáról bekerülő játékos értesítése</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyWaitlistPromotion" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Értesítés a csapatleosztásról</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyTeamDrawPublished" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Automatikus csapatleosztás 1 órával kezdés előtt</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="enableAutoTeamDrawOneHourBefore" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Időpont- vagy helyszínváltozás értesítése</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyParticipantsOnEventUpdate" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-enabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Esemény törlésének értesítése</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyParticipantsOnEventCancel" checked />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="notification-switch-card is-disabled" data-notification-pref-card>
+                        <span>
+                          <span class="notification-switch-label">Időjárási figyelmeztetések</span>
+                        </span>
+                        <span class="module-switch-control">
+                          <input type="checkbox" data-notification-pref="notifyWeatherAlerts" />
+                          <span class="module-switch-track" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              <div class="recurring-box">
+                <label class="checkbox-line recurring-toggle-line">
+                  <input id="isRecurringToggle" type="checkbox" />
+                  Ismétlődő eseménysorozat
+                </label>
+                <div class="small muted section-note recurring-note">Ha bejelölöd, az egyszeri esemény helyett eseménysorozat jön létre.</div>
+
+                <div id="recurringOptions" class="stack recurring-options hidden-block">
+                  <div class="grid two-col inner-grid">
+                    <div>
+                      <label class="label" for="recurrenceType">Gyakoriság</label>
+                      <select id="recurrenceType">
+                        <option value="weekly">Hetente</option>
+                        <option value="biweekly">2 hetente</option>
+                        <option value="monthly">Havonta</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="label" for="seriesEndType">Sorozat vége</label>
+                      <select id="seriesEndType">
+                        <option value="occurrence_count">Alkalomszám alapján</option>
+                        <option value="until_date">Dátumig</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div id="occurrenceCountWrapper">
+                    <label class="label" for="seriesOccurrenceCount">Alkalmak száma</label>
+                    <input id="seriesOccurrenceCount" type="number" min="1" value="6" />
+                  </div>
+
+                  <div id="untilDateWrapper" class="hidden-block">
+                    <label class="label" for="seriesUntilDate">Sorozat vége dátum</label>
+                    <input id="seriesUntilDate" type="date" />
+                  </div>
+                </div>
+              </div>
+
+              <button class="btn" type="submit">Esemény létrehozása</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="grid two-col top-space hidden" hidden data-admin-workspace-panel="events">
+          <div class="card">
+            <div class="card compact admin-subnav-card">
+              <div class="admin-subnav">
+                <button class="subnav-btn active" type="button" data-admin-events-section="upcoming">Közelgő / nyitott</button>
+                <button class="subnav-btn" type="button" data-admin-events-section="closed">Lezárt / megvalósult</button>
+              </div>
+            </div>
+            <section class="top-space" data-admin-events-panel="upcoming">
+            <div class="row between align-center">
+              <h2>Csapat eseményei</h2>
+              <button id="refreshAdminEventsBtn" class="btn btn-secondary" type="button">Frissítés</button>
+            </div>
+            <div id="adminEventsList" class="stack"></div>
+            </section>
+            <section class="top-space hidden" hidden data-admin-events-panel="closed">
+              <div class="row between align-center">
+                <h2>Lezárt események</h2>
+                <button class="btn btn-secondary" type="button" data-admin-events-section="upcoming">Vissza a közelgőkhöz</button>
+              </div>
+              <div id="adminClosedEventsList" class="stack"></div>
+            </section>
+          </div>
+
+          <div class="card">
+            <h2>Esemény szerkesztés / státusz</h2>
+            <div id="selectedEventMeta" class="muted small">Válassz eseményt a bal oldali listából.</div>
+
+            <form id="editEventForm" class="stack top-space">
+              <div>
+                <label class="label" for="editTitle">Cím</label>
+                <input id="editTitle" type="text" />
+              </div>
+              <div>
+                <label class="label" for="editDescription">Leírás</label>
+                <textarea id="editDescription" rows="3"></textarea>
+              </div>
+              <div class="grid two-col inner-grid">
+                <div>
+                  <label class="label" for="editStartAt">Kezdés</label>
+                  <input id="editStartAt" type="datetime-local" />
+                </div>
+                <div>
+                  <label class="label" for="editLocationName">Helyszín</label>
+                  <input id="editLocationName" type="text" />
+                </div>
+              </div>
+              <div class="grid three-col inner-grid">
+                <div>
+                  <label class="label" for="editMinPlayers">Min játékos</label>
+                  <input id="editMinPlayers" type="number" min="1" />
+                </div>
+                <div>
+                  <label class="label" for="editPlayersOnField">Pályán</label>
+                  <input id="editPlayersOnField" type="number" min="1" />
+                </div>
+                <div>
+                  <label class="label" for="editSubstitutesCount">Cserék</label>
+                  <input id="editSubstitutesCount" type="number" min="0" />
+                </div>
+              </div>
+              <div>
+                <label class="label" for="editRulesText">Szabályok</label>
+                <textarea id="editRulesText" rows="2"></textarea>
+              </div>
+              <div>
+                <label class="checkbox-line">
+                  <input id="editSubstitutesEnabled" type="checkbox" />
+                  Csere engedélyezett
+                </label>
+              </div>
+              <button class="btn" type="submit">Esemény mentése</button>
+            </form>
+
+            <div class="status-actions top-space">
+              <button class="btn btn-secondary" data-status-btn="published">Published</button>
+              <button class="btn btn-secondary" data-status-btn="cancelled">Cancelled</button>
+              <button class="btn btn-secondary" data-status-btn="finished">Finished</button>
+            </div>
+          </div>
+        </div>
+
+        <section class="top-space hidden" hidden data-admin-workspace-panel="finance">
+          <div class="card compact admin-subnav-card">
+            <div class="admin-subnav">
+              <button class="subnav-btn active" type="button" data-admin-finance-section="settlement">ElszĂˇmolĂˇs</button>
+              <button class="subnav-btn" type="button" data-admin-finance-section="balances">Egyenlegek</button>
+            </div>
+          </div>
+          <div class="grid two-col top-space">
+            <div id="adminFinanceBalancesCard" class="card">
+              <h2>Pénzügy / csapat kassza</h2>
+              <div class="small muted section-note">A lezárt vagy megvalósult eseményekből származó könyvelt összegek egy helyen. Ez külön admin munkatérként jelenik meg, hogy ne keveredjen az eseményszervezéssel.</div>
+              <div id="adminFinanceContent" class="stack top-space"></div>
+            </div>
+            <div id="adminFinanceSettlementCard" class="card">
+              <h2>Esemény elszámolása</h2>
+              <div class="small muted section-note">A kiválasztott eseményt itt tudod lezárni, jelenlétet rögzíteni és a befizetéseket lekönyvelni.</div>
+              <div id="adminAttendanceContent" class="stack top-space"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="userView" class="view" data-surface-layout="true">
+        <div class="view-header card compact" data-layout-item data-layout-key="user-overview" data-default-col-span="12" data-default-row-span="1" data-min-col-span="12" data-max-col-span="12">
+          <div>
+            <h2>Játékos nézet</h2>
+            <p class="muted small">Itt most a következő focid van fókuszban. A cél, hogy egy pillanat alatt lásd: mikor játszol, hol, hányan vannak, és neked van-e még teendőd.</p>
+          </div>
+          <div id="userOverviewCards" class="overview-grid compact-overview"></div>
+        </div>
+
+        <div class="card hero-card top-space" data-layout-item data-layout-key="user-next-event" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+          <div class="row between align-center hero-headline-row">
+            <div>
+              <h2>Következő eseményem</h2>
+              <div class="small muted section-note">A legközelebbi, még előtted álló csapatesemény. Innen azonnal látod a saját státuszodat és a létszámhelyzetet is.</div>
+            </div>
+          </div>
+          <div id="nextEventHero" class="top-space"></div>
+          <div id="userTeamDrawPreview"></div>
+        </div>
+
+          <div class="grid one-col top-space" data-layout-item data-layout-key="user-rank-weather" data-default-col-span="12" data-default-row-span="1" data-min-col-span="6" data-max-col-span="12">
+            <div class="card secondary-user-card">
+              <h2>Rangmodul</h2>
+              <div id="userRankModule" class="top-space"></div>
+            </div>
+
+            <div class="card secondary-user-card">
+              <h2>Pénzügyeim</h2>
+              <div id="userFinanceModule" class="top-space"></div>
+            </div>
+
+            <div class="card secondary-user-card">
+              <h2>Időjárás</h2>
+              <div id="userWeatherModule" class="top-space"></div>
+            </div>
+          </div>
+
+        <div class="card top-space" data-layout-item data-layout-key="user-my-events" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
+          <div class="row between align-center section-header-wrap">
+            <div>
+              <h2>Közelgő eseményeim</h2>
+              <div class="small muted section-note">A saját csapataid következő eseményei. A részletek lenyithatók, így nem terhelik túl a fő nézetet.</div>
+            </div>
+          </div>
+          <div id="myEventsList" class="stack"></div>
+        </div>
+
+        <div class="grid two-col top-space" data-layout-item data-layout-key="user-invites-teams" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
+          <div class="card">
+            <div class="row between align-center section-header-wrap">
+              <div>
+                <h2>Meghívásaim</h2>
+                <div class="small muted section-note">A függő meghívások maradnak elöl. A lezárt meghívások lejjebb, visszafogottabban jelennek meg.</div>
+              </div>
+              <button id="refreshMyInvitesBtn" class="btn btn-secondary" type="button">Frissítés</button>
+            </div>
+            <div id="myInvitesList" class="stack top-space"></div>
+          </div>
+
+          <div class="card">
+            <div class="section-header-wrap">
+              <div>
+                <h2>Saját csapataim</h2>
+                <div class="small muted section-note">Kompakt lista. A fókuszcsapat kiemelt marad, de nem nyomja el az eseményfókuszt.</div>
+              </div>
+            </div>
+            <div id="myTeamsList" class="stack"></div>
+          </div>
+        </div>
+
+        <div class="card top-space secondary-user-card" data-layout-item data-layout-key="user-team-events" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
+          <div class="row between align-center section-header-wrap">
+            <div>
+              <h2>Fókuszcsapat teljes eseménylistája</h2>
+              <div class="small muted section-note">Ez már másodlagos nézet. Akkor hasznos, ha a kiválasztott csapat összes eseményét akarod átnézni.</div>
+            </div>
+            <button id="refreshUserEventsBtn" class="btn btn-secondary" type="button">Frissítés</button>
+          </div>
+          <form id="userTeamForm" class="row gap wrap">
+            <select id="userTeamIdInput">
+              <option value="">Válassz csapatot...</option>
+            </select>
+            <button class="btn btn-secondary" type="submit">Betöltés</button>
+            <button id="useSavedUserTeamBtn" class="btn btn-ghost" type="button">Mentett ID</button>
+          </form>
+          <div id="userEventsList" class="stack top-space"></div>
+        </div>
+
+        <div class="grid one-col top-space" data-layout-item data-layout-key="user-event-detail-panel" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
+          <div class="card secondary-user-card">
+            <h2>Részletes eseménynézet</h2>
+            <div id="userEventDetail" class="muted">Ha a fókuszcsapat listájából eseményt nyitsz meg, itt látod a részletes jelenléti listát és az összesített adatokat.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./app.js?v=sidebar-20260413d"></script>
+</body>
+</html>

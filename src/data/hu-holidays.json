@@ -1,0 +1,106 @@
+{
+  "country": "HU",
+  "source": "baseline-national-holidays",
+  "dates": {
+    "2026-01-01": {
+      "name": "Újév",
+      "type": "national_holiday"
+    },
+    "2026-01-02": {
+      "name": "Újévi pihenőnap",
+      "type": "national_holiday"
+    },
+    "2026-03-15": {
+      "name": "1848-as forradalom emléknapja",
+      "type": "national_holiday"
+    },
+    "2026-04-03": {
+      "name": "Nagypéntek",
+      "type": "national_holiday"
+    },
+    "2026-04-06": {
+      "name": "Húsvéthétfő",
+      "type": "national_holiday"
+    },
+    "2026-05-01": {
+      "name": "Munka ünnepe",
+      "type": "national_holiday"
+    },
+    "2026-05-25": {
+      "name": "Pünkösdhétfő",
+      "type": "national_holiday"
+    },
+    "2026-08-20": {
+      "name": "Államalapítás ünnepe",
+      "type": "national_holiday"
+    },
+    "2026-08-21": {
+      "name": "Államalapítás ünnepéhez kapcsolódó pihenőnap",
+      "type": "national_holiday"
+    },
+    "2026-10-23": {
+      "name": "1956-os forradalom emléknapja",
+      "type": "national_holiday"
+    },
+    "2026-11-01": {
+      "name": "Mindenszentek",
+      "type": "national_holiday"
+    },
+    "2026-12-24": {
+      "name": "Szenteste",
+      "type": "national_holiday"
+    },
+    "2026-12-25": {
+      "name": "Karácsony",
+      "type": "national_holiday"
+    },
+    "2026-12-26": {
+      "name": "Karácsony másnapja",
+      "type": "national_holiday"
+    },
+    "2027-01-01": {
+      "name": "Újév",
+      "type": "national_holiday"
+    },
+    "2027-03-15": {
+      "name": "1848-as forradalom emléknapja",
+      "type": "national_holiday"
+    },
+    "2027-03-26": {
+      "name": "Nagypéntek",
+      "type": "national_holiday"
+    },
+    "2027-03-29": {
+      "name": "Húsvéthétfő",
+      "type": "national_holiday"
+    },
+    "2027-05-01": {
+      "name": "Munka ünnepe",
+      "type": "national_holiday"
+    },
+    "2027-05-17": {
+      "name": "Pünkösdhétfő",
+      "type": "national_holiday"
+    },
+    "2027-08-20": {
+      "name": "Államalapítás ünnepe",
+      "type": "national_holiday"
+    },
+    "2027-10-23": {
+      "name": "1956-os forradalom emléknapja",
+      "type": "national_holiday"
+    },
+    "2027-11-01": {
+      "name": "Mindenszentek",
+      "type": "national_holiday"
+    },
+    "2027-12-25": {
+      "name": "Karácsony",
+      "type": "national_holiday"
+    },
+    "2027-12-26": {
+      "name": "Karácsony másnapja",
+      "type": "national_holiday"
+    }
+  }
+}

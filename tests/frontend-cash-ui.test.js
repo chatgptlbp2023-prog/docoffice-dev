@@ -1,0 +1,448 @@
+/** @jest-environment node */
+
+const { bootFrontend, createJsonResponse, flushMicrotasks } = require('./helpers/frontendHarness');
+
+describe('Frontend cash module UI', () => {
+  test('a jelenleti panel penzugyi sora kulon mutatja a tervet, a befolytat es az elterest', async () => {
+    const { window } = await bootFrontend();
+
+    const html = window.eval(`
+      renderAttendanceFinanceSummary({
+        summary: {
+          paymentSummary: {
+            base_amount_per_person: 1200,
+            per_player_fee: 100,
+            final_amount_per_person: 1300
+          },
+          attendanceSummary: {
+            totalPaidAmount: 1500
+          }
+        }
+      }, [{}, {}]);
+    `);
+
+    expect(html).toContain('Pénzügyi sor');
+    expect(html).toContain('Fejpénz / fő terv');
+    expect(html).toContain('Alapdíj / fő terv');
+    expect(html).toContain('Befolyt összesen');
+    expect(html).toContain('Eltérés');
+    expect(html).toContain('-1100 Ft');
+  });
+
+  test('a csapat kassza attekintesben a szummasor mindig megjelenik, a reszletek lenyithatok', async () => {
+    const { window } = await bootFrontend();
+
+    const html = window.eval(`
+      renderTeamCashLedgerSummary([
+        {
+          id: 'event-1',
+          title: 'Lezárt 1',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Pálya 1',
+          status: 'finished',
+          going_count: 2,
+          payment_summary: {
+            base_amount_per_person: 1200,
+            per_player_fee: 100,
+            final_amount_per_person: 1300
+          },
+          attendance_summary: {
+            going_count_basis: 2,
+            total_paid_amount: 2800
+          }
+        }
+      ]);
+    `);
+
+    expect(html).toContain('Fejpénz összesen');
+    expect(html).toContain('Alapdíj összesen');
+    expect(html).toContain('Befolyt összesen');
+    expect(html).toContain('Esemény részletek');
+    expect(html).toContain('Lezárt 1');
+    expect(html).toContain('Pálya 1');
+  });
+
+  test('az admin attendance panel a beirt befizetest kuldi el, nem a nyers esemenydijat', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/events/event-1/attendance/player-1')) {
+        return createJsonResponse({
+          message: 'Megjelent sikeresen rogzitve.',
+          attendance: { status: 'present' }
+        });
+      }
+
+      if (target.includes('/events/event-1') && !target.includes('/attendance/')) {
+        return createJsonResponse({
+          event: {
+            id: 'event-1',
+            title: 'Lezart meccs',
+            start_at: '2026-04-15T18:00:00.000Z',
+            location_name: 'Teszt palya',
+            status: 'finished'
+          },
+          registrations: {
+            going: [{
+              user_id: 'player-1',
+              name: 'Player One',
+              finance_balance_before_event: -400,
+              finance_settlement_target_amount: 1700,
+              attendance_status: null,
+              attendance_payment_amount: null
+            }]
+          },
+          summary: {
+            attendanceSummary: {
+              presentCount: 0,
+              noShowCount: 0,
+              unmarkedCount: 1,
+              totalPaidAmount: 0
+            },
+            paymentSummary: {
+              final_amount_per_person: 1300,
+              base_amount_per_person: 1200,
+              per_player_fee: 100
+            }
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.adminEvents = [{
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      }];
+      state.selectedAdminEvent = {
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-1',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [{
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: -400,
+            finance_settlement_target_amount: 1700,
+            attendance_status: null,
+            attendance_payment_amount: null
+          }]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            base_amount_per_person: 1200,
+            per_player_fee: 100
+          }
+        }
+      };
+      renderAdminFinancePanel();
+    `);
+
+    expect(document.querySelector('[data-attendance-payment]').value).toBe('1700');
+    document.querySelector('[data-attendance-payment]').value = '900';
+    document.querySelector('[data-team-summary-action="set-attendance"]').click();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/events/event-1/attendance/player-1'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'present',
+          paymentAmount: 900
+        })
+      })
+    );
+  });
+
+  test('az admin attendance panel gepeles kozben frissiti a vart egyenleget es az elterest', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.adminWorkspace = 'finance';
+      state.adminFinanceSection = 'settlement';
+      state.selectedAdminEvent = {
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-1',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [{
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: -400,
+            finance_settlement_target_amount: 1700,
+            attendance_status: null,
+            attendance_payment_amount: null
+          }]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            base_amount_per_person: 1200,
+            per_player_fee: 100
+          }
+        }
+      };
+      document.getElementById('adminAttendanceContent').innerHTML = renderAdminAttendanceManager();
+    `);
+
+    const amountInput = document.querySelector('[data-attendance-payment][data-attendance-user-id="player-1"]');
+    amountInput.value = '900';
+    amountInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+
+    expect(document.querySelector('[data-attendance-actual-paid][data-attendance-user-id="player-1"]').textContent).toContain('900');
+    expect(document.querySelector('[data-attendance-payment-delta][data-attendance-user-id="player-1"]').textContent).toContain('-800');
+    expect(document.querySelector('[data-attendance-projected-after][data-attendance-user-id="player-1"]').textContent).toContain('-800');
+  });
+
+  test('a user penzugyeim modul mutatja az aktualis egyenleget es az esemenysorokat', async () => {
+    const { window } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamMembers = [{
+        user_id: 'captain-1',
+        name: 'Kapitany',
+        role: 'team_admin',
+        membership_status: 'active',
+        payment_provider: 'revolut',
+        payment_username: '@kapitany',
+        payment_qr_data_url: 'data:image/png;base64,AAA='
+      }];
+      state.currentTeamFinance = {
+        current_balance_amount: -100,
+        entry_count: 2,
+        total_expected_amount: 2600,
+        total_actual_paid_amount: 2500,
+        entries: [
+          {
+            event_title: 'Masodik meccs',
+            event_start_at: '2026-04-16T18:00:00.000Z',
+            event_location_name: 'Pálya 2',
+            expected_total_amount: 1300,
+            actual_paid_amount: 1000,
+            event_delta_amount: -300,
+            balance_after_event: -100
+          },
+          {
+            event_title: 'Elso meccs',
+            event_start_at: '2026-04-15T18:00:00.000Z',
+            event_location_name: 'Pálya 1',
+            expected_total_amount: 1300,
+            actual_paid_amount: 1500,
+            event_delta_amount: 200,
+            balance_after_event: 200
+          }
+        ]
+      };
+      renderUserFinanceModule();
+    `);
+
+    const html = window.document.getElementById('userFinanceModule').innerHTML;
+    expect(html).toContain('Fókuszcsapat egyenleg');
+    expect(html).toContain('-100 Ft');
+    expect(html).toContain('Csapatkapitány fizetési profilja');
+    expect(html).toContain('@kapitany');
+    expect(html).toContain('Masodik meccs');
+    expect(html).toContain('Befizetett');
+    expect(html).toContain('Új egyenleg');
+  });
+
+  test('az admin penzugyi nezet mutatja a tagonkenti egyenlegeket es a szuroket', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.teamMembers = [
+        {
+          user_id: 'user-1',
+          name: 'Ados Adam',
+          email: 'adam@example.com',
+          membership_status: 'active',
+          finance_stats: {
+            current_balance_amount: -300,
+            entry_count: 2,
+            total_expected_amount: 2600,
+            total_actual_paid_amount: 2300
+          }
+        },
+        {
+          user_id: 'user-2',
+          name: 'Pluszos Pali',
+          email: 'pali@example.com',
+          membership_status: 'active',
+          finance_stats: {
+            current_balance_amount: 200,
+            entry_count: 1,
+            total_expected_amount: 1300,
+            total_actual_paid_amount: 1500
+          }
+        }
+      ];
+      state.teamFinanceEntries = [
+        {
+          user_id: 'user-1',
+          event_title: 'Hetfo esti',
+          event_start_at: '2026-04-14T18:00:00.000Z',
+          event_location_name: 'Palya 1',
+          settlement_target_amount: 1600,
+          actual_paid_amount: 1500,
+          event_delta_amount: -100,
+          balance_after_event: -300
+        },
+        {
+          user_id: 'user-2',
+          event_title: 'Keddi esti',
+          event_start_at: '2026-04-15T18:00:00.000Z',
+          event_location_name: 'Palya 2',
+          settlement_target_amount: 1100,
+          actual_paid_amount: 1300,
+          event_delta_amount: 200,
+          balance_after_event: 200
+        }
+      ];
+      state.adminEvents = [];
+      renderAdminFinancePanel();
+    `);
+
+    let html = document.getElementById('adminFinanceContent').innerHTML;
+    expect(html).toContain('Tagonkénti egyenlegek');
+    expect(html).toContain('Ados Adam');
+    expect(html).toContain('Pluszos Pali');
+    expect(html).toContain('tartozik');
+    expect(html).toContain('többlete van');
+
+    const filter = document.querySelector('[data-finance-filter="status"]');
+    filter.value = 'debt';
+    filter.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+    html = document.getElementById('adminFinanceContent').innerHTML;
+    expect(html).toContain('Ados Adam');
+    expect(html).not.toContain('Pluszos Pali');
+  });
+
+  test('az admin kulon befizetest tud rogziteni a tagi egyenleghez', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/teams/team-1/finance-adjustments/user-1')) {
+        return createJsonResponse({
+          message: 'Kulon befizetes sikeresen rogzitve.'
+        });
+      }
+
+      if (target.includes('/teams/team-1')) {
+        return createJsonResponse({
+          team: { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true, capabilities: {} },
+          members: [],
+          current_user_finance: null,
+          team_finance_entries: []
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.teamMembers = [
+        {
+          user_id: 'user-1',
+          name: 'Ados Adam',
+          email: 'adam@example.com',
+          membership_status: 'active',
+          finance_stats: {
+            current_balance_amount: -1700,
+            debt_amount: 1700,
+            entry_count: 2,
+            total_expected_amount: 2600,
+            total_actual_paid_amount: 900
+          }
+        }
+      ];
+      state.teamFinanceEntries = [];
+      renderAdminFinancePanel();
+    `);
+
+    document.querySelector('details.finance-member-collapse').open = true;
+    const amountInput = document.querySelector('[data-finance-adjustment-amount][data-finance-user-id="user-1"]');
+    amountInput.value = '1700';
+    const noteInput = document.querySelector('[data-finance-adjustment-note][data-finance-user-id="user-1"]');
+    noteInput.value = 'utolagos atutalas';
+
+    document.querySelector('[data-team-summary-action="record-finance-adjustment"]').click();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/teams/team-1/finance-adjustments/user-1'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          adjustmentAmount: 1700,
+          note: 'utolagos atutalas'
+        })
+      })
+    );
+  });
+});

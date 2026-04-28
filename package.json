@@ -1,0 +1,39 @@
+{
+  "name": "foci-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "process:prestart": "node src/tools/processPrestartEventAutomation.js",
+    "test": "jest --runInBand --detectOpenHandles",
+    "test:frontend": "jest tests/frontend-auth-ui.test.js --runInBand",
+    "test:module:rank": "jest tests/event-registration.e2e.test.js tests/frontend-rank-ui.test.js --runInBand --detectOpenHandles",
+    "test:module:skill": "jest tests/team-skills.e2e.test.js tests/team-draw-status.e2e.test.js tests/frontend-team-draw-ui.test.js --runInBand --detectOpenHandles",
+    "test:module:cash": "jest tests/event-attendance.e2e.test.js tests/frontend-cash-ui.test.js --runInBand --detectOpenHandles",
+    "test:flow:organizer": "jest tests/organizer-full-flow.e2e.test.js --runInBand --detectOpenHandles",
+    "test:modules": "npm run test:module:rank && npm run test:module:skill && npm run test:module:cash && npm run test:flow:organizer",
+    "test:watch": "jest --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^5.1.0",
+    "firebase": "^12.12.0",
+    "google-auth-library": "^9.15.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.20.0"
+  },
+  "devDependencies": {
+    "jest": "^30.3.0",
+    "jsdom": "^22.1.0",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2"
+  }
+}
