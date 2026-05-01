@@ -29,7 +29,7 @@ function generateInviteCode() {
 }
 
 function buildInviteLink(token) {
-  return `/ ?invite=${encodeURIComponent(token)}`;
+  return `/?invite=${encodeURIComponent(token)}`;
 }
 
 function assertValidInviteRole(role) {
@@ -195,7 +195,8 @@ async function createInvite({ teamId, invitedByUserId, email, phone, role, messa
   const normalizedMessage = normalizeMessage(message);
 
   return withTransaction(async client => {
-    await assertTeamExists(client, teamId);
+    const team = await assertTeamExists(client, teamId);
+    const inviter = await getUserById(client, invitedByUserId);
     await expirePendingInvitesForTeam(client, teamId);
 
     if (invitedEmail) {
@@ -291,9 +292,9 @@ async function createInvite({ teamId, invitedByUserId, email, phone, role, messa
 
     const invite = mapInvite({
       ...insertResult.rows[0],
-      team_name: null,
-      invited_by_name: null,
-      invited_by_email: null
+      team_name: team.name,
+      invited_by_name: inviter?.name || null,
+      invited_by_email: inviter?.email || null
     });
 
     return {

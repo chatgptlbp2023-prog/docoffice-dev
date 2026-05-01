@@ -1,4 +1,21 @@
 const inviteService = require('../services/inviteService');
+const { sendInviteEmail } = require('../services/inviteEmailService');
+
+function resolveAppBaseUrl(req) {
+  const configured = String(process.env.APP_BASE_URL || '').trim();
+  if (configured) {
+    return configured;
+  }
+
+  const host = String(req.get('host') || '').trim();
+  if (!host) {
+    return '';
+  }
+
+  const forwardedProto = String(req.get('x-forwarded-proto') || '').trim();
+  const protocol = forwardedProto || req.protocol || 'http';
+  return `${protocol}://${host}`;
+}
 
 function handleServiceError(res, error, logLabel, fallbackMessage) {
   if (error && error.statusCode) {
@@ -29,9 +46,25 @@ async function createInvite(req, res) {
       message: req.body.message
     });
 
+    let emailDelivery;
+    try {
+      emailDelivery = await sendInviteEmail(result.invite, {
+        appBaseUrl: resolveAppBaseUrl(req)
+      });
+    } catch (emailError) {
+      console.error('Meghivo email kuldesi hiba:', emailError);
+      emailDelivery = {
+        status: 'failed',
+        reason: 'send_failed',
+        error: emailError.message,
+        inviteUrl: result.invite.invite_link
+      };
+    }
+
     return res.status(201).json({
       ok: true,
-      ...result
+      ...result,
+      emailDelivery
     });
   } catch (error) {
     return handleServiceError(

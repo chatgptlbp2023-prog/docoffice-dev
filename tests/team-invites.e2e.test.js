@@ -152,6 +152,11 @@ describe('Team invites E2E', () => {
     expect(createRes.body.ok).toBe(true);
     expect(createRes.body.invite.invited_email).toBe(invitedEmail);
     expect(createRes.body.invite.status).toBe('pending');
+    expect(createRes.body.emailDelivery).toBeTruthy();
+    expect(['sent', 'skipped']).toContain(createRes.body.emailDelivery.status);
+    if (createRes.body.emailDelivery.status === 'skipped') {
+      expect(createRes.body.emailDelivery.reason).toBe('not_configured');
+    }
   });
 
   test('simple member cannot create invite', async () => {
