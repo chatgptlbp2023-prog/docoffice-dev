@@ -305,7 +305,8 @@ describe('Event registration flow E2E', () => {
         minPlayers: 1,
         playersOnFieldTotal: 1,
         substitutesEnabled: false,
-        initialStatus: 'published'
+        initialStatus: 'published',
+        confirmHolidayOverride: true
       });
 
     expect(createEventRes.status).toBe(201);
@@ -363,7 +364,8 @@ describe('Event registration flow E2E', () => {
         minPlayers: 2,
         playersOnFieldTotal: 2,
         substitutesEnabled: false,
-        initialStatus: 'published'
+        initialStatus: 'published',
+        confirmHolidayOverride: true
       });
 
     expect(createEventRes.status).toBe(201);
@@ -451,7 +453,8 @@ describe('Event registration flow E2E', () => {
         minPlayers: 2,
         playersOnFieldTotal: 2,
         substitutesEnabled: false,
-        initialStatus: 'published'
+        initialStatus: 'published',
+        confirmHolidayOverride: true
       });
 
     expect(createEventRes.status).toBe(201);
@@ -522,7 +525,8 @@ describe('Event registration flow E2E', () => {
         minPlayers: 2,
         playersOnFieldTotal: 2,
         substitutesEnabled: false,
-        initialStatus: 'published'
+        initialStatus: 'published',
+        confirmHolidayOverride: true
       });
 
     expect(createEventRes.status).toBe(201);

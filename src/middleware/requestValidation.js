@@ -6,6 +6,11 @@ const {
   normalizePricingMode,
   validatePricingConfig
 } = require('../utils/eventPricing');
+const {
+  normalizePaymentLinkProvider,
+  normalizePaymentLinkUrl,
+  validatePaymentLinkConfig
+} = require('../utils/paymentLinks');
 const { validateAvatarDataUrl } = require('../utils/imageDataUrl');
 
 function badRequest(res, message, extra = {}) {
@@ -614,6 +619,7 @@ function validateCreateEvent(req, res, next) {
     ['surfaceType', 'A surfaceType', 50],
     ['rulesText', 'A rulesText', 4000],
     ['paymentNotes', 'A paymentNotes', 1000],
+    ['paymentLinkUrl', 'A paymentLinkUrl', 2000],
   ]) {
     const result = validateOptionalString(req.body[field], label, { maxLength, allowNull: true });
     if (result.error) {
@@ -630,6 +636,19 @@ function validateCreateEvent(req, res, next) {
   req.body.fixedPricePerPerson = req.body.fixedPricePerPerson ?? req.body.pricePerPlayer ?? null;
   req.body.totalEventCost = req.body.totalEventCost ?? null;
   req.body.perPlayerFee = req.body.perPlayerFee ?? 0;
+  const rawPaymentLinkProvider = req.body.paymentLinkProvider;
+  req.body.paymentLinkProvider = normalizePaymentLinkProvider(req.body.paymentLinkProvider);
+  req.body.paymentLinkUrl = normalizePaymentLinkUrl(req.body.paymentLinkUrl);
+  if (normalizeString(rawPaymentLinkProvider) && req.body.paymentLinkProvider == null) {
+    return badRequest(res, 'A fizetési link szolgáltatója csak Revolut vagy Wise lehet.');
+  }
+  {
+    const paymentLinkError = validatePaymentLinkConfig({
+      provider: req.body.paymentLinkProvider,
+      url: req.body.paymentLinkUrl
+    });
+    if (paymentLinkError) return badRequest(res, paymentLinkError);
+  }
   if (initialStatus) req.body.initialStatus = initialStatus;
   return next();
 }
@@ -660,6 +679,8 @@ function validateUpdateEvent(req, res, next) {
     'totalEventCost',
     'perPlayerFee',
     'paymentNotes',
+    'paymentLinkProvider',
+    'paymentLinkUrl',
     'hiddenFromAdminList'
   ];
 
@@ -700,6 +721,7 @@ function validateUpdateEvent(req, res, next) {
     ['surfaceType', 'A surfaceType', 50],
     ['rulesText', 'A rulesText', 4000],
     ['paymentNotes', 'A paymentNotes', 1000],
+    ['paymentLinkUrl', 'A paymentLinkUrl', 2000],
   ]) {
     if (Object.prototype.hasOwnProperty.call(req.body, field)) {
       const result = validateOptionalString(req.body[field], label, { maxLength, allowNull: true });
@@ -733,6 +755,14 @@ function validateUpdateEvent(req, res, next) {
   if (Object.prototype.hasOwnProperty.call(req.body, 'hiddenFromAdminList')) {
     const result = validateBoolean(req.body.hiddenFromAdminList, 'A hiddenFromAdminList', { required: true });
     if (result.error) return badRequest(res, result.error);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'paymentLinkProvider')) {
+    const rawPaymentLinkProvider = req.body.paymentLinkProvider;
+    req.body.paymentLinkProvider = normalizePaymentLinkProvider(rawPaymentLinkProvider);
+    if (normalizeString(rawPaymentLinkProvider) && req.body.paymentLinkProvider == null) {
+      return badRequest(res, 'A fizetési link szolgáltatója csak Revolut vagy Wise lehet.');
+    }
   }
 
   if (req.body.substitutesEnabled === true && Object.prototype.hasOwnProperty.call(req.body, 'substitutesCount') && req.body.substitutesCount == null) {
@@ -795,6 +825,21 @@ function validateUpdateEvent(req, res, next) {
     ) {
       req.body.fixedPricePerPerson = req.body.fixedPricePerPerson ?? req.body.pricePerPlayer ?? null;
     }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'paymentLinkUrl')) {
+    req.body.paymentLinkUrl = normalizePaymentLinkUrl(req.body.paymentLinkUrl);
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(req.body, 'paymentLinkProvider') ||
+    Object.prototype.hasOwnProperty.call(req.body, 'paymentLinkUrl')
+  ) {
+    const paymentLinkError = validatePaymentLinkConfig({
+      provider: req.body.paymentLinkProvider,
+      url: req.body.paymentLinkUrl
+    });
+    if (paymentLinkError) return badRequest(res, paymentLinkError);
   }
 
   return next();

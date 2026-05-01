@@ -273,6 +273,42 @@ describe('Event series E2E', () => {
     expect(registerRes.body.registration.registration_status).toBe('going');
   });
 
+  test('series creation copies payment link settings into generated events', async () => {
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/event-series`)
+      .set('Authorization', `Bearer ${captainToken}`)
+      .send({
+        title: 'Linkes sorozat',
+        startAt: buildFutureIsoDate({ daysAhead: 11, hour: 19, minute: 0 }),
+        locationName: 'Fizetős pálya',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: false,
+        initialStatus: 'published',
+        recurrenceType: 'weekly',
+        seriesEndType: 'occurrence_count',
+        seriesOccurrenceCount: 2,
+        paymentLinkProvider: 'revolut',
+        paymentLinkUrl: 'https://pay.example.com/series-revolut-link'
+      });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.series.payment_link_provider).toBe('revolut');
+    expect(createRes.body.series.payment_link_url).toBe('https://pay.example.com/series-revolut-link');
+
+    const seriesId = createRes.body.series.id;
+    created.series.push(seriesId);
+    createRes.body.generatedEvents.forEach(item => created.events.push(item.event.id));
+
+    const eventDetailRes = await request(app)
+      .get(`/api/events/${createRes.body.generatedEvents[0].event.id}`)
+      .set('Authorization', `Bearer ${captainToken}`);
+
+    expect(eventDetailRes.status).toBe(200);
+    expect(eventDetailRes.body.event.payment_link_provider).toBe('revolut');
+    expect(eventDetailRes.body.event.payment_link_url).toBe('https://pay.example.com/series-revolut-link');
+  });
+
   test('holiday warning is returned but does not block creation', async () => {
     const blockedRes = await request(app)
       .post(`/api/teams/${teamId}/event-series`)

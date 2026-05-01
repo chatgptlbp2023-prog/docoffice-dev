@@ -1370,6 +1370,37 @@ function getUserPaymentProfile(user) {
   };
 }
 
+function normalizePaymentLinkProvider(provider) {
+  const normalized = String(provider || '').trim().toLowerCase();
+  return PAYMENT_PROVIDER_LABELS[normalized] ? normalized : '';
+}
+
+function normalizePaymentLinkUrl(url) {
+  const normalized = String(url || '').trim();
+  return normalized || '';
+}
+
+function getEventPaymentLinkProfile(event) {
+  if (!event) return null;
+
+  const provider = normalizePaymentLinkProvider(
+    event.payment_link_provider || event.paymentLinkProvider
+  );
+  const url = normalizePaymentLinkUrl(
+    event.payment_link_url || event.paymentLinkUrl
+  );
+
+  if (!provider || !url) {
+    return null;
+  }
+
+  return {
+    provider,
+    providerLabel: getPaymentProviderLabel(provider),
+    url
+  };
+}
+
 function getTeamCaptainMember() {
   return (state.teamMembers || []).find(member => member.role === 'team_admin' && member.membership_status === 'active') || null;
 }
@@ -1522,6 +1553,21 @@ function ensureEventPricingUi() {
           <label class="label" for="eventTotalEventCost">Teljes pályadíj</label>
           <input id="eventTotalEventCost" type="number" min="0" step="1" placeholder="pl. 20000" />
         </div>
+        <div class="grid two-col inner-grid top-space">
+          <div>
+            <label class="label" for="eventPaymentLinkProvider">Fizetési link szolgáltató</label>
+            <select id="eventPaymentLinkProvider">
+              <option value="">Nincs külön fizetési link</option>
+              <option value="revolut">Revolut</option>
+              <option value="wise">Wise</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="eventPaymentLinkUrl">Esemény fizetési linkje</label>
+            <input id="eventPaymentLinkUrl" type="url" inputmode="url" placeholder="https://..." />
+          </div>
+        </div>
+        <div class="small muted top-space">Ide a csapatkapitány által az esemény összegére előkészített Revolut vagy Wise kérő link kerülhet.</div>
       </div>
     `;
     const rulesBlock = document.getElementById('eventRulesText')?.closest('div');
@@ -1567,6 +1613,21 @@ function ensureEventPricingUi() {
           <label class="label" for="editTotalEventCost">Teljes pályadíj</label>
           <input id="editTotalEventCost" type="number" min="0" step="1" placeholder="pl. 20000" />
         </div>
+        <div class="grid two-col inner-grid top-space">
+          <div>
+            <label class="label" for="editPaymentLinkProvider">Fizetési link szolgáltató</label>
+            <select id="editPaymentLinkProvider">
+              <option value="">Nincs külön fizetési link</option>
+              <option value="revolut">Revolut</option>
+              <option value="wise">Wise</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="editPaymentLinkUrl">Esemény fizetési linkje</label>
+            <input id="editPaymentLinkUrl" type="url" inputmode="url" placeholder="https://..." />
+          </div>
+        </div>
+        <div class="small muted top-space">Ide a csapatkapitány által az esemény összegére előkészített Revolut vagy Wise kérő link kerülhet.</div>
       </div>
     `;
     const rulesBlock = document.getElementById('editRulesText')?.closest('div');
@@ -1728,13 +1789,15 @@ function getAdminEventFormStepState() {
   const playersOnField = Number(document.getElementById('eventPlayersOnField')?.value || 0);
   const rulesText = document.getElementById('eventRulesText')?.value?.trim() || '';
   const pricingMode = document.getElementById('eventPricingMode')?.value || EVENT_PRICING_MODES.FREE;
+  const paymentLinkProvider = document.getElementById('eventPaymentLinkProvider')?.value || '';
+  const paymentLinkUrl = document.getElementById('eventPaymentLinkUrl')?.value?.trim() || '';
   const hidden = document.getElementById('eventHiddenFromAdminList')?.checked === true;
   const recurring = els.recurringToggle?.checked === true;
   const hasNotifications = [...document.querySelectorAll('[data-notification-pref]')].some(control => control.checked);
 
   const basicsDone = Boolean(title && startAt && location);
   const logisticsDone = minPlayers > 0 && playersOnField > 0 && Boolean(rulesText);
-  const extrasDone = pricingMode !== EVENT_PRICING_MODES.FREE || hidden || recurring || hasNotifications;
+  const extrasDone = pricingMode !== EVENT_PRICING_MODES.FREE || hidden || recurring || hasNotifications || Boolean(paymentLinkProvider || paymentLinkUrl);
 
   return {
     basicsDone,
@@ -2004,6 +2067,8 @@ function resetUnifiedAdminEventForm() {
   document.getElementById('eventPerPlayerFee').value = '0';
   document.getElementById('eventFixedPricePerPerson').value = '';
   document.getElementById('eventTotalEventCost').value = '';
+  document.getElementById('eventPaymentLinkProvider').value = '';
+  document.getElementById('eventPaymentLinkUrl').value = '';
   const substitutesEnabledInput = document.getElementById('eventSubstitutesEnabled');
   if (substitutesEnabledInput) {
     substitutesEnabledInput.checked = false;
@@ -2032,6 +2097,8 @@ function populateUnifiedAdminEventForm(event) {
   document.getElementById('eventPerPlayerFee').value = String(event.per_player_fee ?? 0);
   document.getElementById('eventFixedPricePerPerson').value = event.fixed_price_per_person ?? event.price_per_player ?? '';
   document.getElementById('eventTotalEventCost').value = event.total_event_cost ?? '';
+  document.getElementById('eventPaymentLinkProvider').value = event.payment_link_provider || '';
+  document.getElementById('eventPaymentLinkUrl').value = event.payment_link_url || '';
   document.getElementById('eventSubstitutes').value = event.substitutes_count ?? 0;
   const hiddenInput = document.getElementById('eventHiddenFromAdminList');
   if (hiddenInput) {
@@ -2217,7 +2284,9 @@ function readPricingPayload(prefix) {
       pricingMode === EVENT_PRICING_MODES.SPLIT
         ? Number(document.getElementById(`${prefix}TotalEventCost`)?.value || 0)
         : null,
-    perPlayerFee: Number(document.getElementById(`${prefix}PerPlayerFee`)?.value || 0)
+    perPlayerFee: Number(document.getElementById(`${prefix}PerPlayerFee`)?.value || 0),
+    paymentLinkProvider: document.getElementById(`${prefix}PaymentLinkProvider`)?.value || null,
+    paymentLinkUrl: document.getElementById(`${prefix}PaymentLinkUrl`)?.value?.trim() || null
   };
 }
 
@@ -4737,29 +4806,46 @@ function renderFinanceBalanceBadge(balanceAmount) {
   return '<span class="badge badge-muted">rendezett</span>';
 }
 
-function renderCaptainPaymentCard() {
+function renderCaptainPaymentCard(focusEvent = null) {
   const captain = getTeamCaptainMember();
   const captainProfile = getUserPaymentProfile(captain);
+  const eventPaymentLink = getEventPaymentLinkProfile(focusEvent);
+  const paymentSummary = focusEvent?.payment_summary || focusEvent?.paymentSummary || null;
   const currentBalance = Number(state.currentTeamFinance?.current_balance_amount || 0);
 
-  if (!captain || !captainProfile) {
+  if (!captain || (!captainProfile && !eventPaymentLink)) {
     return '';
   }
 
   const hint = currentBalance < 0
-    ? 'Tartozásod van a fókuszcsapat felé. Innen azonnal meg tudod nyitni a csapatkapitány fizetési QR-kódját.'
+    ? 'Tartozásod van a fókuszcsapat felé. Innen azonnal megnyithatod az eseményhez megadott fizetési linket vagy a csapatkapitány QR-kódját.'
     : currentBalance > 0
-      ? 'Többleted van a fókuszcsapatnál. Innen akkor is eléred a csapatkapitány fizetési profilját, ha rendezni szeretnétek valamit.'
-      : 'Innen eléred a csapatkapitány fizetési profilját, ha rendezni akarod az aktuális díjat vagy tartozást.';
+      ? 'Többleted van a fókuszcsapatnál. Innen akkor is eléred a fizetési adatokat, ha rendezni szeretnétek valamit.'
+      : 'Innen eléred az eseményhez tartozó fizetési linket és a csapatkapitány fizetési profilját.';
+  const amountBlock = paymentSummary?.is_visible_to_user === true
+    ? `
+      <div class="detail-box">
+        <div class="detail-label">Eseményhez tartozó összeg</div>
+        <div class="detail-value">${escapeHtml(formatMoney(paymentSummary.final_amount_per_person || 0))}</div>
+      </div>
+    `
+    : eventPaymentLink
+      ? `
+        <div class="detail-box">
+          <div class="detail-label">Esemény fizetése</div>
+          <div class="detail-value">Az összeg a fizetési linken van előkészítve.</div>
+        </div>
+      `
+      : '';
 
   return `
     <div class="event-card payment-target-card top-space">
       <div class="row between align-center wrap gap">
         <div>
-          <strong>Csapatkapitány fizetési profilja</strong>
+          <strong>${eventPaymentLink ? 'Esemény fizetése' : 'Csapatkapitány fizetési profilja'}</strong>
           <div class="small muted top-space">${escapeHtml(hint)}</div>
         </div>
-        <span class="badge badge-draft">${escapeHtml(captainProfile.providerLabel)}</span>
+        <span class="badge badge-draft">${escapeHtml(eventPaymentLink?.providerLabel || captainProfile?.providerLabel || 'Fizetési profil')}</span>
       </div>
       <div class="grid two-col inner-grid top-space attendance-summary-grid">
         <div class="detail-box">
@@ -4768,10 +4854,14 @@ function renderCaptainPaymentCard() {
         </div>
         <div class="detail-box">
           <div class="detail-label">Felhasználónév / azonosító</div>
-          <div class="detail-value">${escapeHtml(captainProfile.username || 'Nincs megadva')}</div>
+          <div class="detail-value">${escapeHtml(captainProfile?.username || 'Nincs megadva')}</div>
         </div>
+        ${amountBlock}
       </div>
-      ${captainProfile.qrDataUrl ? `<div class="row gap wrap top-space"><button class="btn" type="button" data-payment-qr-user-id="${escapeHtml(captain.user_id)}" data-payment-qr-role="captain">QR-kód megnyitása</button></div>` : ''}
+      <div class="row gap wrap top-space">
+        ${eventPaymentLink ? `<a class="btn btn-inline-link" href="${escapeHtml(eventPaymentLink.url)}" target="_blank" rel="noopener noreferrer">Fizetés ${escapeHtml(eventPaymentLink.providerLabel)} linkkel</a>` : ''}
+        ${captainProfile?.qrDataUrl ? `<button class="btn ${eventPaymentLink ? 'btn-secondary' : ''}" type="button" data-payment-qr-user-id="${escapeHtml(captain.user_id)}" data-payment-qr-role="captain">QR-kód megnyitása</button>` : ''}
+      </div>
     </div>
   `;
 }
@@ -4789,7 +4879,12 @@ function renderUserFinanceModule() {
     return;
   }
 
-  const captainPaymentCard = renderCaptainPaymentCard();
+  const focusEvent =
+    state.selectedUserEventDetail?.event
+    || state.selectedUserEvent
+    || getNextEvent(state.userTeamEvents || state.myEvents || [])
+    || null;
+  const captainPaymentCard = renderCaptainPaymentCard(focusEvent);
 
   if (!finance || !Array.isArray(finance.entries) || finance.entries.length === 0) {
     els.userFinanceModule.innerHTML = emptyState(
@@ -9071,6 +9166,8 @@ async function handleCreateEvent(event) {
             fixedPricePerPerson: basePayload.fixedPricePerPerson,
             totalEventCost: basePayload.totalEventCost,
             perPlayerFee: basePayload.perPlayerFee,
+            paymentLinkProvider: basePayload.paymentLinkProvider,
+            paymentLinkUrl: basePayload.paymentLinkUrl,
             hiddenFromAdminList: document.getElementById('eventHiddenFromAdminList')?.checked === true
           }
         : {
@@ -9087,6 +9184,8 @@ async function handleCreateEvent(event) {
             fixedPricePerPerson: basePayload.fixedPricePerPerson,
             totalEventCost: basePayload.totalEventCost,
             perPlayerFee: basePayload.perPlayerFee,
+            paymentLinkProvider: basePayload.paymentLinkProvider,
+            paymentLinkUrl: basePayload.paymentLinkUrl,
             hiddenFromAdminList: document.getElementById('eventHiddenFromAdminList')?.checked === true
           };
 
@@ -9761,6 +9860,10 @@ async function openEventForUser(eventId) {
 
 function renderUserEventDetail(result) {
   const event = result.event;
+  const enrichedEvent = {
+    ...event,
+    payment_summary: result.summary?.paymentSummary || event.payment_summary || event.paymentSummary || null
+  };
   const detailWeatherWidgetId = 'detailEventWeatherWidget';
   const myAttendance = findMyAttendanceRegistration(result);
   const attendanceSummary = result.summary?.attendanceSummary || null;
@@ -9790,6 +9893,7 @@ function renderUserEventDetail(result) {
       <div><strong>Szabályok:</strong> ${escapeHtml(event.rules_text || '-')}</div>
       ${renderEventWeatherModule(event, { widgetId: detailWeatherWidgetId })}
       ${renderUserPaymentSummary(result.summary.paymentSummary)}
+      ${renderCaptainPaymentCard(enrichedEvent)}
       ${
         event.status === 'finished'
           ? `

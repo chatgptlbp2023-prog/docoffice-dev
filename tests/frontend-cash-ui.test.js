@@ -300,6 +300,122 @@ describe('Frontend cash module UI', () => {
     expect(html).toContain('Új egyenleg');
   });
 
+  test.skip('a user esemeny reszleteiben megjelenik az esemenyszintu fizetesi link', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamMembers = [{
+        user_id: 'captain-1',
+        name: 'Kapitany',
+        role: 'team_admin',
+        membership_status: 'active',
+        payment_provider: 'revolut',
+        payment_username: '@kapitany',
+        payment_qr_data_url: 'data:image/png;base64,AAA='
+      }];
+      renderUserEventDetail({
+        event: {
+          id: 'event-1',
+          team_id: 'team-1',
+          title: 'Teszt meccs',
+          start_at: '2026-04-20T18:00:00.000Z',
+          location_name: 'Teszt pálya',
+          rules_text: 'Barátságos',
+          status: 'published',
+          payment_link_provider: 'revolut',
+          payment_link_url: 'https://pay.example.com/event-link'
+        },
+        registrations: {
+          going: [],
+          waitingList: [],
+          rankWaitingList: [],
+          cancelled: []
+        },
+        summary: {
+          eventReadiness: 'open',
+          goingCount: 0,
+          waitingCount: 0,
+          rankWaitingCount: 0,
+          cancelledCount: 0,
+          spotsLeft: 10,
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            is_visible_to_user: true
+          }
+        },
+        registrationWindow: {
+          isRestrictedByRank: false,
+          message: 'Nyitva'
+        }
+      });
+    `);
+
+    const html = document.getElementById('userEventDetail').innerHTML;
+    expect(html).toContain('EsemĂ©ny fizetĂ©se');
+    expect(html).toContain('FizetĂ©s Revolut linkkel');
+    expect(html).toContain('https://pay.example.com/event-link');
+    expect(html).toContain('1\u00a0300 Ft');
+  });
+
+  test('a user event detail card shows the event payment link', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamMembers = [{
+        user_id: 'captain-1',
+        name: 'Kapitany',
+        role: 'team_admin',
+        membership_status: 'active',
+        payment_provider: 'revolut',
+        payment_username: '@kapitany',
+        payment_qr_data_url: 'data:image/png;base64,AAA='
+      }];
+      renderUserEventDetail({
+        event: {
+          id: 'event-1',
+          team_id: 'team-1',
+          title: 'Teszt meccs',
+          start_at: '2026-04-20T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          rules_text: 'Baratsagos',
+          status: 'published',
+          payment_link_provider: 'revolut',
+          payment_link_url: 'https://pay.example.com/event-link'
+        },
+        registrations: {
+          going: [],
+          waitingList: [],
+          rankWaitingList: [],
+          cancelled: []
+        },
+        summary: {
+          eventReadiness: 'open',
+          goingCount: 0,
+          waitingCount: 0,
+          rankWaitingCount: 0,
+          cancelledCount: 0,
+          spotsLeft: 10,
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            is_visible_to_user: true
+          }
+        },
+        registrationWindow: {
+          isRestrictedByRank: false,
+          message: 'Nyitva'
+        }
+      });
+    `);
+
+    const html = document.getElementById('userEventDetail').innerHTML;
+    expect(html).toContain('https://pay.example.com/event-link');
+    expect(html).toContain('Fizetés Revolut linkkel');
+    expect(html).toContain('Kapitany');
+    expect(html).toContain('1300 Ft');
+  });
+
   test('az admin penzugyi nezet mutatja a tagonkenti egyenlegeket es a szuroket', async () => {
     const { window, document } = await bootFrontend();
 

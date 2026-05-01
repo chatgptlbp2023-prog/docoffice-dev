@@ -9,6 +9,11 @@ const {
   resolvePricingConfig,
   validatePricingConfig
 } = require('../utils/eventPricing');
+const {
+  normalizePaymentLinkProvider,
+  normalizePaymentLinkUrl,
+  validatePaymentLinkConfig
+} = require('../utils/paymentLinks');
 
 const EVENT_STATUS = Object.freeze({
   DRAFT: 'draft',
@@ -427,6 +432,8 @@ async function insertGeneratedEvent(client, {
       per_player_fee,
       price_per_player,
       payment_notes,
+      payment_link_provider,
+      payment_link_url,
       players_on_field_total,
       substitutes_enabled,
       notification_preferences,
@@ -452,6 +459,8 @@ async function insertGeneratedEvent(client, {
       $14,
       $15,
       $16,
+      $17,
+      $18,
       now(),
       now()
     )
@@ -470,6 +479,8 @@ async function insertGeneratedEvent(client, {
       pricingConfig.perPlayerFee,
       pricingConfig.fixedPricePerPerson ?? data.pricePerPlayer ?? null,
       normalizeString(data.paymentNotes),
+      normalizePaymentLinkProvider(data.paymentLinkProvider),
+      normalizePaymentLinkUrl(data.paymentLinkUrl),
       data.playersOnFieldTotal,
       data.substitutesEnabled,
       normalizedNotificationPreferences,
@@ -505,6 +516,8 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
     totalEventCost,
     perPlayerFee,
     paymentNotes,
+    paymentLinkProvider,
+    paymentLinkUrl,
     initialStatus,
     recurrenceType,
     seriesEndType,
@@ -540,6 +553,18 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
 
   if (pricingError) {
     throw new AppError(400, pricingError);
+  }
+
+  const normalizedPaymentLinkProvider =
+    normalizePaymentLinkProvider(paymentLinkProvider);
+  const normalizedPaymentLinkUrl = normalizePaymentLinkUrl(paymentLinkUrl);
+  const paymentLinkError = validatePaymentLinkConfig({
+    provider: normalizedPaymentLinkProvider,
+    url: normalizedPaymentLinkUrl
+  });
+
+  if (paymentLinkError) {
+    throw new AppError(400, paymentLinkError);
   }
 
   const occurrenceDates = buildOccurrenceDates({
@@ -605,6 +630,8 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
         per_player_fee,
         price_per_player,
         payment_notes,
+        payment_link_provider,
+        payment_link_url,
         players_on_field_total,
         substitutes_enabled,
         substitutes_count,
@@ -643,6 +670,8 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
         $27,
         $28,
         $29,
+        $30,
+        $31,
         true,
         now(),
         now()
@@ -676,6 +705,8 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
         pricingConfig.perPlayerFee,
         pricingConfig.fixedPricePerPerson ?? pricePerPlayer ?? null,
         normalizeString(paymentNotes),
+        normalizedPaymentLinkProvider,
+        normalizedPaymentLinkUrl,
         Number(playersOnFieldTotal),
         substitutesEnabled,
         normalizedSubstitutesCount
@@ -712,7 +743,9 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
             fixedPricePerPerson: pricingConfig.fixedPricePerPerson,
             totalEventCost: pricingConfig.totalEventCost,
             perPlayerFee: pricingConfig.perPlayerFee,
-            paymentNotes
+            paymentNotes,
+            paymentLinkProvider: normalizedPaymentLinkProvider,
+            paymentLinkUrl: normalizedPaymentLinkUrl
           },
         maxPlayers,
         normalizedInitialStatus,

@@ -79,6 +79,8 @@ async function getMyEvents(userId) {
       es.per_player_fee,
       es.price_per_player,
       es.payment_notes,
+      es.payment_link_provider,
+      es.payment_link_url,
       es.players_on_field_total,
       es.substitutes_enabled,
       es.notification_preferences,

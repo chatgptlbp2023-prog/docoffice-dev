@@ -18,6 +18,11 @@ const {
   validatePricingConfig,
   buildEventPaymentSummary
 } = require('../utils/eventPricing');
+const {
+  normalizePaymentLinkProvider,
+  normalizePaymentLinkUrl,
+  validatePaymentLinkConfig
+} = require('../utils/paymentLinks');
 
 const EVENT_STATUS = Object.freeze({
   DRAFT: 'draft',
@@ -182,6 +187,8 @@ async function createEvent({ teamId, createdByUserId, data }) {
     totalEventCost,
     perPlayerFee,
     paymentNotes,
+    paymentLinkProvider,
+    paymentLinkUrl,
     initialStatus,
     confirmHolidayOverride,
     notificationPreferences
@@ -215,6 +222,9 @@ async function createEvent({ teamId, createdByUserId, data }) {
   const holidayWarning = buildHolidayWarning(startAtDate);
   const normalizedNotificationPreferences =
     normalizeNotificationPreferences(notificationPreferences);
+  const normalizedPaymentLinkProvider =
+    normalizePaymentLinkProvider(paymentLinkProvider);
+  const normalizedPaymentLinkUrl = normalizePaymentLinkUrl(paymentLinkUrl);
   const pricingConfig = resolvePricingConfig({
     pricingMode,
     fixedPricePerPerson,
@@ -226,6 +236,15 @@ async function createEvent({ teamId, createdByUserId, data }) {
 
   if (pricingError) {
     throw new AppError(400, pricingError);
+  }
+
+  const paymentLinkError = validatePaymentLinkConfig({
+    provider: normalizedPaymentLinkProvider,
+    url: normalizedPaymentLinkUrl
+  });
+
+  if (paymentLinkError) {
+    throw new AppError(400, paymentLinkError);
   }
 
   if (holidayWarning && confirmHolidayOverride !== true) {
@@ -332,6 +351,8 @@ async function createEvent({ teamId, createdByUserId, data }) {
         per_player_fee,
         price_per_player,
         payment_notes,
+        payment_link_provider,
+        payment_link_url,
         players_on_field_total,
         substitutes_enabled,
         notification_preferences,
@@ -357,6 +378,8 @@ async function createEvent({ teamId, createdByUserId, data }) {
         $14,
         $15,
         $16,
+        $17,
+        $18,
         now(),
         now()
       )
@@ -375,6 +398,8 @@ async function createEvent({ teamId, createdByUserId, data }) {
         pricingConfig.perPlayerFee,
         pricingConfig.fixedPricePerPerson ?? pricePerPlayer ?? null,
         paymentNotes || null,
+        normalizedPaymentLinkProvider,
+        normalizedPaymentLinkUrl,
         playersOnFieldTotal,
         substitutesEnabled,
         normalizedNotificationPreferences,
@@ -580,6 +605,8 @@ async function updateEvent({ eventId, data }) {
     totalEventCost,
     perPlayerFee,
     paymentNotes,
+    paymentLinkProvider,
+    paymentLinkUrl,
     notificationPreferences,
     hiddenFromAdminList
   } = data;
@@ -628,6 +655,8 @@ async function updateEvent({ eventId, data }) {
         per_player_fee,
         price_per_player,
         payment_notes,
+        payment_link_provider,
+        payment_link_url,
         players_on_field_total,
         substitutes_enabled,
         notification_preferences,
@@ -687,6 +716,8 @@ async function updateEvent({ eventId, data }) {
       'perPlayerFee',
       'pricePerPlayer',
       'paymentNotes',
+      'paymentLinkProvider',
+      'paymentLinkUrl',
       'hiddenFromAdminList'
     ]);
 
@@ -698,6 +729,8 @@ async function updateEvent({ eventId, data }) {
       'locationAddress',
       'rulesText',
       'paymentNotes',
+      'paymentLinkProvider',
+      'paymentLinkUrl',
       'hiddenFromAdminList',
       'fixedPricePerPerson',
       'totalEventCost',
@@ -790,6 +823,14 @@ async function updateEvent({ eventId, data }) {
         paymentNotes !== undefined
           ? paymentNotes
           : currentEvent.payment_notes,
+      paymentLinkProvider:
+        paymentLinkProvider !== undefined
+          ? normalizePaymentLinkProvider(paymentLinkProvider)
+          : currentEvent.payment_link_provider,
+      paymentLinkUrl:
+        paymentLinkUrl !== undefined
+          ? normalizePaymentLinkUrl(paymentLinkUrl)
+          : currentEvent.payment_link_url,
       hiddenFromAdminList:
         hiddenFromAdminList !== undefined
           ? hiddenFromAdminList
@@ -819,6 +860,15 @@ async function updateEvent({ eventId, data }) {
 
     if (pricingError) {
       throw new AppError(400, pricingError);
+    }
+
+    const paymentLinkError = validatePaymentLinkConfig({
+      provider: nextEvent.paymentLinkProvider,
+      url: nextEvent.paymentLinkUrl
+    });
+
+    if (paymentLinkError) {
+      throw new AppError(400, paymentLinkError);
     }
 
     const nextStartAtDate = assertValidDate(nextEvent.startAt);
@@ -901,10 +951,12 @@ async function updateEvent({ eventId, data }) {
           per_player_fee = $10,
           price_per_player = $11,
           payment_notes = $12,
-          players_on_field_total = $13,
-          substitutes_enabled = $14,
-          notification_preferences = $15,
-          substitutes_count = $16,
+          payment_link_provider = $13,
+          payment_link_url = $14,
+          players_on_field_total = $15,
+          substitutes_enabled = $16,
+          notification_preferences = $17,
+          substitutes_count = $18,
           updated_at = now()
       where event_id = $1
       returning *
@@ -922,6 +974,8 @@ async function updateEvent({ eventId, data }) {
         pricingConfig.perPlayerFee,
         pricingConfig.fixedPricePerPerson ?? nextEvent.pricePerPlayer ?? null,
         nextEvent.paymentNotes || null,
+        nextEvent.paymentLinkProvider,
+        nextEvent.paymentLinkUrl,
         nextEvent.playersOnFieldTotal,
         nextEvent.substitutesEnabled,
         nextEvent.notificationPreferences,
@@ -975,6 +1029,8 @@ async function getEventById(eventId, userId = null) {
       es.per_player_fee,
       es.price_per_player,
       es.payment_notes,
+      es.payment_link_provider,
+      es.payment_link_url,
       es.players_on_field_total,
       es.substitutes_enabled,
       es.notification_preferences,
@@ -1239,6 +1295,8 @@ async function getEventsByTeamId(teamId, userId = null) {
       es.per_player_fee,
       es.price_per_player,
       es.payment_notes,
+      es.payment_link_provider,
+      es.payment_link_url,
       es.players_on_field_total,
       es.substitutes_enabled,
       es.notification_preferences,

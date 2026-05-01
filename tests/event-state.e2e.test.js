@@ -411,6 +411,51 @@ describe('Event state and edit rules E2E', () => {
     expect(splitDetailRes.body.summary.paymentSummary.is_visible_to_user).toBe(false);
   });
 
+  test('event payment link can be stored on create and updated later', async () => {
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/events`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        title: 'Payment link event',
+        startAt: buildStableFutureIsoDate({ daysAhead: 12, hour: 18, minute: 0 }),
+        locationName: 'Linkes pálya',
+        minPlayers: 10,
+        playersOnFieldTotal: 10,
+        substitutesEnabled: false,
+        initialStatus: 'published',
+        pricingMode: 'fixed_per_person',
+        fixedPricePerPerson: 1400,
+        paymentLinkProvider: 'revolut',
+        paymentLinkUrl: 'https://pay.example.com/revolut-event-link'
+      });
+
+    expect(createRes.status).toBe(201);
+    const eventId = createRes.body.event.id;
+    created.events.push(eventId);
+    expect(createRes.body.settings.payment_link_provider).toBe('revolut');
+    expect(createRes.body.settings.payment_link_url).toBe('https://pay.example.com/revolut-event-link');
+
+    const updateRes = await request(app)
+      .patch(`/api/events/${eventId}`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        paymentLinkProvider: 'wise',
+        paymentLinkUrl: 'https://pay.example.com/wise-event-link'
+      });
+
+    expect(updateRes.status).toBe(200);
+    expect(updateRes.body.settings.payment_link_provider).toBe('wise');
+    expect(updateRes.body.settings.payment_link_url).toBe('https://pay.example.com/wise-event-link');
+
+    const detailRes = await request(app)
+      .get(`/api/events/${eventId}`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.event.payment_link_provider).toBe('wise');
+    expect(detailRes.body.event.payment_link_url).toBe('https://pay.example.com/wise-event-link');
+  });
+
   test('single event creation requires holiday confirmation and returns warning after approval', async () => {
     const blockedRes = await request(app)
       .post(`/api/teams/${teamId}/events`)
@@ -485,7 +530,7 @@ describe('Event state and edit rules E2E', () => {
       .send({
         title: 'Cancel Flow Event',
         description: 'Cancel státusz teszt',
-        startAt: '2026-04-28T18:00:00.000Z',
+        startAt: buildStableFutureIsoDate({ daysAhead: 14, hour: 18, minute: 0 }),
         locationName: 'Teszt pálya',
         minPlayers: 10,
         playersOnFieldTotal: 10,
