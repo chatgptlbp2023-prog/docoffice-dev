@@ -155,6 +155,14 @@ h1, h2, h3, h4, p {
   margin-top: auto;
 }
 
+.version-chip {
+  margin-top: 4px;
+  padding: 10px 12px 0;
+  text-align: left;
+  line-height: 1.45;
+  opacity: 0.95;
+}
+
 .auth-shell {
   width: 100%;
   max-width: 560px;
@@ -176,6 +184,13 @@ h1, h2, h3, h4, p {
   align-items: flex-start;
   min-height: calc(100vh - 48px);
   padding-top: 0;
+}
+
+.auth-version-note {
+  width: 100%;
+  max-width: 560px;
+  margin: 12px auto 0;
+  text-align: center;
 }
 
 .auth-shell-ready > .card + .card {

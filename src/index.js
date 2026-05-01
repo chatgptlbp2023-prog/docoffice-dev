@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const { validateEnv } = require('./config/env');
 const { buildCorsOptions } = require('./utils/corsConfig');
+const { getVersionInfo } = require('./utils/versionInfo');
 
 const { PORT, TRUST_PROXY } = validateEnv();
 
@@ -358,6 +359,13 @@ app.get('/api/health', async (req, res) => {
       error: error.message,
     });
   }
+});
+
+app.get('/api/version', (req, res) => {
+  res.json({
+    ok: true,
+    version: getVersionInfo()
+  });
 });
 
 app.use('/api', authRoutes);

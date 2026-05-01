@@ -31,6 +31,7 @@
   skillSettingsSaving: false,
   countdownTimer: null,
   googleAuthConfig: null,
+  versionInfo: null,
   pendingInviteToken: new URLSearchParams(window.location.search).get('invite') || '',
   pendingInvitePreview: null,
   platformSummary: null,
@@ -82,6 +83,7 @@ const els = {
   appShell: document.querySelector('.app-shell'),
   sidebar: document.querySelector('.sidebar'),
   profileDrawer: document.getElementById('profileDrawer'),
+  sidebarVersionInfo: document.getElementById('sidebarVersionInfo'),
   sidebarToggle: document.getElementById('sidebarToggle'),
   mainMessage: document.getElementById('globalMessage'),
   apiBase: document.getElementById('apiBase'),
@@ -111,6 +113,7 @@ const els = {
 
   loginForm: document.getElementById('loginForm'),
   registerForm: document.getElementById('registerForm'),
+  authVersionInfo: document.getElementById('authVersionInfo'),
   authCardTitle: document.getElementById('authCardTitle'),
   authCardSubtitle: document.getElementById('authCardSubtitle'),
   authModeLoginBtn: document.getElementById('authModeLoginBtn'),
@@ -2502,6 +2505,56 @@ function updateSessionUi() {
   syncAuthLayout();
 }
 
+function formatVersionTimestamp(value) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new Date(value).toLocaleString('hu-HU');
+  } catch {
+    return String(value);
+  }
+}
+
+function buildVersionSummary(versionInfo) {
+  if (!versionInfo) {
+    return 'Verzióadatok nem elérhetők.';
+  }
+
+  const version = versionInfo.version || 'ismeretlen';
+  const commit = versionInfo.commit || 'unknown';
+  const environment = versionInfo.environment || 'unknown';
+  const builtAt = formatVersionTimestamp(versionInfo.builtAt);
+  const startedAt = formatVersionTimestamp(versionInfo.startedAt);
+
+  const lines = [
+    `Verzió: ${version}`,
+    `Commit: ${commit}`,
+    `Környezet: ${environment}`
+  ];
+
+  if (builtAt) {
+    lines.push(`Build: ${builtAt}`);
+  } else if (startedAt) {
+    lines.push(`Indult: ${startedAt}`);
+  }
+
+  return lines.join(' • ');
+}
+
+function renderVersionInfo() {
+  const summary = buildVersionSummary(state.versionInfo);
+
+  if (els.sidebarVersionInfo) {
+    els.sidebarVersionInfo.textContent = summary;
+  }
+
+  if (els.authVersionInfo) {
+    els.authVersionInfo.textContent = summary;
+  }
+}
+
 function apiUrl(path) {
   return `${state.apiBase.replace(/\/$/, '')}${path}`;
 }
@@ -2556,6 +2609,20 @@ async function loadGoogleAuthConfig() {
   } catch {
     state.googleAuthConfig = { enabled: false, clientId: null };
   }
+}
+
+async function loadVersionInfo() {
+  try {
+    const result = await api('/version', {
+      method: 'GET',
+      headers: state.token ? undefined : {}
+    });
+    state.versionInfo = result.version || null;
+  } catch {
+    state.versionInfo = null;
+  }
+
+  renderVersionInfo();
 }
 
 async function loadInvitePreview() {
@@ -6868,6 +6935,7 @@ async function bootSession() {
   if (els.apiBase) {
     els.apiBase.value = state.apiBase;
   }
+  await loadVersionInfo();
   await loadGoogleAuthConfig();
   await loadInvitePreview();
 

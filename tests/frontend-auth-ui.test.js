@@ -27,6 +27,7 @@ async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
 }
 
 async function bootFrontend() {
@@ -40,6 +41,19 @@ async function bootFrontend() {
   const { window } = dom;
   const fetchMock = jest.fn(async (url) => {
     const target = String(url);
+
+    if (target.includes('/version')) {
+      return createJsonResponse({
+        version: {
+          name: 'Foci App',
+          version: '1.0.0',
+          commit: 'abc1234',
+          environment: 'test',
+          builtAt: '2026-05-01T20:40:00.000Z',
+          startedAt: '2026-05-01T20:45:00.000Z'
+        }
+      });
+    }
 
     if (target.includes('/auth/google/config')) {
       return createJsonResponse({ enabled: false, clientId: null });
@@ -124,6 +138,19 @@ describe('Frontend auth UI smoke tests', () => {
     loginPassword.value = 'titok123';
     expect(loginEmail.value).toBe('teszt@example.com');
     expect(loginPassword.value).toBe('titok123');
+  });
+
+  test('a verzióinformáció megjelenik a login képernyőn és a sidebar alján', async () => {
+    const { document } = await bootFrontend();
+
+    const authVersionInfo = document.getElementById('authVersionInfo');
+    const sidebarVersionInfo = document.getElementById('sidebarVersionInfo');
+
+    expect(authVersionInfo).toBeTruthy();
+    expect(sidebarVersionInfo).toBeTruthy();
+    expect(authVersionInfo.textContent).toContain('Verzió: 1.0.0');
+    expect(authVersionInfo.textContent).toContain('Commit: abc1234');
+    expect(sidebarVersionInfo.textContent).toContain('Környezet: test');
   });
 
   test('egy kattintással át lehet váltani regisztrációra és vissza', async () => {

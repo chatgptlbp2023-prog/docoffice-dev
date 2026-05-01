@@ -49,6 +49,19 @@ describe('Auth E2E', () => {
     expect(res.body.dbTime).toBeTruthy();
   });
 
+  test('GET /api/version returns visible deploy metadata', async () => {
+    const res = await request(app).get('/api/version');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.version).toBeTruthy();
+    expect(res.body.version.name).toBe('Foci App');
+    expect(res.body.version.version).toBeTruthy();
+    expect(res.body.version.commit).toBeTruthy();
+    expect(res.body.version.environment).toBeTruthy();
+    expect(res.body.version.startedAt).toBeTruthy();
+  });
+
   test('login + auth/me works with a real active user', async () => {
     const userId = randomUUID();
     const email = `auth_${Date.now()}@example.com`;
