@@ -369,6 +369,9 @@ function validateCreateInvite(req, res, next) {
   }
 
   const email = req.body.email == null ? null : normalizeEmail(req.body.email);
+  if (!email) {
+    return badRequest(res, 'Az email cím kötelező.');
+  }
   if (email && !isValidEmail(email)) {
     return badRequest(res, 'Érvénytelen email cím.');
   }

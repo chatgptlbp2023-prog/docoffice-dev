@@ -47,6 +47,7 @@ async function createInvite(req, res) {
     });
 
     let emailDelivery;
+    let invite = result.invite;
     try {
       emailDelivery = await sendInviteEmail(result.invite, {
         appBaseUrl: resolveAppBaseUrl(req)
@@ -61,9 +62,23 @@ async function createInvite(req, res) {
       };
     }
 
+    try {
+      const deliveryUpdate = await inviteService.updateInviteEmailDelivery({
+        inviteId: result.invite.id,
+        status: emailDelivery.status,
+        reason: emailDelivery.reason || null,
+        error: emailDelivery.error || null,
+        messageId: emailDelivery.messageId || null
+      });
+      invite = deliveryUpdate.invite;
+    } catch (deliverySaveError) {
+      console.error('Meghivo email allapot mentesi hiba:', deliverySaveError);
+    }
+
     return res.status(201).json({
       ok: true,
       ...result,
+      invite,
       emailDelivery
     });
   } catch (error) {

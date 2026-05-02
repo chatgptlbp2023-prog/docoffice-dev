@@ -142,6 +142,12 @@ function mapInvite(row) {
     revoked_at: row.revoked_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    email_delivery_status: row.email_delivery_status || null,
+    email_delivery_reason: row.email_delivery_reason || null,
+    email_delivery_error: row.email_delivery_error || null,
+    email_delivery_message_id: row.email_delivery_message_id || null,
+    email_delivery_sent_at: row.email_delivery_sent_at || null,
+    email_delivery_updated_at: row.email_delivery_updated_at || null,
     invite_token: row.token,
     invite_code: row.invite_code,
     invite_link: buildInviteLink(row.token)
@@ -189,7 +195,7 @@ async function loadInviteByToken(client, inviteToken, { forUpdate = false } = {}
 }
 
 async function createInvite({ teamId, invitedByUserId, email, phone, role, message }) {
-  const invitedEmail = assertValidInviteEmail(email, { required: false });
+  const invitedEmail = assertValidInviteEmail(email, { required: true });
   const invitedPhone = normalizePhone(phone);
   const normalizedRole = assertValidInviteRole(role);
   const normalizedMessage = normalizeMessage(message);
@@ -337,6 +343,52 @@ async function getTeamInvites({ teamId }) {
     return {
       count: result.rows.length,
       invites: result.rows.map(mapInvite)
+    };
+  });
+}
+
+async function updateInviteEmailDelivery({
+  inviteId,
+  status,
+  reason = null,
+  error = null,
+  messageId = null
+}) {
+  return withTransaction(async client => {
+    const invite = await loadInviteById(client, inviteId, { forUpdate: true });
+    if (!invite) {
+      throw new AppError(404, 'A meghívó nem található.');
+    }
+
+    const nextStatus = String(status || '').trim() || null;
+    const nextReason = reason == null ? null : String(reason).trim() || null;
+    const nextError = error == null ? null : String(error).trim() || null;
+    const nextMessageId = messageId == null ? null : String(messageId).trim() || null;
+    const sentAt = nextStatus === 'sent' ? 'now()' : 'null';
+
+    const updateResult = await client.query(
+      `
+      update team_invites
+      set email_delivery_status = $2,
+          email_delivery_reason = $3,
+          email_delivery_error = $4,
+          email_delivery_message_id = $5,
+          email_delivery_sent_at = ${sentAt},
+          email_delivery_updated_at = now(),
+          updated_at = now()
+      where id = $1
+      returning *
+      `,
+      [inviteId, nextStatus, nextReason, nextError, nextMessageId]
+    );
+
+    return {
+      invite: mapInvite({
+        ...updateResult.rows[0],
+        team_name: invite.team_name,
+        invited_by_name: invite.invited_by_name,
+        invited_by_email: invite.invited_by_email
+      })
     };
   });
 }
@@ -668,6 +720,7 @@ async function revokeInvite({ teamId, inviteId }) {
 module.exports = {
   createInvite,
   getTeamInvites,
+  updateInviteEmailDelivery,
   getMyInvites,
   getInviteByToken,
   acceptInvite,

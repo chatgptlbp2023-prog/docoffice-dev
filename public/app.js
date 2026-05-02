@@ -2966,6 +2966,40 @@ function inviteActionHint(status) {
   return map[status] || '';
 }
 
+function inviteEmailDeliveryBadge(status) {
+  const map = {
+    sent: { className: 'badge badge-success', label: 'email kiküldve' },
+    skipped: { className: 'badge badge-warning', label: 'email kihagyva' },
+    failed: { className: 'badge badge-danger', label: 'email hiba' }
+  };
+
+  const item = map[status];
+  if (!item) {
+    return '<span class="badge badge-muted">email státusz ismeretlen</span>';
+  }
+
+  return `<span class="${item.className}">${escapeHtml(item.label)}</span>`;
+}
+
+function buildInviteEmailDeliveryLine(invite) {
+  const status = invite.email_delivery_status || null;
+  const parts = [inviteEmailDeliveryBadge(status)];
+
+  if (invite.email_delivery_reason) {
+    parts.push(`<span>${escapeHtml(invite.email_delivery_reason)}</span>`);
+  }
+
+  if (invite.email_delivery_message_id) {
+    parts.push(`<span>messageId: ${escapeHtml(invite.email_delivery_message_id)}</span>`);
+  }
+
+  if (invite.email_delivery_updated_at) {
+    parts.push(`<span>frissítve: ${escapeHtml(formatDateTime(invite.email_delivery_updated_at))}</span>`);
+  }
+
+  return parts.join(' ');
+}
+
 function formatDateTime(value) {
   if (!value) return '-';
   const date = new Date(value);
@@ -7472,6 +7506,8 @@ function renderTeamInviteAdminCard(invite) {
       <div class="small muted">Kód: ${escapeHtml(invite.invite_code || '-')}</div>
       <div class="small muted">Link: <span class="detail-multiline">${escapeHtml(`${window.location.origin}${invite.invite_link || ''}`)}</span></div>
       <div class="small muted">Üzenet: ${escapeHtml(invite.message || 'Nincs külön üzenet')}</div>
+      <div class="small muted">Email állapot: ${buildInviteEmailDeliveryLine(invite)}</div>
+      ${invite.email_delivery_error ? `<div class="small muted">Hiba: ${escapeHtml(invite.email_delivery_error)}</div>` : ''}
       ${isPending ? `
         <div class="event-actions">
           <button class="btn btn-danger" type="button" data-team-invite-action="revoke" data-invite-id="${invite.id}">
@@ -8422,11 +8458,18 @@ async function handleCreateInvite(event) {
     return;
   }
 
+  const inviteEmail = String(els.inviteEmail?.value || '').trim();
+  if (!inviteEmail) {
+    els.inviteEmail?.focus();
+    showMessage('A meghívó küldéséhez email cím megadása kötelező.', 'error');
+    return;
+  }
+
   try {
     const result = await api(`/teams/${state.currentTeamId}/invites`, {
       method: 'POST',
       body: JSON.stringify({
-        email: els.inviteEmail.value.trim() || null,
+        email: inviteEmail,
         role: els.inviteRole.value,
         message: els.inviteMessage.value.trim() || null
       })
@@ -8436,7 +8479,16 @@ async function handleCreateInvite(event) {
     els.inviteRole.value = 'member';
 
     await Promise.all([loadTeamInvites(), loadMyInvites()]);
-    showMessage(result.message, 'success');
+    const deliveryStatus = result.emailDelivery?.status || '';
+    const deliverySuffix =
+      deliveryStatus === 'sent'
+        ? ' Az email kiküldése sikeres volt.'
+        : deliveryStatus === 'failed'
+          ? ' A meghívó létrejött, de az email küldése hibára futott.'
+          : deliveryStatus === 'skipped'
+            ? ' A meghívó létrejött, de email nem lett kiküldve.'
+            : '';
+    showMessage(`${result.message}${deliverySuffix}`, 'success');
   } catch (error) {
     showMessage(error.message, 'error');
   }

@@ -224,6 +224,136 @@ describe('Frontend auth UI smoke tests', () => {
     expect(sidebarToggle.hidden).toBe(true);
   });
 
+  test('az admin meghívólistában megjelenik az email küldési állapot', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.teamInvites = [{
+        id: 'invite-1',
+        invited_email: 'jatekos@example.com',
+        role: 'member',
+        status: 'pending',
+        invited_by_name: 'Ricsi',
+        expires_at: '2026-05-10T18:00:00.000Z',
+        invite_code: 'ABC123',
+        invite_link: '/?invite=token-1',
+        message: 'Gyere focizni',
+        email_delivery_status: 'failed',
+        email_delivery_reason: 'send_failed',
+        email_delivery_error: 'SMTP timeout',
+        email_delivery_updated_at: '2026-05-02T09:15:00.000Z'
+      }];
+      renderTeamInvitesAdmin(state.teamInvites);
+    `);
+
+    const inviteList = document.getElementById('teamInvitesAdminList');
+    expect(inviteList.textContent).toContain('Email állapot');
+    expect(inviteList.textContent).toContain('email hiba');
+    expect(inviteList.textContent).toContain('send_failed');
+    expect(inviteList.textContent).toContain('SMTP timeout');
+  });
+
+  test('a meghívó űrlap elküldi a kitöltött email címet az API-nak', async () => {
+    const { window, document, fetchMock } = await bootFrontend();
+
+    fetchMock.mockImplementation(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/version')) {
+        return createJsonResponse({
+          version: {
+            name: 'Foci App',
+            version: '1.0.0',
+            commit: 'abc1234',
+            environment: 'test',
+            builtAt: '2026-05-01T20:40:00.000Z',
+            startedAt: '2026-05-01T20:45:00.000Z'
+          }
+        });
+      }
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/auth/me')) {
+        return createJsonResponse({ user: null }, { status: 401, ok: false });
+      }
+
+      if (target.includes('/teams/team-1/invites')) {
+        return createJsonResponse({
+          ok: true,
+          message: 'Meghívó sikeresen létrehozva.',
+          invite: {
+            id: 'invite-1',
+            invited_email: 'teszt@example.com',
+            status: 'pending'
+          },
+          emailDelivery: {
+            status: 'skipped',
+            reason: 'not_configured'
+          }
+        });
+      }
+
+      if (target.includes('/my/invites')) {
+        return createJsonResponse({ invites: [] });
+      }
+
+      return createJsonResponse({});
+    });
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      state.user = { id: 'u1', name: 'Ricsi', email: 'ricsi@example.com' };
+      state.token = 'token-1';
+      applyRoleAwareUi();
+    `);
+
+    const inviteEmail = document.getElementById('inviteEmail');
+    const inviteRole = document.getElementById('inviteRole');
+    const inviteMessage = document.getElementById('inviteMessage');
+    const form = document.getElementById('createInviteForm');
+
+    inviteEmail.value = 'teszt@example.com';
+    inviteRole.value = 'member';
+    inviteMessage.value = 'Gyere';
+
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flushMicrotasks();
+
+    const inviteCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/teams/team-1/invites'));
+    expect(inviteCall).toBeTruthy();
+    const payload = JSON.parse(inviteCall[1].body);
+    expect(payload.email).toBe('teszt@example.com');
+    expect(payload.role).toBe('member');
+    expect(payload.message).toBe('Gyere');
+  });
+
+  test('a meghívó űrlap üres emaillel nem indít API hívást', async () => {
+    const { window, document, fetchMock } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      state.user = { id: 'u1', name: 'Ricsi', email: 'ricsi@example.com' };
+      state.token = 'token-1';
+      applyRoleAwareUi();
+    `);
+
+    const form = document.getElementById('createInviteForm');
+    const inviteRole = document.getElementById('inviteRole');
+    inviteRole.value = 'member';
+
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flushMicrotasks();
+
+    const inviteCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/teams/team-1/invites'));
+    expect(inviteCall).toBeUndefined();
+    expect(document.getElementById('sidebarMessage')?.textContent || '').toContain('email');
+  });
+
   test('a függő meghívás kártyája kiemelve jelenik meg, ha van aktív meghívás', async () => {
     const { window, document } = await bootFrontend();
 

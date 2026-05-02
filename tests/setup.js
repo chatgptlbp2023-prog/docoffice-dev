@@ -85,6 +85,32 @@ beforeAll(() => {
 });
 
 beforeAll(() => runSqlWithDeadlockRetry(`
+  alter table team_invites
+    add column if not exists email_delivery_status text null,
+    add column if not exists email_delivery_reason text null,
+    add column if not exists email_delivery_error text null,
+    add column if not exists email_delivery_message_id text null,
+    add column if not exists email_delivery_sent_at timestamptz null,
+    add column if not exists email_delivery_updated_at timestamptz null;
+
+  do $$
+  begin
+    if not exists (
+      select 1
+      from pg_constraint
+      where conname = 'team_invites_email_delivery_status_check'
+    ) then
+      alter table team_invites
+        add constraint team_invites_email_delivery_status_check
+        check (
+          email_delivery_status is null
+          or email_delivery_status in ('sent', 'skipped', 'failed')
+        );
+    end if;
+  end $$;
+`));
+
+beforeAll(() => runSqlWithDeadlockRetry(`
   alter table users
     add column if not exists payment_provider text null,
     add column if not exists payment_username text null,

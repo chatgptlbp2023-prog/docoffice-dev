@@ -157,6 +157,47 @@ describe('Team invites E2E', () => {
     if (createRes.body.emailDelivery.status === 'skipped') {
       expect(createRes.body.emailDelivery.reason).toBe('not_configured');
     }
+
+    expect(createRes.body.invite.email_delivery_status).toBe(createRes.body.emailDelivery.status);
+    if (createRes.body.emailDelivery.reason) {
+      expect(createRes.body.invite.email_delivery_reason).toBe(createRes.body.emailDelivery.reason);
+    }
+
+    const dbRes = await pool.query(
+      `
+      select
+        email_delivery_status,
+        email_delivery_reason,
+        email_delivery_updated_at
+      from team_invites
+      where id = $1
+      `,
+      [createRes.body.invite.id]
+    );
+
+    expect(dbRes.rows[0].email_delivery_status).toBe(createRes.body.emailDelivery.status);
+    expect(dbRes.rows[0].email_delivery_updated_at).toBeTruthy();
+  });
+
+  test('team invite list returns stored email delivery status', async () => {
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/invites`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        email: invitedEmail,
+        role: 'member'
+      });
+
+    expect(createRes.status).toBe(201);
+
+    const listRes = await request(app)
+      .get(`/api/teams/${teamId}/invites`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(listRes.status).toBe(200);
+    const createdInvite = listRes.body.invites.find(invite => invite.id === createRes.body.invite.id);
+    expect(createdInvite).toBeTruthy();
+    expect(createdInvite.email_delivery_status).toBe(createRes.body.emailDelivery.status);
   });
 
   test('simple member cannot create invite', async () => {
@@ -170,6 +211,19 @@ describe('Team invites E2E', () => {
 
     expect(createRes.status).toBe(403);
     expect(createRes.body.ok).toBe(false);
+  });
+
+  test('cannot create invite without email', async () => {
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/invites`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        role: 'member'
+      });
+
+    expect(createRes.status).toBe(400);
+    expect(createRes.body.ok).toBe(false);
+    expect(createRes.body.message).toContain('email');
   });
 
   test('invited user sees and accepts own invite', async () => {
