@@ -27,7 +27,7 @@ async function getAttendanceStatsForUser(userId) {
 async function getUserByIdWithStats(userId) {
   const userResult = await pool.query(
     `
-    select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+    select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
     from users
     where id = $1
     `,

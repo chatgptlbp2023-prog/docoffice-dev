@@ -4,7 +4,19 @@ const jwt = require('jsonwebtoken');
 const { randomUUID } = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const inviteService = require('../services/inviteService');
-const { getUserByIdWithStats } = require('../services/userProfileService');
+const registrationNotificationService = require('../services/registrationNotificationService');
+const REGISTRATION_PATHS = Object.freeze({
+  TOURNAMENT_ORGANIZER: 'tournament_organizer',
+  TEAM_SPORT_ORGANIZER: 'team_sport_organizer',
+  ACTIVITY_ORGANIZER: 'activity_organizer',
+  INVITED_PARTICIPANT: 'invited_participant'
+});
+
+const ORGANIZER_REGISTRATION_PATHS = new Set([
+  REGISTRATION_PATHS.TOURNAMENT_ORGANIZER,
+  REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER,
+  REGISTRATION_PATHS.ACTIVITY_ORGANIZER
+]);
 
 function createToken(user) {
   return jwt.sign(
@@ -36,6 +48,93 @@ function bool(value) {
   return value === true;
 }
 
+function normalizeRegistrationPath(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return Object.values(REGISTRATION_PATHS).includes(normalized) ? normalized : null;
+}
+
+function normalizeOrganizerActivityType(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized || null;
+}
+
+function resolveRegistrationContext({ registrationPath, registerAsOrganizer, inviteToken }) {
+  const normalizedPath = normalizeRegistrationPath(registrationPath);
+
+  if (normalizedPath) {
+    if (
+      normalizedPath === REGISTRATION_PATHS.INVITED_PARTICIPANT &&
+      !inviteToken
+    ) {
+      throw Object.assign(
+        new Error('A meghívóval érkező regisztrációhoz érvényes meghívót kell megadnod.'),
+        { statusCode: 400 }
+      );
+    }
+
+    if (
+      normalizedPath !== REGISTRATION_PATHS.INVITED_PARTICIPANT &&
+      !ORGANIZER_REGISTRATION_PATHS.has(normalizedPath)
+    ) {
+      throw Object.assign(new Error('Érvénytelen regisztrációs útvonal.'), {
+        statusCode: 400
+      });
+    }
+
+    return {
+      registrationPath: normalizedPath,
+      canCreateTeam: normalizedPath !== REGISTRATION_PATHS.INVITED_PARTICIPANT
+    };
+  }
+
+  if (inviteToken) {
+    return {
+      registrationPath: REGISTRATION_PATHS.INVITED_PARTICIPANT,
+      canCreateTeam: false
+    };
+  }
+
+  if (registerAsOrganizer) {
+    return {
+      registrationPath: REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER,
+      canCreateTeam: true
+    };
+  }
+
+  throw Object.assign(
+    new Error('Regisztrációhoz válaszd ki, milyen szervezőként indulsz, vagy érkezz meghívóval.'),
+    { statusCode: 400 }
+  );
+}
+
+function getRegistrationSuccessMessage(registrationPath) {
+  switch (registrationPath) {
+    case REGISTRATION_PATHS.TOURNAMENT_ORGANIZER:
+      return 'Sikeres regisztráció. Most már létrehozhatod az első tornádat.';
+    case REGISTRATION_PATHS.ACTIVITY_ORGANIZER:
+      return 'Sikeres regisztráció. Most már létrehozhatod az első saját eseményedet.';
+    case REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER:
+      return 'Sikeres regisztráció. Most már létrehozhatod a saját csapatodat.';
+    case REGISTRATION_PATHS.INVITED_PARTICIPANT:
+    default:
+      return 'Sikeres regisztráció és csatlakozás a csapathoz.';
+  }
+}
+
+function getGoogleRegistrationSuccessMessage(registrationPath) {
+  switch (registrationPath) {
+    case REGISTRATION_PATHS.TOURNAMENT_ORGANIZER:
+      return 'Sikeres Google-belépés. Most már létrehozhatod az első tornádat.';
+    case REGISTRATION_PATHS.ACTIVITY_ORGANIZER:
+      return 'Sikeres Google-belépés. Most már létrehozhatod az első saját eseményedet.';
+    case REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER:
+      return 'Sikeres Google-belépés. Most már létrehozhatod a saját csapatodat.';
+    case REGISTRATION_PATHS.INVITED_PARTICIPANT:
+    default:
+      return 'Sikeres Google-belépés és csatlakozás a csapathoz.';
+  }
+}
+
 function serializeUser(user) {
   return {
     id: user.id,
@@ -52,6 +151,8 @@ function serializeUser(user) {
     platform_role: user.platform_role || 'user',
     auth_provider: user.auth_provider || 'local',
     can_create_team: user.can_create_team === true,
+    registration_path: user.registration_path || null,
+    organizer_activity_type: user.organizer_activity_type || null,
     attendance_stats: user.attendance_stats || {
       present_count: 0,
       no_show_count: 0,
@@ -60,7 +161,15 @@ function serializeUser(user) {
   };
 }
 
-async function createLocalUser({ name, email, phone, password, canCreateTeam = false }) {
+async function createLocalUser({
+  name,
+  email,
+  phone,
+  password,
+  canCreateTeam = false,
+  registrationPath = REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER,
+  organizerActivityType = null
+}) {
   const passwordHash = await bcrypt.hash(password, 10);
 
   const insertResult = await pool.query(
@@ -71,6 +180,8 @@ async function createLocalUser({ name, email, phone, password, canCreateTeam = f
       email,
       phone,
       can_create_team,
+      registration_path,
+      organizer_activity_type,
       platform_role,
       auth_provider,
       status,
@@ -78,10 +189,19 @@ async function createLocalUser({ name, email, phone, password, canCreateTeam = f
       created_at,
       updated_at
     )
-    values ($1, $2, $3, $4, $5, 'user', 'local', 'active', $6, now(), now())
-    returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+    values ($1, $2, $3, $4, $5, $6, $7, 'user', 'local', 'active', $8, now(), now())
+    returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
     `,
-    [randomUUID(), name, email, phone, canCreateTeam, passwordHash]
+    [
+      randomUUID(),
+      name,
+      email,
+      phone,
+      canCreateTeam,
+      registrationPath,
+      normalizeOrganizerActivityType(organizerActivityType),
+      passwordHash
+    ]
   );
 
   return insertResult.rows[0];
@@ -112,12 +232,20 @@ async function verifyGoogleIdToken(idToken) {
   return ticket.getPayload();
 }
 
-async function upsertGoogleUser({ payload, phone, canCreateTeam = false }) {
+async function upsertGoogleUser({
+  payload,
+  phone,
+  canCreateTeam = false,
+  registrationPath = REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER,
+  organizerActivityType = null
+}) {
   const googleSub = String(payload.sub || '').trim();
   const email = normalizeEmail(payload.email);
   const name = String(payload.name || payload.email || '').trim();
-  const avatarUrl = String(payload.picture || '').trim() || null;
   const normalizedPhone = normalizePhone(phone);
+  const normalizedRegistrationPath = normalizeRegistrationPath(registrationPath)
+    || REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER;
+  const normalizedOrganizerActivityType = normalizeOrganizerActivityType(organizerActivityType);
 
   if (!googleSub || !email || !name) {
     throw Object.assign(new Error('Hiányos Google profiladatok érkeztek.'), {
@@ -127,7 +255,7 @@ async function upsertGoogleUser({ payload, phone, canCreateTeam = false }) {
 
   const existingByGoogle = await pool.query(
     `
-    select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+    select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
     from users
     where google_sub = $1
     `,
@@ -142,20 +270,33 @@ async function upsertGoogleUser({ payload, phone, canCreateTeam = false }) {
           email = $3,
           phone = coalesce($4, phone),
           can_create_team = users.can_create_team or $5,
+          registration_path = coalesce(users.registration_path, $6),
+          organizer_activity_type = coalesce($7, users.organizer_activity_type),
           auth_provider = 'google',
           updated_at = now()
       where id = $1
-      returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+      returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
       `,
-      [existingByGoogle.rows[0].id, name, email, normalizedPhone, canCreateTeam]
+      [
+        existingByGoogle.rows[0].id,
+        name,
+        email,
+        normalizedPhone,
+        canCreateTeam,
+        normalizedRegistrationPath,
+        normalizedOrganizerActivityType
+      ]
     );
 
-    return updatedResult.rows[0];
+    return {
+      user: updatedResult.rows[0],
+      wasCreated: false
+    };
   }
 
   const existingByEmail = await pool.query(
     `
-    select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+    select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
     from users
     where lower(email) = $1
     `,
@@ -170,15 +311,28 @@ async function upsertGoogleUser({ payload, phone, canCreateTeam = false }) {
           name = $3,
           phone = coalesce($4, phone),
           can_create_team = users.can_create_team or $5,
+          registration_path = coalesce(users.registration_path, $6),
+          organizer_activity_type = coalesce($7, users.organizer_activity_type),
           auth_provider = 'google',
           updated_at = now()
       where id = $1
-      returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+      returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
       `,
-      [existingByEmail.rows[0].id, googleSub, name, normalizedPhone, canCreateTeam]
+      [
+        existingByEmail.rows[0].id,
+        googleSub,
+        name,
+        normalizedPhone,
+        canCreateTeam,
+        normalizedRegistrationPath,
+        normalizedOrganizerActivityType
+      ]
     );
 
-    return linkedResult.rows[0];
+    return {
+      user: linkedResult.rows[0],
+      wasCreated: false
+    };
   }
 
   const insertResult = await pool.query(
@@ -189,6 +343,8 @@ async function upsertGoogleUser({ payload, phone, canCreateTeam = false }) {
       email,
       phone,
       can_create_team,
+      registration_path,
+      organizer_activity_type,
       platform_role,
       auth_provider,
       google_sub,
@@ -196,13 +352,41 @@ async function upsertGoogleUser({ payload, phone, canCreateTeam = false }) {
       created_at,
       updated_at
     )
-    values ($1, $2, $3, $4, $5, 'user', 'google', $6, 'active', now(), now())
-    returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+    values ($1, $2, $3, $4, $5, $6, $7, 'user', 'google', $8, 'active', now(), now())
+    returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
     `,
-    [randomUUID(), name, email, normalizedPhone, canCreateTeam, googleSub]
+    [
+      randomUUID(),
+      name,
+      email,
+      normalizedPhone,
+      canCreateTeam,
+      normalizedRegistrationPath,
+      normalizedOrganizerActivityType,
+      googleSub
+    ]
   );
 
-  return insertResult.rows[0];
+  return {
+    user: insertResult.rows[0],
+    wasCreated: true
+  };
+}
+
+async function notifyRegistrationSummarySafely(user = null) {
+  try {
+    return await registrationNotificationService.notifyRegistrationSummary({
+      createdUserId: user?.id || null,
+      createdUserEmail: user?.email || null,
+      createdUserRegistrationPath: user?.registration_path || null
+    });
+  } catch (error) {
+    console.error('Regisztrációs összesítő email hiba:', error);
+    return {
+      status: 'failed',
+      error: error.message
+    };
+  }
 }
 
 async function attachInviteIfPresent({ inviteToken, user }) {
@@ -223,13 +407,12 @@ async function register(req, res) {
     const phone = normalizePhone(req.body.phone);
     const inviteToken = normalizeInviteToken(req.body.inviteToken);
     const registerAsOrganizer = bool(req.body.registerAsOrganizer);
-
-    if (!registerAsOrganizer && !inviteToken) {
-      return res.status(400).json({
-        ok: false,
-        message: 'Regisztrációhoz csapatszervezőként kell indulnod, vagy érvényes meghívólinkkel kell érkezned.'
-      });
-    }
+    const { registrationPath, canCreateTeam } = resolveRegistrationContext({
+      registrationPath: req.body.registrationPath,
+      registerAsOrganizer,
+      inviteToken
+    });
+    const organizerActivityType = req.body.organizerActivityType || null;
 
     const existingUserResult = await pool.query(
       `
@@ -252,17 +435,18 @@ async function register(req, res) {
       email,
       phone,
       password,
-      canCreateTeam: registerAsOrganizer
+      canCreateTeam,
+      registrationPath,
+      organizerActivityType
     });
 
     const inviteResult = await attachInviteIfPresent({ inviteToken, user });
     const token = createToken(user);
+    await notifyRegistrationSummarySafely(user);
 
     return res.status(201).json({
       ok: true,
-      message: registerAsOrganizer
-        ? 'Sikeres regisztráció. Most már létrehozhatod a saját csapatodat.'
-        : 'Sikeres regisztráció és csatlakozás a csapathoz.',
+      message: getRegistrationSuccessMessage(registrationPath),
       token,
       user: serializeUser(user),
       joined_invite: inviteResult
@@ -299,7 +483,7 @@ async function login(req, res) {
 
     const userResult = await pool.query(
       `
-      select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, password_hash
+      select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type, password_hash
       from users
       where lower(email) = $1
       `,
@@ -363,6 +547,12 @@ async function googleAuth(req, res) {
     const inviteToken = normalizeInviteToken(req.body.inviteToken);
     const registerAsOrganizer = bool(req.body.registerAsOrganizer);
     const phone = normalizePhone(req.body.phone);
+    const { registrationPath, canCreateTeam } = resolveRegistrationContext({
+      registrationPath: req.body.registrationPath,
+      registerAsOrganizer,
+      inviteToken
+    });
+    const organizerActivityType = req.body.organizerActivityType || null;
 
     if (!idToken) {
       return res.status(400).json({
@@ -371,15 +561,14 @@ async function googleAuth(req, res) {
       });
     }
 
-    if (!registerAsOrganizer && !inviteToken) {
-      return res.status(400).json({
-        ok: false,
-        message: 'Google-belépésnél is csapatszervezőként kell indulnod, vagy meghívólinkkel kell érkezned.'
-      });
-    }
-
     const payload = await verifyGoogleIdToken(idToken);
-    const user = await upsertGoogleUser({ payload, phone, canCreateTeam: registerAsOrganizer });
+    const { user, wasCreated } = await upsertGoogleUser({
+      payload,
+      phone,
+      canCreateTeam,
+      registrationPath,
+      organizerActivityType
+    });
 
     if (user.status !== 'active') {
       return res.status(403).json({
@@ -390,12 +579,13 @@ async function googleAuth(req, res) {
 
     const inviteResult = await attachInviteIfPresent({ inviteToken, user });
     const token = createToken(user);
+    if (wasCreated) {
+      await notifyRegistrationSummarySafely(user);
+    }
 
     return res.status(200).json({
       ok: true,
-      message: registerAsOrganizer
-        ? 'Sikeres Google-belépés. Most már létrehozhatod a saját csapatodat.'
-        : 'Sikeres Google-belépés és csatlakozás a csapathoz.',
+      message: getGoogleRegistrationSuccessMessage(registrationPath),
       token,
       user: serializeUser(user),
       joined_invite: inviteResult
@@ -442,7 +632,7 @@ async function updateMe(req, res) {
           payment_qr_data_url = $9,
           updated_at = now()
       where id = $1
-      returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team
+      returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
       `,
       [
         req.user.id,

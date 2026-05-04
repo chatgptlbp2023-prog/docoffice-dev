@@ -19,6 +19,8 @@ const INVITE_STATUS = Object.freeze({
 
 const INVITE_ROLE_VALUES = new Set(['member', 'team_manager']);
 const DEFAULT_EXPIRY_DAYS = 7;
+const DEFAULT_JOIN_LINK_EXPIRY_DAYS = 30;
+const DEFAULT_JOIN_LINK_MAX_USES = 50;
 
 function generateInviteToken() {
   return randomBytes(24).toString('hex');
@@ -137,6 +139,9 @@ function mapInvite(row) {
     invited_by_user_id: row.invited_by_user_id,
     invited_by_name: row.invited_by_name,
     invited_by_email: row.invited_by_email,
+    invite_kind: row.invited_email ? 'email' : 'join_link',
+    max_uses: Number(row.max_uses || 0),
+    used_count: Number(row.used_count || 0),
     expires_at: row.expires_at,
     responded_at: row.responded_at,
     revoked_at: row.revoked_at,
@@ -305,6 +310,79 @@ async function createInvite({ teamId, invitedByUserId, email, phone, role, messa
 
     return {
       message: 'Meghívó sikeresen létrehozva.',
+      invite
+    };
+  });
+}
+
+async function createJoinLinkInvite({ teamId, invitedByUserId, role = 'member', message }) {
+  const normalizedRole = assertValidInviteRole(role);
+  const normalizedMessage = normalizeMessage(message);
+
+  return withTransaction(async client => {
+    const team = await assertTeamExists(client, teamId);
+    const inviter = await getUserById(client, invitedByUserId);
+    await expirePendingInvitesForTeam(client, teamId);
+
+    const insertResult = await client.query(
+      `
+      insert into team_invites (
+        id,
+        team_id,
+        invited_email,
+        invited_phone,
+        role,
+        status,
+        invited_by_user_id,
+        message,
+        token,
+        invite_code,
+        max_uses,
+        used_count,
+        expires_at,
+        created_at,
+        updated_at
+      )
+      values (
+        gen_random_uuid(),
+        $1,
+        null,
+        null,
+        $2,
+        'pending',
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        0,
+        now() + ($8::text || ' days')::interval,
+        now(),
+        now()
+      )
+      returning *
+      `,
+      [
+        teamId,
+        normalizedRole,
+        invitedByUserId,
+        normalizedMessage,
+        generateInviteToken(),
+        generateInviteCode(),
+        DEFAULT_JOIN_LINK_MAX_USES,
+        String(DEFAULT_JOIN_LINK_EXPIRY_DAYS)
+      ]
+    );
+
+    const invite = mapInvite({
+      ...insertResult.rows[0],
+      team_name: team.name,
+      invited_by_name: inviter?.name || null,
+      invited_by_email: inviter?.email || null
+    });
+
+    return {
+      message: 'Csatlakozó link sikeresen létrehozva.',
       invite
     };
   });
@@ -719,6 +797,7 @@ async function revokeInvite({ teamId, inviteId }) {
 
 module.exports = {
   createInvite,
+  createJoinLinkInvite,
   getTeamInvites,
   updateInviteEmailDelivery,
   getMyInvites,

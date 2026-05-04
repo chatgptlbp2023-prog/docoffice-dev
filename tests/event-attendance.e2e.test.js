@@ -541,4 +541,57 @@ describe('Event attendance / no-show E2E', () => {
     expect(memberTeamView.body.current_user_finance.entries[0].entry_type).toBe('adjustment');
     expect(memberTeamView.body.current_user_finance.entries[0].actual_paid_amount).toBe(300);
   });
+
+  test('manual finance adjustment can record a negative correction against an existing credit', async () => {
+    const financeEventPayload = {
+      pricingMode: 'fixed_per_person',
+      fixedPricePerPerson: 1200,
+      perPlayerFee: 100
+    };
+    const eventId = await createPublishedEvent(financeEventPayload);
+
+    const regARes = await request(app)
+      .post(`/api/events/${eventId}/register`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+    expect(regARes.status).toBe(201);
+
+    await pool.query(
+      `
+      update events
+      set start_at = now() - interval '1 day'
+      where id = $1
+      `,
+      [eventId]
+    );
+
+    const markRes = await request(app)
+      .post(`/api/events/${eventId}/attendance/${memberAUserId}`)
+      .set('Authorization', `Bearer ${teamAdminToken}`)
+      .send({ status: 'present', paymentAmount: 1600 });
+
+    expect(markRes.status).toBe(200);
+
+    const adjustmentRes = await request(app)
+      .post(`/api/teams/${teamId}/finance-adjustments/${memberAUserId}`)
+      .set('Authorization', `Bearer ${teamAdminToken}`)
+      .send({
+        adjustmentAmount: -200,
+        note: 'Téves jóváírás korrekció'
+      });
+
+    expect(adjustmentRes.status).toBe(201);
+    expect(adjustmentRes.body.message).toBe('Pénzügyi korrekció sikeresen rögzítve.');
+    expect(adjustmentRes.body.finance.current_balance_amount).toBe(100);
+    expect(adjustmentRes.body.finance.adjustment_count).toBe(1);
+
+    const memberTeamView = await request(app)
+      .get(`/api/teams/${teamId}`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+
+    expect(memberTeamView.status).toBe(200);
+    expect(memberTeamView.body.current_user_finance.current_balance_amount).toBe(100);
+    expect(memberTeamView.body.current_user_finance.entries[0].entry_type).toBe('adjustment');
+    expect(memberTeamView.body.current_user_finance.entries[0].actual_paid_amount).toBe(-200);
+    expect(memberTeamView.body.current_user_finance.entries[0].event_title).toBe('Külön pénzügyi korrekció');
+  });
 });

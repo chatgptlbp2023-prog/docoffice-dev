@@ -91,6 +91,33 @@ async function createInvite(req, res) {
   }
 }
 
+async function createJoinLink(req, res) {
+  try {
+    const result = await inviteService.createJoinLinkInvite({
+      teamId: req.params.teamId,
+      invitedByUserId: req.user.id,
+      role: req.body.role,
+      message: req.body.message
+    });
+
+    const appBaseUrl = resolveAppBaseUrl(req).replace(/\/+$/, '');
+    const shareUrl = `${appBaseUrl}${result.invite.invite_link || ''}`;
+
+    return res.status(201).json({
+      ok: true,
+      ...result,
+      shareUrl
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Csatlakozó link létrehozási hiba:',
+      'Szerverhiba csatlakozó link létrehozása közben.'
+    );
+  }
+}
+
 async function getInviteByToken(req, res) {
   try {
     const result = await inviteService.getInviteByToken({
@@ -239,6 +266,7 @@ async function revokeInvite(req, res) {
 
 module.exports = {
   createInvite,
+  createJoinLink,
   getInviteByToken,
   getTeamInvites,
   getMyInvites,

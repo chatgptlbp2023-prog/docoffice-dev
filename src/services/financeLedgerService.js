@@ -243,8 +243,8 @@ async function recordManualFinanceAdjustment(
 ) {
   const amount = normalizeMoneyInt(adjustmentAmount, NaN);
 
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new AppError(400, 'Az adjustmentAmount csak 0-nál nagyobb egész szám lehet.');
+  if (!Number.isFinite(amount) || amount === 0) {
+    throw new AppError(400, 'Az adjustmentAmount csak 0-tól különböző egész szám lehet.');
   }
 
   await client.query(
@@ -418,7 +418,7 @@ async function getUserFinanceOverview(clientOrPool, { teamId, userId }) {
       tfa.adjustment_amount as delta_amount,
       tfa.balance_after_adjustment as balance_after_amount,
       tfa.recorded_at,
-      'Külön befizetés / rendezés'::text as event_title,
+      'Külön pénzügyi korrekció'::text as event_title,
       tfa.recorded_at as event_start_at,
       null::text as event_location_name,
       tfa.note

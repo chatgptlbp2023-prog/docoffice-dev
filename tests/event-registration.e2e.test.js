@@ -8,6 +8,13 @@ const pool = require('../src/config/db');
 describe('Event registration flow E2E', () => {
   const password = 'teszt123';
 
+  function futureIso(daysFromNow, hourUtc = 18, minuteUtc = 0) {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() + daysFromNow);
+    date.setUTCHours(hourUtc, minuteUtc, 0, 0);
+    return date.toISOString();
+  }
+
   let team_adminUserId;
   let memberAUserId;
   let memberBUserId;
@@ -88,9 +95,10 @@ describe('Event registration flow E2E', () => {
   });
 
   beforeEach(async () => {
-    team_adminEmail = `team_admin_reg_${Date.now()}@example.com`;
-    memberAEmail = `member_a_${Date.now()}@example.com`;
-    memberBEmail = `member_b_${Date.now()}@example.com`;
+    const runId = randomUUID();
+    team_adminEmail = `team_admin_reg_${runId}@example.com`;
+    memberAEmail = `member_a_${runId}@example.com`;
+    memberBEmail = `member_b_${runId}@example.com`;
 
     team_adminUserId = await createUser({
       name: 'Captain Reg',
@@ -178,7 +186,7 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Registration Flow Event',
         description: 'Waitlist teszt',
-        startAt: '2026-05-02T18:00:00.000Z',
+        startAt: '2026-05-12T18:00:00.000Z',
         locationName: 'Teszt pálya',
         minPlayers: 1,
         playersOnFieldTotal: 1,
@@ -243,7 +251,7 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Re-register Event',
         description: 'Re-register teszt',
-        startAt: '2026-05-03T18:00:00.000Z',
+        startAt: '2026-05-13T18:00:00.000Z',
         locationName: 'Teszt pálya',
         minPlayers: 2,
         playersOnFieldTotal: 2,
@@ -300,7 +308,7 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Re-register to waitlist Event',
         description: 'Visszajelentkezes varolista teszt',
-        startAt: '2026-05-04T18:00:00.000Z',
+        startAt: '2026-05-18T18:00:00.000Z',
         locationName: 'Teszt palya',
         minPlayers: 1,
         playersOnFieldTotal: 1,
@@ -359,7 +367,7 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Cancellation Limit Event',
         description: 'Ketszeri lemondas limit teszt',
-        startAt: '2026-05-04T20:00:00.000Z',
+        startAt: futureIso(10, 20, 0),
         locationName: 'Limit palya',
         minPlayers: 2,
         playersOnFieldTotal: 2,
@@ -448,7 +456,7 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Rank Gate Event',
         description: 'Rangkapu teszt',
-        startAt: '2026-05-05T18:00:00.000Z',
+        startAt: futureIso(11, 18, 0),
         locationName: 'Hullám pálya',
         minPlayers: 2,
         playersOnFieldTotal: 2,
@@ -582,11 +590,12 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Early wave opening Event',
         description: 'Korai savnyitas teszt',
-        startAt: '2026-05-06T18:00:00.000Z',
+        startAt: futureIso(12, 18, 0),
         locationName: 'Korai palya',
         minPlayers: 2,
         playersOnFieldTotal: 4,
         substitutesEnabled: false,
+        substitutesCount: 0,
         initialStatus: 'published'
       });
 

@@ -170,12 +170,14 @@ describe('Auth E2E', () => {
         email,
         password,
         phone: '+36301234567',
+        registrationPath: 'team_sport_organizer',
         registerAsOrganizer: true
       });
 
     expect(registerRes.status).toBe(201);
     expect(registerRes.body.ok).toBe(true);
     expect(registerRes.body.user.can_create_team).toBe(true);
+    expect(registerRes.body.user.registration_path).toBe('team_sport_organizer');
 
     createdUserIds.push(registerRes.body.user.id);
 
@@ -253,6 +255,7 @@ describe('Auth E2E', () => {
     expect(registerRes.status).toBe(201);
     expect(registerRes.body.ok).toBe(true);
     expect(registerRes.body.user.can_create_team).toBe(false);
+    expect(registerRes.body.user.registration_path).toBe('invited_participant');
     expect(registerRes.body.joined_invite).toBeTruthy();
 
     createdUserIds.push(registerRes.body.user.id);
@@ -263,6 +266,27 @@ describe('Auth E2E', () => {
 
     expect(meRes.status).toBe(200);
     expect(meRes.body.user.can_create_team).toBe(false);
+  });
+
+  test('tournament organizer registration stores the dedicated registration path', async () => {
+    const email = `tournament_${Date.now()}@example.com`;
+
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Tournament Admin',
+        email,
+        password,
+        registrationPath: 'tournament_organizer',
+        registerAsOrganizer: true
+      });
+
+    expect(registerRes.status).toBe(201);
+    expect(registerRes.body.ok).toBe(true);
+    expect(registerRes.body.user.can_create_team).toBe(true);
+    expect(registerRes.body.user.registration_path).toBe('tournament_organizer');
+
+    createdUserIds.push(registerRes.body.user.id);
   });
 
   test('auth/me rejects avatar that exceeds 600x600 dimensions', async () => {

@@ -196,8 +196,8 @@
                 <div>
                   <label class="label" for="inviteRole">Szerepkör</label>
                   <select id="inviteRole">
-                    <option value="member">member</option>
-                    <option value="team_manager">team_manager</option>
+                    <option value="member">tag</option>
+                    <option value="team_manager">csapatkapitány-helyettes</option>
                   </select>
                 </div>
                 <div>
@@ -205,6 +205,25 @@
                   <textarea id="inviteMessage" rows="2" placeholder="Gyere a csapatba"></textarea>
                 </div>
                 <button class="btn" type="submit">Meghívó küldése</button>
+              </form>
+            </div>
+
+            <div class="top-space">
+              <h3>Csatlakozó link Messengerhez</h3>
+              <div class="small muted section-note">Ha nem tudod a leendő tag email címét, generálj egy csapatlinket, és küldd át Messengerben. Aki ezen jön be, a csapatodhoz fog csatlakozni.</div>
+              <form id="createJoinLinkForm" class="stack top-space">
+                <div>
+                  <label class="label" for="joinLinkRole">Szerepkör</label>
+                  <select id="joinLinkRole">
+                    <option value="member">tag</option>
+                    <option value="team_manager">csapatkapitány-helyettes</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="label" for="joinLinkMessage">Rövid üzenet</label>
+                  <textarea id="joinLinkMessage" rows="2" placeholder="Gyere a csapatba, itt tudsz belépni."></textarea>
+                </div>
+                <button class="btn btn-secondary" type="submit">Csatlakozó link generálása</button>
               </form>
             </div>
 
@@ -263,7 +282,7 @@
             <form id="createEventForm" class="stack">
               <div class="grid two-col inner-grid">
                 <div>
-                  <label class="label" for="eventTitle">Cím</label>
+                  <label class="label" for="eventTitle">Pálya neve</label>
                   <input id="eventTitle" type="text" required />
                 </div>
                 <div>

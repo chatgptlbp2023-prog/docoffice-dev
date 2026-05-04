@@ -878,7 +878,7 @@ async function addFinanceAdjustment({
     });
 
     return {
-      message: 'Külön befizetés sikeresen rögzítve.',
+      message: 'Pénzügyi korrekció sikeresen rögzítve.',
       finance: financeOverview,
       member: {
         user_id: member.user_id,

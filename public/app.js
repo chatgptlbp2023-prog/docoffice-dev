@@ -44,15 +44,19 @@
   },
   paymentQrPreview: null,
   adminWorkspace: 'home',
+  tournamentWorkspace: 'home',
   adminTeamSection: 'invites',
   adminEventsSection: 'upcoming',
   adminFinanceSection: 'settlement',
   adminEventFormSection: 'basics',
   authMode: 'login',
+  selectedRegistrationPath: '',
   sidebarCollapsed: localStorage.getItem('foci_sidebar_collapsed') === 'true',
   userInvitePulseUntil: 0,
   userInvitePulseTimer: null,
   userInviteJumpHighlightTimer: null,
+  userNewEventsPulseUntil: 0,
+  userNewEventsPulseTimer: null,
   layoutEditor: {
     isEditing: false,
     viewId: null,
@@ -61,6 +65,29 @@
     resizing: null
   }
 };
+
+const REGISTRATION_PATH_OPTIONS = Object.freeze([
+  {
+    value: 'tournament_organizer',
+    title: 'Tornát szervezek',
+    description: 'Foci, kosár, röplabda vagy bármilyen sport. Akár 32 csapatos torna is mehet, a szervezéstől a lebonyolításon át az elszámolásig minden egy helyen.'
+  },
+  {
+    value: 'team_sport_organizer',
+    title: 'Csapatsportot szervezek',
+    description: 'Foci, kosár, haverok, buli, Fanta. Add meg a helyszínt és az időpontot, építsd a csapatod, a sorsolástól a Revolut- és Wise-kezelésig minden egy helyen.'
+  },
+  {
+    value: 'activity_organizer',
+    title: 'Csoportos órákat szervezek',
+    description: 'Jóga, pilátesz, TRX vagy kismamatorna, teljesen mindegy. A helyszín, a jelentkezések, a jelenlét és az elszámolás is mindig előtted marad.'
+  },
+  {
+    value: 'invited_participant',
+    title: 'Meghívóval érkeztem',
+    description: 'Máris nyertél. A csapatkapitány már beszervezett, neked csak be kell lépned, és pár kattintás után látod, mikor, hol és kivel leszel egy csapatban.'
+  }
+]);
 
 function getTeamStorageKeyForUser(userId) {
   const normalizedUserId = String(userId || '').trim();
@@ -77,6 +104,77 @@ function clearStoredTeamIdForUser(userId) {
   if (key) {
     localStorage.removeItem(key);
   }
+}
+
+function getSeenUserEventsStorageKey(userId) {
+  const normalizedUserId = String(userId || '').trim();
+  return normalizedUserId ? `foci_seen_user_events_${normalizedUserId}` : '';
+}
+
+function getSeenUserEventIds(userId) {
+  const key = getSeenUserEventsStorageKey(userId);
+  if (!key) return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed.map(item => String(item)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSeenUserEventIds(userId, eventIds) {
+  const key = getSeenUserEventsStorageKey(userId);
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify((eventIds || []).map(item => String(item))));
+}
+
+function getTournamentSetupStorageKey(userId) {
+  const normalizedUserId = String(userId || '').trim();
+  return normalizedUserId ? `foci_tournament_setup_${normalizedUserId}` : '';
+}
+
+function getDefaultTournamentSetupDraft() {
+  return {
+    title: '',
+    teamCount: 16,
+    fieldCount: 2,
+    locationName: '',
+    matchDurationMinutes: 20,
+    startDate: '',
+    formatHint: 'group_knockout',
+    notes: '',
+    savedAt: ''
+  };
+}
+
+function loadTournamentSetupDraft(userId = state.user?.id) {
+  const key = getTournamentSetupStorageKey(userId);
+  if (!key) return getDefaultTournamentSetupDraft();
+
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+    return {
+      ...getDefaultTournamentSetupDraft(),
+      ...(parsed && typeof parsed === 'object' ? parsed : {})
+    };
+  } catch {
+    return getDefaultTournamentSetupDraft();
+  }
+}
+
+function saveTournamentSetupDraft(draft, userId = state.user?.id) {
+  const key = getTournamentSetupStorageKey(userId);
+  if (!key) return getDefaultTournamentSetupDraft();
+  const normalized = {
+    ...getDefaultTournamentSetupDraft(),
+    ...(draft || {}),
+    teamCount: clamp(Number(draft?.teamCount) || 0, 2, 128),
+    fieldCount: clamp(Number(draft?.fieldCount) || 0, 1, 24),
+    matchDurationMinutes: clamp(Number(draft?.matchDurationMinutes) || 0, 5, 180),
+    savedAt: new Date().toISOString()
+  };
+  localStorage.setItem(key, JSON.stringify(normalized));
+  return normalized;
 }
 
 const els = {
@@ -98,6 +196,9 @@ const els = {
   adminOverviewCards: document.getElementById('adminOverviewCards'),
   adminHomeContent: document.getElementById('adminHomeContent'),
   adminHomeSummary: document.getElementById('adminHomeSummary'),
+  tournamentOverviewCards: document.getElementById('tournamentOverviewCards'),
+  tournamentHomeContent: document.getElementById('tournamentHomeContent'),
+  tournamentWorkspaceSummary: document.getElementById('tournamentWorkspaceSummary'),
   adminFinanceContent: document.getElementById('adminFinanceContent'),
   adminAttendanceContent: document.getElementById('adminAttendanceContent'),
   adminFinanceBalancesCard: document.getElementById('adminFinanceBalancesCard'),
@@ -138,6 +239,9 @@ const els = {
   inviteEmail: document.getElementById('inviteEmail'),
   inviteRole: document.getElementById('inviteRole'),
   inviteMessage: document.getElementById('inviteMessage'),
+  createJoinLinkForm: document.getElementById('createJoinLinkForm'),
+  joinLinkRole: document.getElementById('joinLinkRole'),
+  joinLinkMessage: document.getElementById('joinLinkMessage'),
   teamInvitesAdminList: document.getElementById('teamInvitesAdminList'),
 
   addMemberForm: document.getElementById('addMemberForm'),
@@ -178,6 +282,146 @@ const els = {
   userEventDetail: document.getElementById('userEventDetail')
 };
 
+function getDefaultRegistrationPath() {
+  return state.pendingInviteToken ? 'invited_participant' : '';
+}
+
+function getSelectedRegistrationPath() {
+  return state.selectedRegistrationPath || getDefaultRegistrationPath() || '';
+}
+
+function setSelectedRegistrationPath(path) {
+  const nextPath = path || getDefaultRegistrationPath() || '';
+  state.selectedRegistrationPath = nextPath;
+  document.querySelectorAll('.auth-path-panel').forEach(option => {
+    option.dataset.selected = option.dataset.registrationPath === nextPath ? 'true' : 'false';
+  });
+}
+
+function syncRegistrationPathUi() {
+  const selectedPath = getSelectedRegistrationPath();
+  state.selectedRegistrationPath = selectedPath;
+
+  document.querySelectorAll('.auth-path-panel').forEach(option => {
+    option.classList.toggle('is-active', option.dataset.registrationPath === selectedPath);
+  });
+
+  const details = document.getElementById('registerFormDetails');
+  const detailsMount = document.getElementById('registerDetailsMount');
+  const activeSlot = selectedPath
+    ? document.querySelector(`.auth-path-panel[data-registration-path="${selectedPath}"] .auth-path-form-slot`)
+    : null;
+  if (details) {
+    if (activeSlot && details.parentElement !== activeSlot) {
+      activeSlot.appendChild(details);
+    } else if (!activeSlot && detailsMount && details.parentElement !== detailsMount) {
+      detailsMount.appendChild(details);
+    }
+
+    details.hidden = !selectedPath;
+    details.classList.toggle('hidden', !selectedPath);
+  }
+
+  const inviteInput = document.getElementById('registerInviteToken');
+  if (inviteInput) {
+    const needsInvite = selectedPath === 'invited_participant';
+    inviteInput.required = needsInvite;
+    inviteInput.closest('.auth-field-block')?.classList.toggle('is-required', needsInvite);
+  }
+
+  if (els.authCardSubtitle) {
+    if (selectedPath === 'tournament_organizer') {
+      els.authCardSubtitle.textContent = 'Versenynaptár, pályabeosztás, lebonyolítás és pénzügy egy látványos, gyors rendszerben.';
+    } else if (selectedPath === 'activity_organizer') {
+      els.authCardSubtitle.textContent = 'Tartsd kézben az órákat, a jelentkezőket, a jelenlétet és az elszámolást ugyanabban a felületben.';
+    } else if (selectedPath === 'invited_participant') {
+      els.authCardSubtitle.textContent = 'Belépés után rögtön látod, mikor, hol és kikkel játszol vagy edzel, a szervezést pedig intézi helyetted a rendszer.';
+    } else {
+      els.authCardSubtitle.textContent = 'Építs csapatot, hirdess eseményeket, sorsolj automatikusan, és intézd a pénzügyeket ugyanott.';
+    }
+  }
+
+  syncAuthPoster();
+}
+
+function getRegistrationPathPresentation(path) {
+  switch (path) {
+    case 'tournament_organizer':
+      return {
+        tone: 'tournament',
+        kicker: 'Főmodul',
+        eyebrow: 'Tornaszervezés',
+        title: 'A tornaszervezés végre nem Excelből, Messengerből és idegeskedésből áll.',
+        lead: 'Hozz létre 8, 16 vagy akár 32 csapatos tornát, oszd be a pályákat, vezesd az eredményeket és zárd le a pénzügyeket egyetlen erős munkatérből.',
+        bullets: ['Csapatmeghívás és nevezés', 'Pálya- és időbeosztás', 'Eredmények, gólok, statok', 'Elszámolás egy helyen'],
+        footer: 'Komoly szervezőknek, komoly eseményekhez.'
+      };
+    case 'activity_organizer':
+      return {
+        tone: 'activity',
+        kicker: 'Almodul',
+        eyebrow: 'Csoportos órák és közösségi alkalmak',
+        title: 'Ha órát tartasz, ne találgasd, hányan jönnek ma este.',
+        lead: 'Jóga, pilátesz, TRX, futás vagy túra: hívd meg az embereket, lásd a jelentkezéseket azonnal, vezesd a jelenlétet, és maradj képben a bevételekkel is.',
+        bullets: ['Korlátlan számú alkalom', 'Helyszín és létszám kezelés', 'Jelenlét egy mozdulattal', 'Pénzügyi rálátás'],
+        footer: 'Egyszerűbb szervezés, kevesebb utánajárás, nyugodtabb napok.'
+      };
+    case 'invited_participant':
+      return {
+        tone: 'invite',
+        kicker: 'Gyors belépés',
+        eyebrow: 'Meghívóval érkeztem',
+        title: 'Négy kattintás, és már bent is vagy a csapat ritmusában.',
+        lead: 'A csapatkapitány már megtette a nehezét. Neked most csak be kell lépned, és rögtön látod, mikor, hol és kikkel leszel egy oldalon.',
+        bullets: ['Azonnali csatlakozás', 'Következő események egy helyen', 'Csapattársak és státuszok', 'Fizetési infók kézközelben'],
+        footer: 'Gyorsabb belépés, kevesebb kérdés, több játék.'
+      };
+    case 'team_sport_organizer':
+    default:
+      return {
+        tone: 'team',
+        kicker: 'Almodul',
+        eyebrow: 'Csapatsport-szervezés',
+        title: 'A haveri csapat szervezése is nézhet ki úgy, mintha 2026 lenne.',
+        lead: 'Add meg a helyszínt és az időpontot, építsd a csapatod, használd az automata csapatgenerátort, és intézd a Revolut- vagy Wise-elszámolást ugyanabban a flow-ban.',
+        bullets: ['Jelentkezés és várólista', 'Automatikus csapatgenerátor', 'Kik jönnek, ki hol játszik', 'Revolut és Wise támogatás'],
+        footer: 'Foci, kosár vagy bármi, ahol számít, ki jön el végül.'
+      };
+  }
+}
+
+function syncAuthPoster() {
+  const poster = document.getElementById('authPoster');
+  if (!poster) return;
+
+  const isRegister = state.authMode === 'register';
+  const presentation = isRegister
+    ? getRegistrationPathPresentation(getSelectedRegistrationPath())
+    : {
+        tone: 'login',
+        kicker: 'Sportplatform',
+        eyebrow: 'Belépés',
+        title: 'Lépj vissza oda, ahol a csapat, a torna és a következő esemény már vár.',
+        lead: 'A szervezés, a csapattársak, a státuszok és a pénzügyek ugyanabban a felületben állnak össze. Belépés után rögtön ott folytatod, ahol abbahagytad.',
+        bullets: ['Csapatok és események', 'Jelentkezések és státuszok', 'Leosztás és jelenlét', 'Átlátható pénzügyek'],
+        footer: 'Nem csak adminfelület. Ez a meccs előszobája.'
+      };
+
+  poster.className = `auth-poster auth-poster-${presentation.tone}`;
+  poster.innerHTML = `
+    <div class="auth-poster-topline">
+      <span class="auth-poster-kicker">${escapeHtml(presentation.kicker)}</span>
+      <span class="auth-poster-eyebrow">${escapeHtml(presentation.eyebrow)}</span>
+    </div>
+    <h2 class="auth-poster-title">${escapeHtml(presentation.title)}</h2>
+    <p class="auth-poster-lead">${escapeHtml(presentation.lead)}</p>
+    <div class="auth-poster-bullets">
+      ${presentation.bullets.map(item => `<span class="auth-poster-chip">${escapeHtml(item)}</span>`).join('')}
+    </div>
+    <div class="auth-poster-footer">${escapeHtml(presentation.footer)}</div>
+  `;
+}
+
 function ensureAuthOnboardingUi() {
   const authView = document.getElementById('authView');
   if (authView && !document.getElementById('inviteLandingCard')) {
@@ -189,6 +433,108 @@ function ensureAuthOnboardingUi() {
   }
 
   const main = document.querySelector('.main');
+  if (main && !document.getElementById('tournamentView')) {
+    const section = document.createElement('section');
+    section.id = 'tournamentView';
+    section.className = 'view';
+    section.dataset.surfaceLayout = 'true';
+    section.innerHTML = `
+      <div class="view-header card compact" data-layout-item data-layout-key="tournament-overview" data-default-col-span="12" data-default-row-span="1" data-min-col-span="12" data-max-col-span="12">
+        <div>
+          <h2>Tornaszervező</h2>
+          <p class="muted small">Itt épül majd a teljes tornaszervezői munkatér: nevezések, lebonyolítás, mérkőzések, pénzügy és kommunikáció egy saját világban.</p>
+        </div>
+        <div id="tournamentOverviewCards" class="overview-grid compact-overview"></div>
+      </div>
+
+      <div class="card compact admin-subnav-card top-space" data-layout-item data-layout-key="tournament-nav" data-default-col-span="12" data-default-row-span="1" data-min-col-span="12" data-max-col-span="12">
+        <div class="admin-subnav">
+          <button class="subnav-btn active" type="button" data-tournament-workspace="home">Kezdőpult</button>
+          <button class="subnav-btn" type="button" data-tournament-workspace="tournaments">Tornák</button>
+          <button class="subnav-btn" type="button" data-tournament-workspace="registrations">Csapatok és nevezések</button>
+          <button class="subnav-btn" type="button" data-tournament-workspace="format">Lebonyolítás</button>
+          <button class="subnav-btn" type="button" data-tournament-workspace="matches">Mérkőzések</button>
+          <button class="subnav-btn" type="button" data-tournament-workspace="finance">Pénzügy</button>
+          <button class="subnav-btn" type="button" data-tournament-workspace="comms">Kommunikáció</button>
+          <button class="subnav-btn" type="button" data-tournament-workspace="stats">Statisztika</button>
+        </div>
+      </div>
+
+      <section class="top-space" data-tournament-workspace-panel="home" data-layout-item data-layout-key="tournament-home" data-default-col-span="12" data-default-row-span="3" data-min-col-span="12" data-max-col-span="12">
+        <div class="grid two-col">
+          <div class="card">
+            <h2>Kezdőpult</h2>
+            <div class="small muted section-note">Ez a tornaszervezői főmunkatér. Innen indítod a tornát, hívod meg a csapatkapitányokat, rakod össze a lebonyolítást és zárod le az elszámolást.</div>
+            <div id="tournamentHomeContent" class="stack top-space"></div>
+          </div>
+          <div class="card">
+            <h2>Itt tart most a munkatér</h2>
+            <div class="small muted section-note">A fő irány maradjon egyszerű: előbb torna, aztán nevezések, utána lebonyolítás és mérkőzések.</div>
+            <div id="tournamentWorkspaceSummary" class="stack top-space"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="top-space hidden" hidden data-tournament-workspace-panel="tournaments" data-layout-item data-layout-key="tournament-tournaments" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+        <div class="card">
+          <h2>Tornák</h2>
+          <div class="small muted section-note">Itt jön majd a torna létrehozása: hány csapat, hány pálya, milyen helyszín, mennyi egy meccs és milyen napokra esik a teljes esemény.</div>
+          <div class="stack top-space" id="tournamentTournamentsPanel"></div>
+        </div>
+      </section>
+
+      <section class="top-space hidden" hidden data-tournament-workspace-panel="registrations" data-layout-item data-layout-key="tournament-registrations" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+        <div class="card">
+          <h2>Csapatok és nevezések</h2>
+          <div class="small muted section-note">Ez lesz a meghívott csapatkapitányok, nevezések, hiányzó keretek és visszaigazolások otthona.</div>
+          <div class="stack top-space" id="tournamentRegistrationsPanel"></div>
+        </div>
+      </section>
+
+      <section class="top-space hidden" hidden data-tournament-workspace-panel="format" data-layout-item data-layout-key="tournament-format" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+        <div class="card">
+          <h2>Lebonyolítás</h2>
+          <div class="small muted section-note">Itt fog összeállni a csoportkör, a kieséses ág, a pálya- és idősávkiosztás, valamint az egész torna ritmusa.</div>
+          <div class="stack top-space" id="tournamentFormatPanel"></div>
+        </div>
+      </section>
+
+      <section class="top-space hidden" hidden data-tournament-workspace-panel="matches" data-layout-item data-layout-key="tournament-matches" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+        <div class="card">
+          <h2>Mérkőzések</h2>
+          <div class="small muted section-note">Itt kapnak helyet a meccslisták, eredmények, gólok, asszisztok és a mérkőzések élő állapotai.</div>
+          <div class="stack top-space" id="tournamentMatchesPanel"></div>
+        </div>
+      </section>
+
+      <section class="top-space hidden" hidden data-tournament-workspace-panel="finance" data-layout-item data-layout-key="tournament-finance" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+        <div class="card">
+          <h2>Pénzügy</h2>
+          <div class="small muted section-note">Ide kerül majd a nevezési díj, csapatonkénti befizetés, tornaelszámolás és a szervezői pénzügyi összkép.</div>
+          <div class="stack top-space" id="tournamentFinancePanel"></div>
+        </div>
+      </section>
+
+      <section class="top-space hidden" hidden data-tournament-workspace-panel="comms" data-layout-item data-layout-key="tournament-comms" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+        <div class="card">
+          <h2>Kommunikáció</h2>
+          <div class="small muted section-note">A csapatkapitányok, értesítések, tornafrissítések és központi üzenetek külön szervezői felületet kapnak.</div>
+          <div class="stack top-space" id="tournamentCommsPanel"></div>
+        </div>
+      </section>
+
+      <section class="top-space hidden" hidden data-tournament-workspace-panel="stats" data-layout-item data-layout-key="tournament-stats" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
+        <div class="card">
+          <h2>Statisztika</h2>
+          <div class="small muted section-note">Itt jelennek majd meg a torna tabellái, játékos- és csapatszintű mutatók, valamint az egész esemény záró számai.</div>
+          <div class="stack top-space" id="tournamentStatsPanel"></div>
+        </div>
+      </section>
+    `;
+    main.appendChild(section);
+    els.views = [...document.querySelectorAll('.view')];
+  }
+
   if (main && !document.getElementById('platformView')) {
     const section = document.createElement('section');
     section.id = 'platformView';
@@ -217,6 +563,15 @@ function ensureAuthOnboardingUi() {
   }
 
   const nav = document.querySelector('.nav');
+  if (nav && !document.querySelector('[data-view="tournamentView"]')) {
+    const btn = document.createElement('button');
+    btn.className = 'nav-btn';
+    btn.dataset.view = 'tournamentView';
+    btn.textContent = 'Tornaszervező';
+    nav.insertBefore(btn, document.querySelector('[data-view="adminView"]'));
+    els.navButtons = [...document.querySelectorAll('.nav-btn')];
+  }
+
   if (nav && !document.querySelector('[data-view="platformView"]')) {
     const btn = document.createElement('button');
     btn.className = 'nav-btn';
@@ -234,41 +589,94 @@ function ensureAuthOnboardingUi() {
   }
 
   if (els.registerForm && !document.getElementById('registerPhone')) {
+    const registerPathBlock = document.createElement('div');
+    registerPathBlock.className = 'auth-field-block';
+    registerPathBlock.innerHTML = `
+      <label class="label auth-choice-label">Így indulok</label>
+      <div id="registrationPathChooser" class="auth-path-grid">
+        ${REGISTRATION_PATH_OPTIONS.map(option => {
+          const presentation = getRegistrationPathPresentation(option.value);
+          return `
+          <section class="auth-path-panel auth-path-panel-${option.value}" data-registration-path="${option.value}">
+            <span class="auth-path-visual auth-path-visual-${option.value}"></span>
+            <div class="auth-path-copy">
+              <div class="auth-path-topline">
+                <span class="auth-path-kicker">${escapeHtml(presentation.kicker)}</span>
+                <span class="auth-path-eyebrow">${escapeHtml(presentation.eyebrow)}</span>
+              </div>
+              <strong>${escapeHtml(presentation.title)}</strong>
+              <p class="auth-path-lead">${escapeHtml(presentation.lead)}</p>
+              <div class="auth-path-bullets">
+                ${presentation.bullets.map(item => `<span class="auth-path-chip">${escapeHtml(item)}</span>`).join('')}
+              </div>
+              <p class="auth-path-footer">${escapeHtml(presentation.footer)}</p>
+            </div>
+            <button class="auth-path-trigger" type="button" data-registration-path="${option.value}">
+              <span class="auth-path-trigger-title">${escapeHtml(option.title)}</span>
+              <span class="auth-path-trigger-description">${escapeHtml(option.description)}</span>
+            </button>
+            <div class="auth-path-form-slot"></div>
+          </section>
+        `;
+        }).join('')}
+      </div>
+      <div id="registerDetailsMount" hidden></div>
+    `;
+
     const registerPhoneBlock = document.createElement('div');
+    registerPhoneBlock.className = 'auth-field-block';
     registerPhoneBlock.innerHTML = `
       <label class="label" for="registerPhone">Telefonszám</label>
       <input id="registerPhone" name="phone" type="text" placeholder="+36..." />
     `;
 
     const registerInviteBlock = document.createElement('div');
+    registerInviteBlock.className = 'auth-field-block';
     registerInviteBlock.innerHTML = `
       <label class="label" for="registerInviteToken">Meghívókód / token</label>
       <input id="registerInviteToken" name="inviteToken" type="text" placeholder="Ha meghívólinkkel jöttél, itt is megadhatod" />
     `;
 
-    const organizerLabel = document.createElement('label');
-    organizerLabel.className = 'module-switch auth-module-switch';
-    organizerLabel.innerHTML = `
-      <span>
-        <span class="module-switch-label">Csapatszervező vagyok</span>
-        <span class="module-switch-description">Saját csapatot indítok, és a regisztráció után szervezői felületet szeretnék.</span>
-      </span>
-      <span class="module-switch-control">
-        <input id="registerAsOrganizer" name="registerAsOrganizer" type="checkbox" />
-        <span class="module-switch-track" aria-hidden="true"></span>
-      </span>
+    const submitBtn = els.registerForm.querySelector('button[type="submit"]');
+    const existingBlocks = [...els.registerForm.children];
+    const detailsBlock = document.createElement('div');
+    detailsBlock.id = 'registerFormDetails';
+    detailsBlock.className = 'auth-register-details hidden';
+    detailsBlock.hidden = true;
+    detailsBlock.innerHTML = `
+      <div class="auth-register-details-head">
+        <strong>Készen állsz? Már csak ezeket add meg.</strong>
+      </div>
     `;
 
-    const submitBtn = els.registerForm.querySelector('button[type="submit"]');
-    submitBtn.insertAdjacentElement('beforebegin', registerInviteBlock);
-    submitBtn.insertAdjacentElement('beforebegin', organizerLabel);
-    submitBtn.insertAdjacentElement('beforebegin', registerPhoneBlock);
+    existingBlocks.forEach(block => {
+      detailsBlock.appendChild(block);
+    });
+
+    detailsBlock.insertBefore(registerPhoneBlock, submitBtn);
+    detailsBlock.insertBefore(registerInviteBlock, submitBtn);
+
+    els.registerForm.appendChild(registerPathBlock);
+    els.registerForm.appendChild(detailsBlock);
   }
 
   const registerInviteInput = document.getElementById('registerInviteToken');
   if (registerInviteInput && state.pendingInviteToken && !registerInviteInput.value) {
     registerInviteInput.value = state.pendingInviteToken;
   }
+
+  document.querySelectorAll('.auth-path-trigger').forEach(button => {
+    if (button.dataset.boundRegistrationPath !== 'true') {
+      button.addEventListener('click', () => {
+        setSelectedRegistrationPath(button.dataset.registrationPath || '');
+        syncRegistrationPathUi();
+      });
+      button.dataset.boundRegistrationPath = 'true';
+    }
+  });
+
+  setSelectedRegistrationPath(state.selectedRegistrationPath || getDefaultRegistrationPath());
+  syncRegistrationPathUi();
 
   if (els.registerForm && !document.getElementById('googleRegisterMount')) {
     const mount = document.createElement('div');
@@ -278,6 +686,9 @@ function ensureAuthOnboardingUi() {
   }
 
   els.inviteLandingCard = document.getElementById('inviteLandingCard');
+  els.tournamentOverviewCards = document.getElementById('tournamentOverviewCards');
+  els.tournamentHomeContent = document.getElementById('tournamentHomeContent');
+  els.tournamentWorkspaceSummary = document.getElementById('tournamentWorkspaceSummary');
   els.platformOverviewCards = document.getElementById('platformOverviewCards');
   els.platformTeamsList = document.getElementById('platformTeamsList');
   els.platformEventsList = document.getElementById('platformEventsList');
@@ -298,7 +709,29 @@ function ensureAuthShell() {
   authView.style.paddingTop = '24px';
   authShell.style.margin = '0 auto';
   authShell.style.width = '100%';
-  authShell.style.maxWidth = '560px';
+  authShell.style.maxWidth = '1460px';
+
+  let formStage = authShell.querySelector('.auth-form-stage');
+  if (!formStage) {
+    formStage = document.createElement('div');
+    formStage.className = 'auth-form-stage';
+    authShell.appendChild(formStage);
+  }
+
+  if (loginCard.parentElement !== formStage) {
+    formStage.appendChild(loginCard);
+  }
+
+  if (registerCard.parentElement !== formStage) {
+    formStage.appendChild(registerCard);
+  }
+
+  if (!document.getElementById('authPoster')) {
+    const poster = document.createElement('aside');
+    poster.id = 'authPoster';
+    poster.className = 'auth-poster auth-poster-login';
+    authShell.appendChild(poster);
+  }
 
   loginCard.id = 'loginPanel';
   registerCard.id = 'registerPanel';
@@ -352,6 +785,7 @@ function ensureAuthShell() {
   els.authModeRegisterBtn = document.getElementById('authModeRegisterBtn');
   els.loginPanel = loginCard;
   els.registerPanel = registerCard;
+  syncAuthPoster();
 }
 
 function ensureSidebarShell() {
@@ -438,6 +872,7 @@ function setAuthMode(mode = 'login') {
   state.authMode = mode === 'register' ? 'register' : 'login';
   const isRegister = state.authMode === 'register';
   const activePanel = isRegister ? els.registerPanel : els.loginPanel;
+  const authShell = document.querySelector('.auth-shell');
 
   placeAuthHeader(activePanel);
 
@@ -464,14 +899,22 @@ function setAuthMode(mode = 'login') {
   }
   if (els.authCardSubtitle) {
     els.authCardSubtitle.textContent = isRegister
-      ? 'Hozd létre a fiókodat, és csatlakozz a csapatodhoz.'
-      : 'Lépj be, és folytasd a csapatod szervezését.';
+      ? 'Válaszd ki, milyen szervezőként érkezel, és már indulhat is a saját sportvilágod.'
+      : 'Lépj be, és folytasd ott, ahol a csapatod, a tornád vagy a következő eseményed vár.';
   }
 
   const registerEmailInput = document.getElementById('registerEmail');
   if (registerEmailInput) {
     registerEmailInput.disabled = false;
     registerEmailInput.readOnly = false;
+  }
+
+  authShell?.classList.toggle('auth-shell-register-mode', isRegister);
+
+  if (isRegister) {
+    syncRegistrationPathUi();
+  } else {
+    syncAuthPoster();
   }
 }
 
@@ -511,6 +954,9 @@ function resetAuthForms({ preserveInviteToken = true } = {}) {
   if (registerInviteInput) {
     registerInviteInput.value = inviteToken;
   }
+
+  setSelectedRegistrationPath(getDefaultRegistrationPath());
+  syncRegistrationPathUi();
 }
 
 function syncSidebarCollapse() {
@@ -634,6 +1080,33 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value);
+}
+
+async function copyTextToClipboard(text) {
+  const normalized = String(text || '').trim();
+  if (!normalized) {
+    throw new Error('Nincs másolható szöveg.');
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(normalized);
+    return true;
+  }
+
+  const temp = document.createElement('textarea');
+  temp.value = normalized;
+  temp.setAttribute('readonly', 'readonly');
+  temp.style.position = 'fixed';
+  temp.style.opacity = '0';
+  document.body.appendChild(temp);
+  temp.select();
+  document.execCommand('copy');
+  document.body.removeChild(temp);
+  return true;
 }
 
 function isTeamSkillModuleEnabled() {
@@ -1408,12 +1881,47 @@ function getTeamCaptainMember() {
   return (state.teamMembers || []).find(member => member.role === 'team_admin' && member.membership_status === 'active') || null;
 }
 
+function buildCaptainQrPaymentSummary() {
+  const focusEvent =
+    state.selectedUserEventDetail?.event
+    || state.selectedUserEvent
+    || getNextEvent(state.userTeamEvents || state.myEvents || [])
+    || null;
+  const paymentSummary = getPaymentSummaryObject(focusEvent);
+  if (!paymentSummary || paymentSummary.is_visible_to_user !== true) {
+    return null;
+  }
+
+  const projection = buildUserEventPaymentProjection(paymentSummary, state.currentTeamFinance);
+  const carryLabel = projection.debtCarry > 0
+    ? 'Áthozott tartozás'
+    : projection.creditCarry > 0
+      ? 'Levonható előleg'
+      : 'Áthozott egyenleg';
+  const carryAmount = projection.debtCarry > 0
+    ? projection.debtCarry
+    : projection.creditCarry;
+  const note = projection.debtCarry > 0
+    ? `A QR megnyitásakor már beleszámoltuk a korábbi ${formatMoney(projection.debtCarry)} tartozást is.`
+    : projection.creditCarry > 0
+      ? `A QR megnyitásakor már levontuk a korábbi ${formatMoney(projection.creditCarry)} előlegedet.`
+      : 'Most nincs áthozott tartozásod vagy előleged.';
+
+  return {
+    dueNowAmount: projection.projectedDue,
+    eventAmount: projection.eventAmount,
+    carryLabel,
+    carryAmount,
+    note
+  };
+}
+
 function openPaymentQrPreviewForUserId(userId, roleHint = '') {
   const user =
     (state.teamMembers || []).find(member => String(member.user_id) === String(userId)) ||
     (state.selectedAdminEventDetail?.registrations?.going || []).find(member => String(member.user_id) === String(userId)) ||
-    (state.selectedAdminEventDetail?.registrations?.waiting_list || []).find(member => String(member.user_id) === String(userId)) ||
-    (state.selectedAdminEventDetail?.registrations?.rank_waiting_list || []).find(member => String(member.user_id) === String(userId)) ||
+    (state.selectedAdminEventDetail?.registrations?.waitingList || []).find(member => String(member.user_id) === String(userId)) ||
+    (state.selectedAdminEventDetail?.registrations?.rankWaitingList || []).find(member => String(member.user_id) === String(userId)) ||
     null;
   const profile = getUserPaymentProfile(user);
 
@@ -1427,11 +1935,12 @@ function openPaymentQrPreviewForUserId(userId, roleHint = '') {
     subtitle: roleHint === 'captain' ? 'Csapatkapitány fizetési QR-kódja' : 'Játékos fizetési QR-kódja',
     qrDataUrl: profile.qrDataUrl,
     username: profile.username || '',
-    provider: profile.providerLabel
+    provider: profile.providerLabel,
+    paymentSummary: roleHint === 'captain' ? buildCaptainQrPaymentSummary() : null
   });
 }
 
-function openPaymentQrPreview({ title, subtitle = '', qrDataUrl, username = '', provider = '' }) {
+function openPaymentQrPreview({ title, subtitle = '', qrDataUrl, username = '', provider = '', paymentSummary = null }) {
   if (!qrDataUrl) {
     showMessage('Ehhez a profilhoz még nincs feltöltött QR-kód.', 'error');
     return;
@@ -1442,7 +1951,8 @@ function openPaymentQrPreview({ title, subtitle = '', qrDataUrl, username = '', 
     subtitle,
     qrDataUrl,
     username,
-    provider
+    provider,
+    paymentSummary
   };
   renderPaymentQrPreviewOverlay();
 }
@@ -1466,6 +1976,27 @@ function renderPaymentQrPreviewOverlay() {
         <div class="small muted">${escapeHtml(state.paymentQrPreview.provider || 'Fizetési QR-kód')}</div>
         <h3>${escapeHtml(state.paymentQrPreview.title || 'QR-kód')}</h3>
         ${state.paymentQrPreview.subtitle ? `<div class="small muted">${escapeHtml(state.paymentQrPreview.subtitle)}</div>` : ''}
+        ${
+          state.paymentQrPreview.paymentSummary
+            ? `
+              <div class="payment-qr-finance-summary">
+                <div class="payment-qr-finance-amount">${escapeHtml(formatMoney(state.paymentQrPreview.paymentSummary.dueNowAmount || 0))}</div>
+                <div class="small muted">Most rendezendő összeg</div>
+                <div class="payment-qr-finance-grid">
+                  <div class="detail-box">
+                    <div class="detail-label">Esemény díja</div>
+                    <div class="detail-value">${escapeHtml(formatMoney(state.paymentQrPreview.paymentSummary.eventAmount || 0))}</div>
+                  </div>
+                  <div class="detail-box">
+                    <div class="detail-label">${escapeHtml(state.paymentQrPreview.paymentSummary.carryLabel || 'Áthozott egyenleg')}</div>
+                    <div class="detail-value">${escapeHtml(formatMoney(state.paymentQrPreview.paymentSummary.carryAmount || 0))}</div>
+                  </div>
+                </div>
+                <div class="small muted top-space">${escapeHtml(state.paymentQrPreview.paymentSummary.note || '')}</div>
+              </div>
+            `
+            : ''
+        }
         <img class="payment-qr-image-large" src="${escapeHtml(state.paymentQrPreview.qrDataUrl)}" alt="Fizetési QR-kód" />
         ${state.paymentQrPreview.username ? `<div class="payment-qr-username">${escapeHtml(state.paymentQrPreview.username)}</div>` : ''}
         <div class="small muted">Nyisd meg nagyban, és olvasd be a telefonoddal.</div>
@@ -1798,7 +2329,7 @@ function getAdminEventFormStepState() {
   const recurring = els.recurringToggle?.checked === true;
   const hasNotifications = [...document.querySelectorAll('[data-notification-pref]')].some(control => control.checked);
 
-  const basicsDone = Boolean(title && startAt && location);
+  const basicsDone = Boolean(title && isValidDateTimeLocalInput(startAt) && location);
   const logisticsDone = minPlayers > 0 && playersOnField > 0 && Boolean(rulesText);
   const extrasDone = pricingMode !== EVENT_PRICING_MODES.FREE || hidden || recurring || hasNotifications || Boolean(paymentLinkProvider || paymentLinkUrl);
 
@@ -2306,14 +2837,73 @@ function formatSignedMoney(value) {
   return `${sign}${numeric.toLocaleString('hu-HU')} Ft`;
 }
 
-function renderUserPaymentSummary(event, { forceVisible = false } = {}) {
-  const payment = event?.payment_summary || event?.paymentSummary;
+function getPaymentSummaryObject(source) {
+  if (!source) return null;
+  if (source.payment_summary) return source.payment_summary;
+  if (source.paymentSummary) return source.paymentSummary;
+  if (
+    source.final_amount_per_person != null
+    || source.base_amount_per_person != null
+    || source.per_player_fee != null
+  ) {
+    return source;
+  }
+  return null;
+}
+
+function buildUserEventPaymentProjection(payment, financeOverview = state.currentTeamFinance) {
+  const eventAmount = Number(payment?.final_amount_per_person || 0);
+  const currentBalance = Number(financeOverview?.current_balance_amount || 0);
+  const debtCarry = Math.max(-currentBalance, 0);
+  const creditCarry = Math.max(currentBalance, 0);
+  const projectedDue = Math.max(eventAmount + debtCarry - creditCarry, 0);
+
+  return {
+    eventAmount,
+    debtCarry,
+    creditCarry,
+    projectedDue
+  };
+}
+
+function renderUserPaymentSummary(source, { forceVisible = false, financeOverview = state.currentTeamFinance } = {}) {
+  const payment = getPaymentSummaryObject(source);
   if (!payment) return '';
   if (!forceVisible && payment.is_visible_to_user !== true) return '';
+  const projection = buildUserEventPaymentProjection(payment, financeOverview);
+
   return `
     <div class="payment-summary-box">
-      <div class="small muted">Fizetendő</div>
-      <div class="payment-summary-amount">${escapeHtml(formatMoney(payment.final_amount_per_person || 0))}</div>
+      <div class="row between align-center wrap gap">
+        <div>
+          <div class="small muted">Most rendezendő</div>
+          <div class="payment-summary-amount">${escapeHtml(formatMoney(projection.projectedDue))}</div>
+        </div>
+        ${renderFinanceBalanceBadge(Number(financeOverview?.current_balance_amount || 0))}
+      </div>
+      <div class="grid three-col inner-grid top-space payment-summary-grid">
+        <div class="detail-box">
+          <div class="detail-label">Esemény díja</div>
+          <div class="detail-value">${escapeHtml(formatMoney(projection.eventAmount))}</div>
+        </div>
+        <div class="detail-box ${projection.debtCarry > 0 ? 'finance-carry-box is-debt' : projection.creditCarry > 0 ? 'finance-carry-box is-credit' : 'finance-carry-box'}">
+          <div class="detail-label">${projection.debtCarry > 0 ? 'Áthozott tartozás' : projection.creditCarry > 0 ? 'Levonható előleg' : 'Áthozott egyenleg'}</div>
+          <div class="detail-value">${escapeHtml(formatMoney(projection.debtCarry > 0 ? projection.debtCarry : projection.creditCarry))}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Ebből most fizetendő</div>
+          <div class="detail-value">${escapeHtml(formatMoney(projection.projectedDue))}</div>
+        </div>
+      </div>
+      <div class="small muted top-space">
+        ${
+          projection.debtCarry > 0
+            ? `Az esemény díjához hozzáadódik a korábbi ${escapeHtml(formatMoney(projection.debtCarry))} tartozásod.`
+            : projection.creditCarry > 0
+              ? `Az esemény díjából levonjuk a korábbi ${escapeHtml(formatMoney(projection.creditCarry))} előlegedet.`
+              : 'Most nincs áthozott tartozásod vagy előleged, ezért a teljes eseménydíj rendezendő.'
+        }
+      </div>
     </div>
   `;
 }
@@ -2354,6 +2944,7 @@ function renderRankRegistrationNotice(registrationWindow, { compact = false, cur
 function clearAuth() {
   clearPendingInvitePulseTimer();
   clearPendingInviteJumpHighlight();
+  clearUserNewEventsPulseTimer();
   state.token = '';
   state.user = null;
   state.teamRole = null;
@@ -2384,6 +2975,7 @@ function clearAuth() {
   state.skillSettingsSaving = false;
   state.sidebarCollapsed = false;
   state.userInvitePulseUntil = 0;
+  state.userNewEventsPulseUntil = 0;
 
   localStorage.removeItem('foci_token');
   localStorage.removeItem('foci_user');
@@ -2734,7 +3326,12 @@ async function handleGoogleCredential(response, mode) {
 
   try {
     const inviteToken = document.getElementById('registerInviteToken')?.value.trim() || state.pendingInviteToken || null;
-    const registerAsOrganizer = document.getElementById('registerAsOrganizer')?.checked === true;
+    const registrationPath = getSelectedRegistrationPath();
+    if (!registrationPath) {
+      showMessage('Előbb válassz egy belépési kártyát.', 'error');
+      return;
+    }
+    const registerAsOrganizer = registrationPath !== 'invited_participant';
     const phone = document.getElementById('registerPhone')?.value.trim() || null;
 
     const result = await api('/auth/google', {
@@ -2742,6 +3339,7 @@ async function handleGoogleCredential(response, mode) {
       body: JSON.stringify({
         idToken: response.credential,
         inviteToken,
+        registrationPath,
         registerAsOrganizer,
         phone
       })
@@ -2759,7 +3357,7 @@ async function handleGoogleCredential(response, mode) {
       await loadTeam(state.currentTeamId);
     }
 
-    const targetView = isPlatformOwner() ? 'platformView' : 'userView';
+    const targetView = getPostAuthDefaultView();
 
     showMessage(
       mode === 'register'
@@ -2768,6 +3366,9 @@ async function handleGoogleCredential(response, mode) {
       'success'
     );
     switchView(targetView);
+    if (targetView === 'tournamentView') {
+      setTournamentWorkspace('home');
+    }
     if (targetView === 'userView') {
       triggerPendingInvitePulse();
     }
@@ -2825,6 +3426,16 @@ function toIsoFromInput(value) {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function isValidDateTimeLocalInput(value) {
+  if (!value) return false;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(value).trim())) {
+    return false;
+  }
+
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime());
 }
 
 const EVENT_STATUS_LABELS = {
@@ -3385,6 +3996,31 @@ function getAdminFocusEvent() {
   return state.selectedAdminEventDetail?.event || state.selectedAdminEvent || null;
 }
 
+function getAdminWorkspaceFocusEvent(events = state.adminEvents || []) {
+  const selectedEvent = getAdminFocusEvent();
+  if (selectedEvent) {
+    return selectedEvent;
+  }
+
+  const upcomingEvent = getNextUpcomingAdminEvent(events);
+  if (upcomingEvent) {
+    return upcomingEvent;
+  }
+
+  const now = Date.now();
+  const pastPublishedEvents = [...events]
+    .filter(event => isPastPublishedEvent(event, now))
+    .sort((a, b) => getEventStartTimestamp(b) - getEventStartTimestamp(a));
+  if (pastPublishedEvents[0]) {
+    return pastPublishedEvents[0];
+  }
+
+  const finishedEvents = [...events]
+    .filter(event => event?.status === 'finished')
+    .sort((a, b) => getEventStartTimestamp(b) - getEventStartTimestamp(a));
+  return finishedEvents[0] || null;
+}
+
 function getAttendanceDefaultPaymentAmount(detail) {
   const paymentSummary = detail?.summary?.paymentSummary || {};
   const amount = Number(paymentSummary.final_amount_per_person || 0);
@@ -3838,6 +4474,20 @@ function renderTeamFinanceBalances() {
                           <div class="detail-value">${escapeHtml(formatMoney(stats.total_actual_paid_amount || 0))}</div>
                         </div>
                       </div>
+                      <div class="grid three-col inner-grid top-space attendance-summary-grid">
+                        <div class="detail-box finance-carry-box ${stats.debt_amount ? 'is-debt' : ''}">
+                          <div class="detail-label">Nyitott tartozás</div>
+                          <div class="detail-value">${escapeHtml(formatMoney(stats.debt_amount || 0))}</div>
+                        </div>
+                        <div class="detail-box finance-carry-box ${stats.credit_amount ? 'is-credit' : ''}">
+                          <div class="detail-label">Felhasználható előleg</div>
+                          <div class="detail-value">${escapeHtml(formatMoney(stats.credit_amount || 0))}</div>
+                        </div>
+                        <div class="detail-box finance-carry-box">
+                          <div class="detail-label">Kézi korrekciók</div>
+                          <div class="detail-value">${escapeHtml(formatMoney(stats.total_adjustment_amount || 0))}</div>
+                        </div>
+                      </div>
                       ${
                         getUserPaymentProfile(member)
                           ? `
@@ -3863,8 +4513,8 @@ function renderTeamFinanceBalances() {
                       }
                       <div class="attendance-row attendance-ledger-row">
                         <div class="attendance-row-main">
-                          <div class="attendance-row-name">Külön befizetés / tartozás rendezése</div>
-                          <div class="small muted">Itt tudod rögzíteni a nem eseményhez kötött utólagos befizetést vagy korrekciót.</div>
+                          <div class="attendance-row-name">Külön pénzügyi korrekció</div>
+                          <div class="small muted">Pozitív összeg: befizetés vagy jóváírás. Negatív összeg: visszaterhelés vagy admin korrekció.</div>
                         </div>
                         <div class="attendance-row-payment">
                           <label class="label small" for="financeAdjustment_${escapeHtml(member.user_id)}">Összeg</label>
@@ -3876,7 +4526,7 @@ function renderTeamFinanceBalances() {
                             data-finance-adjustment-amount
                             data-finance-user-id="${escapeHtml(member.user_id)}"
                             value="${stats.debt_amount ? escapeHtml(String(stats.debt_amount)) : ''}"
-                            placeholder="pl. 1700"
+                            placeholder="pl. 1700 vagy -500"
                           />
                         </div>
                         <div class="attendance-row-payment">
@@ -3897,7 +4547,7 @@ function renderTeamFinanceBalances() {
                             data-team-summary-action="record-finance-adjustment"
                             data-finance-user-id="${escapeHtml(member.user_id)}"
                           >
-                            Befizetés rögzítése
+                            Korrekció rögzítése
                           </button>
                         </div>
                       </div>
@@ -3906,13 +4556,16 @@ function renderTeamFinanceBalances() {
                           ? entries.map(entry => `
                               <div class="attendance-row attendance-ledger-row">
                                 <div class="attendance-row-main">
-                                  <div class="attendance-row-name">${escapeHtml(entry.event_title || 'Névtelen esemény')}</div>
+                                  <div class="row between align-center wrap gap">
+                                    <div class="attendance-row-name">${escapeHtml(entry.event_title || 'Névtelen esemény')}</div>
+                                    ${renderFinanceEntryTypeBadge(entry.entry_type)}
+                                  </div>
                                   <div class="small muted">${escapeHtml(formatDateTime(entry.event_start_at))}</div>
-                                  <div class="small muted">${escapeHtml(entry.note || entry.event_location_name || '-')}</div>
+                                  <div class="small muted">${renderFinanceEntryLocationLine(entry)}</div>
                                 </div>
                                 <div class="detail-box">
-                                  <div class="detail-label">Rendezendő</div>
-                                  <div class="detail-value">${escapeHtml(formatMoney(entry.settlement_target_amount || 0))}</div>
+                                  <div class="detail-label">${escapeHtml(entry.entry_type === 'adjustment' ? 'Korrekció összege' : 'Rendezendő')}</div>
+                                  <div class="detail-value">${escapeHtml(formatMoney(entry.entry_type === 'adjustment' ? Math.abs(entry.actual_paid_amount || 0) : (entry.settlement_target_amount || 0)))}</div>
                                 </div>
                                 <div class="detail-box">
                                   <div class="detail-label">Befizetett</div>
@@ -4707,10 +5360,20 @@ function renderUserOverview() {
   const activeTeams = state.myTeams.filter(team => team.membership_status === 'active').length;
   const nextEvent = getNextEvent(state.myEvents);
   const isInvitePulseActive = pendingInvites > 0 && state.userInvitePulseUntil > Date.now();
+  const newEvents = getUserNewEvents(state.myEvents);
+  const isNewEventsPulseActive = newEvents.length > 0 && state.userNewEventsPulseUntil > Date.now();
 
   els.userOverviewCards.innerHTML = [
     { label: 'Következő kezdés', value: nextEvent ? formatDateTime(nextEvent.start_at) : 'nincs' },
     { label: 'Saját státusz', value: nextEvent ? formatRegistrationStatus(nextEvent.my_registration_status) : 'nincs közelgő esemény' },
+    {
+      label: 'Új esemény',
+      value: newEvents.length,
+      action: newEvents.length > 0 ? 'new-events' : '',
+      clickable: newEvents.length > 0,
+      highlight: isNewEventsPulseActive,
+      helper: newEvents.length > 0 ? 'Kattints a legközelebbi új eseményhez' : ''
+    },
     {
       label: 'Függő meghívás',
       value: pendingInvites,
@@ -4738,6 +5401,13 @@ function clearPendingInvitePulseTimer() {
   if (state.userInvitePulseTimer) {
     clearTimeout(state.userInvitePulseTimer);
     state.userInvitePulseTimer = null;
+  }
+}
+
+function clearUserNewEventsPulseTimer() {
+  if (state.userNewEventsPulseTimer) {
+    clearTimeout(state.userNewEventsPulseTimer);
+    state.userNewEventsPulseTimer = null;
   }
 }
 
@@ -4771,6 +5441,69 @@ function triggerPendingInvitePulse() {
     state.userInvitePulseTimer = null;
     renderUserOverview();
   }, 5000);
+}
+
+function getUserNewEvents(events = state.myEvents) {
+  const now = Date.now();
+  const seenIds = new Set(getSeenUserEventIds(state.user?.id));
+
+  return (events || [])
+    .filter(event => {
+      const startAtMs = new Date(event?.start_at).getTime();
+      if (Number.isNaN(startAtMs) || startAtMs < now) return false;
+      if (event?.status !== 'published') return false;
+      if (!canAttemptEventRegistration(event)) return false;
+      return !seenIds.has(String(event.id));
+    })
+    .sort((a, b) => {
+      const aTs = new Date(a.start_at).getTime();
+      const bTs = new Date(b.start_at).getTime();
+      return aTs - bTs;
+    });
+}
+
+function markUserEventAsSeen(eventId) {
+  if (!eventId || !state.user?.id) return;
+  const seenIds = new Set(getSeenUserEventIds(state.user.id));
+  seenIds.add(String(eventId));
+  saveSeenUserEventIds(state.user.id, [...seenIds]);
+}
+
+function triggerUserNewEventsPulse() {
+  clearUserNewEventsPulseTimer();
+
+  const newEvents = getUserNewEvents(state.myEvents);
+  if (!newEvents.length) {
+    state.userNewEventsPulseUntil = 0;
+    renderUserOverview();
+    return;
+  }
+
+  state.userNewEventsPulseUntil = Date.now() + 5000;
+  renderUserOverview();
+  state.userNewEventsPulseTimer = setTimeout(() => {
+    state.userNewEventsPulseUntil = 0;
+    state.userNewEventsPulseTimer = null;
+    renderUserOverview();
+  }, 5000);
+}
+
+async function jumpToNewestUnregisteredEvent() {
+  const nextNewEvent = getUserNewEvents(state.myEvents)[0]
+    || [...(state.myEvents || [])]
+      .filter(event => canAttemptEventRegistration(event))
+      .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime())[0];
+
+  if (!nextNewEvent?.id) {
+    showMessage('Jelenleg nincs új vagy nyitott esemény, amire még nem jelentkeztél.', 'info');
+    return;
+  }
+
+  markUserEventAsSeen(nextNewEvent.id);
+  state.userNewEventsPulseUntil = 0;
+  renderUserOverview();
+  await openEventForUser(nextNewEvent.id);
+  els.userEventDetail?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
 }
 
 function jumpToPendingInvites() {
@@ -4907,12 +5640,63 @@ function renderFinanceBalanceBadge(balanceAmount) {
   return '<span class="badge badge-muted">rendezett</span>';
 }
 
+function renderFinanceCarryCard(finance) {
+  const balanceAmount = Number(finance?.current_balance_amount || 0);
+  if (balanceAmount < 0) {
+    return `
+      <div class="detail-box finance-carry-box is-debt">
+        <div class="detail-label">Nyitott tartozás</div>
+        <div class="detail-value">${escapeHtml(formatMoney(Math.abs(balanceAmount)))}</div>
+        <div class="small muted">Ezt az összeget a következő rendezésnél még pótolnod kell.</div>
+      </div>
+    `;
+  }
+
+  if (balanceAmount > 0) {
+    return `
+      <div class="detail-box finance-carry-box is-credit">
+        <div class="detail-label">Felhasználható előleg</div>
+        <div class="detail-value">${escapeHtml(formatMoney(balanceAmount))}</div>
+        <div class="small muted">Ez az összeg a következő eseménynél levonható a fizetendőből.</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="detail-box finance-carry-box">
+      <div class="detail-label">Nyitott egyenleg</div>
+      <div class="detail-value">${escapeHtml(formatMoney(0))}</div>
+      <div class="small muted">Most nincs áthozott tartozásod vagy előleged.</div>
+    </div>
+  `;
+}
+
+function renderFinanceEntryTypeBadge(entryType) {
+  return entryType === 'adjustment'
+    ? '<span class="badge badge-draft">kézi korrekció</span>'
+    : '<span class="badge badge-muted">esemény könyvelés</span>';
+}
+
+function renderFinanceEntryExpectedLabel(entry) {
+  return entry?.entry_type === 'adjustment' ? 'Korrekció összege' : 'Elvárt';
+}
+
+function renderFinanceEntryLocationLine(entry) {
+  if (entry?.entry_type === 'adjustment') {
+    return escapeHtml(entry.note || 'Nem eseményhez kötött pénzügyi korrekció.');
+  }
+  return escapeHtml(entry?.event_location_name || '-');
+}
+
 function renderCaptainPaymentCard(focusEvent = null) {
   const captain = getTeamCaptainMember();
   const captainProfile = getUserPaymentProfile(captain);
   const eventPaymentLink = getEventPaymentLinkProfile(focusEvent);
-  const paymentSummary = focusEvent?.payment_summary || focusEvent?.paymentSummary || null;
+  const paymentSummary = getPaymentSummaryObject(focusEvent);
   const currentBalance = Number(state.currentTeamFinance?.current_balance_amount || 0);
+  const projection = paymentSummary
+    ? buildUserEventPaymentProjection(paymentSummary, state.currentTeamFinance)
+    : null;
 
   if (!captain || (!captainProfile && !eventPaymentLink)) {
     return '';
@@ -4923,11 +5707,19 @@ function renderCaptainPaymentCard(focusEvent = null) {
     : currentBalance > 0
       ? 'Többleted van a fókuszcsapatnál. Innen akkor is eléred a fizetési adatokat, ha rendezni szeretnétek valamit.'
       : 'Innen eléred az eseményhez tartozó fizetési linket és a csapatkapitány fizetési profilját.';
-  const amountBlock = paymentSummary?.is_visible_to_user === true
+  const amountBlock = paymentSummary?.is_visible_to_user === true && projection
     ? `
       <div class="detail-box">
-        <div class="detail-label">Eseményhez tartozó összeg</div>
-        <div class="detail-value">${escapeHtml(formatMoney(paymentSummary.final_amount_per_person || 0))}</div>
+        <div class="detail-label">Esemény díja</div>
+        <div class="detail-value">${escapeHtml(formatMoney(projection.eventAmount || 0))}</div>
+      </div>
+      <div class="detail-box ${projection.debtCarry > 0 ? 'finance-carry-box is-debt' : projection.creditCarry > 0 ? 'finance-carry-box is-credit' : 'finance-carry-box'}">
+        <div class="detail-label">${projection.debtCarry > 0 ? 'Áthozott tartozás' : projection.creditCarry > 0 ? 'Levonható előleg' : 'Áthozott egyenleg'}</div>
+        <div class="detail-value">${escapeHtml(formatMoney(projection.debtCarry > 0 ? projection.debtCarry : projection.creditCarry))}</div>
+      </div>
+      <div class="detail-box">
+        <div class="detail-label">Most rendezendő</div>
+        <div class="detail-value">${escapeHtml(formatMoney(projection.projectedDue || 0))}</div>
       </div>
     `
     : eventPaymentLink
@@ -4948,7 +5740,7 @@ function renderCaptainPaymentCard(focusEvent = null) {
         </div>
         <span class="badge badge-draft">${escapeHtml(eventPaymentLink?.providerLabel || captainProfile?.providerLabel || 'Fizetési profil')}</span>
       </div>
-      <div class="grid two-col inner-grid top-space attendance-summary-grid">
+      <div class="grid three-col inner-grid top-space attendance-summary-grid">
         <div class="detail-box">
           <div class="detail-label">Kedvezményezett</div>
           <div class="detail-value">${escapeHtml(captain.name || 'Csapatkapitány')}</div>
@@ -4959,8 +5751,19 @@ function renderCaptainPaymentCard(focusEvent = null) {
         </div>
         ${amountBlock}
       </div>
+      ${
+        projection
+          ? `<div class="small muted top-space">${
+              projection.debtCarry > 0
+                ? `A fizetési gomb megnyitása előtt már beleszámoltuk a korábbi ${escapeHtml(formatMoney(projection.debtCarry))} tartozásodat.`
+                : projection.creditCarry > 0
+                  ? `A fizetési összegből már levontuk a korábbi ${escapeHtml(formatMoney(projection.creditCarry))} előlegedet.`
+                  : 'A fizetési összeg most pontosan az esemény díjával egyezik meg.'
+            }</div>`
+          : ''
+      }
       <div class="row gap wrap top-space">
-        ${eventPaymentLink ? `<a class="btn btn-inline-link" href="${escapeHtml(eventPaymentLink.url)}" target="_blank" rel="noopener noreferrer">Fizetés ${escapeHtml(eventPaymentLink.providerLabel)} linkkel</a>` : ''}
+        ${eventPaymentLink ? `<a class="btn btn-inline-link" href="${escapeHtml(eventPaymentLink.url)}" target="_blank" rel="noopener noreferrer">Fizetés ${escapeHtml(eventPaymentLink.providerLabel)} linkkel${projection ? ` · ${escapeHtml(formatMoney(projection.projectedDue || 0))}` : ''}</a>` : ''}
         ${captainProfile?.qrDataUrl ? `<button class="btn ${eventPaymentLink ? 'btn-secondary' : ''}" type="button" data-payment-qr-user-id="${escapeHtml(captain.user_id)}" data-payment-qr-role="captain">QR-kód megnyitása</button>` : ''}
       </div>
     </div>
@@ -5021,19 +5824,30 @@ function renderUserFinanceModule() {
             <div class="detail-value">${escapeHtml(formatMoney(finance.total_actual_paid_amount || 0))}</div>
           </div>
         </div>
+        <div class="grid two-col inner-grid top-space">
+          ${renderFinanceCarryCard(finance)}
+          <div class="detail-box finance-carry-box">
+            <div class="detail-label">Kézi korrekciók</div>
+            <div class="detail-value">${escapeHtml(formatMoney(finance.total_adjustment_amount || 0))}</div>
+            <div class="small muted">${escapeHtml(String(finance.adjustment_count || 0))} külön pénzügyi korrekció lett eddig rögzítve nálad.</div>
+          </div>
+        </div>
       </div>
       ${captainPaymentCard}
       ${visibleEntries.map(entry => `
         <div class="event-card attendance-ledger-row">
           <div class="attendance-row-main">
-            <div class="attendance-row-name">${escapeHtml(entry.event_title || 'Névtelen esemény')}</div>
+            <div class="row between align-center wrap gap">
+              <div class="attendance-row-name">${escapeHtml(entry.event_title || 'Névtelen esemény')}</div>
+              ${renderFinanceEntryTypeBadge(entry.entry_type)}
+            </div>
             <div class="small muted">${escapeHtml(formatDateTime(entry.event_start_at))}</div>
-            <div class="small muted">${escapeHtml(entry.note || entry.event_location_name || '-')}</div>
+            <div class="small muted">${renderFinanceEntryLocationLine(entry)}</div>
           </div>
           <div class="grid four-col inner-grid top-space attendance-summary-grid">
             <div class="detail-box">
-              <div class="detail-label">Elvárt</div>
-              <div class="detail-value">${escapeHtml(formatMoney(entry.expected_total_amount || 0))}</div>
+              <div class="detail-label">${escapeHtml(renderFinanceEntryExpectedLabel(entry))}</div>
+              <div class="detail-value">${escapeHtml(formatMoney(entry.entry_type === 'adjustment' ? Math.abs(entry.actual_paid_amount || 0) : (entry.expected_total_amount || 0)))}</div>
             </div>
             <div class="detail-box">
               <div class="detail-label">Befizetett</div>
@@ -5219,6 +6033,13 @@ function setAdminTeamSection(section = 'invites') {
     panel.classList.toggle('hidden', !isActive);
     panel.toggleAttribute('hidden', !isActive);
   });
+
+  const activePanel = document.querySelector(`[data-admin-team-panel="${nextSection}"]`);
+  if (activePanel && nextSection === 'members') {
+    activePanel.querySelectorAll('details').forEach(details => {
+      details.open = true;
+    });
+  }
 
   syncAdminTeamSectionProgress();
 }
@@ -5594,7 +6415,10 @@ function scrollAdminFocusTargetIntoView(target) {
     'event-basics': '[data-admin-event-form-panel="basics"]',
     'event-logistics': '[data-admin-event-form-panel="logistics"]',
     'event-extras': '[data-admin-event-form-panel="extras"]',
-    'team-draw': '[data-admin-team-panel="draw"]',
+    'team-invites': '#teamInvitesAdminList',
+    'team-members': '#teamMembersAdminList',
+    'team-advanced': '#teamAdvancedContent',
+    'team-draw': '#teamDrawContent',
     'finance-current': '.finance-task-block.is-current, .finance-finish-row.is-current',
     'finance-balances': '#adminFinanceContent',
     'events-upcoming': '#adminEventsList',
@@ -5657,7 +6481,7 @@ function getAdminSuggestedNextStep() {
       description: 'A következő értelmes lépés, hogy felépüljön a keret és legyen kivel eseményt szervezni.',
       workspace: 'team',
       section: 'invites',
-      focusTarget: '',
+      focusTarget: 'team-invites',
       cta: 'Tagok és meghívások'
     };
   }
@@ -5689,8 +6513,8 @@ function getAdminSuggestedNextStep() {
       title: 'Jelölj ki legalább két kapust.',
       description: 'Csapatleosztást csak akkor tudsz készíteni, ha a going kerethez van legalább két kapusnak jelölt játékos.',
       workspace: 'team',
-      section: 'advanced',
-      focusTarget: '',
+      section: 'members',
+      focusTarget: 'team-members',
       cta: 'Kapusok beállítása'
     };
   }
@@ -6092,156 +6916,116 @@ function renderAdminHomeOperationalCard(nextStep, onboarding) {
   `;
 }
 
+function renderAdminHomePrimaryActionCard(nextStep, secondaryActions = []) {
+  return `
+    <div class="event-card admin-home-primary-card">
+      <div class="row between align-center wrap gap">
+        <div>
+          <div class="small muted">Most ezzel foglalkozz</div>
+          <div class="admin-home-primary-title">${escapeHtml(nextStep.title)}</div>
+        </div>
+        <span class="badge badge-success">következő lépés</span>
+      </div>
+      <div class="small muted top-space">${escapeHtml(nextStep.description)}</div>
+      <div class="row gap wrap top-space">
+        <button
+          class="btn"
+          type="button"
+          data-admin-workspace-jump="${escapeHtml(nextStep.workspace)}"
+          ${nextStep.section ? `data-admin-section-jump="${escapeHtml(nextStep.section)}"` : ''}
+          ${nextStep.focusTarget ? `data-admin-focus-target="${escapeHtml(nextStep.focusTarget)}"` : ''}
+        >${escapeHtml(nextStep.cta)}</button>
+      </div>
+      ${secondaryActions.length ? `
+        <details class="admin-home-shelf top-space">
+          <summary class="small muted">Polcon még van pár hasznos út</summary>
+          <div class="row gap wrap top-space">
+            ${secondaryActions.map(action => `
+              <button
+                class="btn btn-ghost"
+                type="button"
+                data-admin-workspace-jump="${escapeHtml(action.workspace)}"
+                ${action.section ? `data-admin-section-jump="${escapeHtml(action.section)}"` : ''}
+                ${action.focusTarget ? `data-admin-focus-target="${escapeHtml(action.focusTarget)}"` : ''}
+              >${escapeHtml(action.label)}</button>
+            `).join('')}
+          </div>
+        </details>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderAdminHomeSimpleProgress(onboarding) {
+  const steps = [
+    {
+      label: 'Csapat kész',
+      done: Boolean(state.currentTeam) && onboarding.activeMembersCount > 1,
+      hint: !state.currentTeam
+        ? 'előbb tölts be vagy hozz létre csapatot'
+        : onboarding.activeMembersCount > 1
+          ? `${onboarding.activeMembersCount} aktív tag`
+          : 'még kell legalább 1 játékos'
+    },
+    {
+      label: 'Közelgő esemény kész',
+      done: onboarding.publishedEventCount > 0,
+      hint: onboarding.publishedEventCount > 0
+        ? `${onboarding.publishedEventCount} publikált esemény`
+        : onboarding.createdEventCount > 0
+          ? 'van esemény, még publikáld'
+          : 'még nincs esemény'
+    },
+    {
+      label: 'Utómunka rendben',
+      done: onboarding.finishedEventCount > 0 && onboarding.pastUnclosedCount === 0,
+      hint: onboarding.pastUnclosedCount > 0
+        ? `${onboarding.pastUnclosedCount} megvalósult esemény vár rád`
+        : onboarding.finishedEventCount > 0
+          ? `${onboarding.finishedEventCount} lezárt esemény`
+          : 'még nem jutottál el idáig'
+    }
+  ];
+
+  return `
+    <div class="event-card admin-home-progress-card">
+      <div class="row between align-center wrap gap">
+        <strong>Itt tartasz most</strong>
+        <span class="badge badge-muted">${escapeHtml(String(steps.filter(step => step.done).length))}/3 kész</span>
+      </div>
+      <div class="stack top-space">
+        ${steps.map(step => `
+          <div class="admin-home-progress-row ${step.done ? 'is-done' : ''}">
+            <span class="admin-home-progress-mark">${step.done ? '✓' : '•'}</span>
+            <div>
+              <div class="admin-home-progress-label">${escapeHtml(step.label)}</div>
+              <div class="small muted">${escapeHtml(step.hint)}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderAdminHome() {
   if (!els.adminHomeContent || !els.adminHomeSummary) return;
 
   const onboarding = buildAdminOnboardingState();
   const events = onboarding.events;
   const activeMembers = onboarding.activeMembersCount;
-  const activeGoalkeepers = onboarding.activeGoalkeepersCount;
   const pendingInvites = onboarding.pendingInviteCount;
   const eventCount = onboarding.createdEventCount;
-  const publishedCount = onboarding.publishedEventCount;
   const finishedCount = onboarding.finishedEventCount;
   const pastUnclosedCount = onboarding.pastUnclosedCount;
-  const drawReadyCount = onboarding.drawReadyCount;
-  const attendanceStartedCount = onboarding.attendanceStartedCount;
-  const hasStartedPostEventAdmin = onboarding.hasStartedPostEventAdmin;
   const nextStep = getAdminSuggestedNextStep();
   const secondaryActions = getAdminGuideSecondaryActions(nextStep);
-  const guideDismissed = isAdminHomePanelDismissed('guide');
-  const checklistDismissed = isAdminHomePanelDismissed('checklist');
-  const shouldShowFocusPanel = guideDismissed || checklistDismissed;
-
-  const checklist = [
-    { id: 'team', done: Boolean(state.currentTeam), label: 'Csapat létrehozva vagy betöltve', workspace: 'team', section: 'invites', focusTarget: '' },
-    { id: 'invites', done: pendingInvites > 0 || activeMembers > 1, label: 'Elindult a csapatépítés meghívásokkal', workspace: 'team', section: 'invites', focusTarget: '' },
-    { id: 'members', done: activeMembers > 1, label: 'Megvannak az első játékosok', workspace: 'team', section: 'members', focusTarget: '' },
-    { id: 'first-event', done: eventCount > 0, label: 'Első esemény létrehozva', workspace: 'events', section: 'upcoming', focusTarget: 'event-basics' },
-    { id: 'published-event', done: publishedCount > 0, label: 'Van publikált eseményed', workspace: 'events', section: 'upcoming', focusTarget: 'events-upcoming' },
-    { id: 'goalkeepers', done: activeGoalkeepers >= 2, label: 'Kijelöltél legalább két kapust a csapatban', workspace: 'team', section: 'advanced', focusTarget: '' },
-    { id: 'draw', done: drawReadyCount > 0, label: 'Készült vagy mentve lett csapatsorsolás', workspace: 'team', section: 'draw', focusTarget: 'team-draw' },
-    { id: 'post-event-admin', done: hasStartedPostEventAdmin, label: 'Eljutottál egy megvalósult esemény adminisztrálásáig', workspace: 'finance', section: 'settlement', focusTarget: 'finance-current' },
-    { id: 'finished-event', done: finishedCount > 0, label: 'Legalább egy eseményt lezártál a könyvelés után', workspace: 'finance', section: 'balances', focusTarget: 'finance-balances' }
-  ];
-  const completedChecklistCount = checklist.filter(item => item.done).length;
-  const homeMode = getAdminHomeMode(onboarding, completedChecklistCount, checklist.length);
-  const shouldShowSummaryExtras = checklistDismissed || homeMode === 'operational';
-  const pendingChecklist = checklist.filter(item => !item.done);
-  const focusedChecklist = pendingChecklist.slice(0, 3);
-  const focusedChecklistIds = new Set(focusedChecklist.map(item => item.id));
-  const remainingChecklist = checklist.filter(item => !focusedChecklistIds.has(item.id));
 
   els.adminHomeContent.innerHTML = `
     <div class="stack">
-      ${renderAdminPersonaCard()}
-      ${homeMode === 'operational' || shouldShowFocusPanel ? renderAdminHomeFocusEventPanel(events) : ''}
-      ${homeMode === 'operational' || checklistDismissed ? renderAdminHomeDrawPanel() : ''}
-
-      ${
-        guideDismissed
-          ? ''
-          : `
-            ${
-              homeMode === 'operational'
-                ? renderAdminHomeOperationalCard(nextStep, onboarding)
-                : `
-                  <div class="event-card admin-guide-card">
-                    <div class="row between align-center wrap gap">
-                      <div class="small muted">Most ezt csináld</div>
-                      <div class="row gap wrap">
-                        <button class="btn btn-ghost" type="button" data-admin-home-dismiss="guide">Skip</button>
-                        <button class="btn btn-ghost" type="button" data-admin-home-dismiss="guide" aria-label="Kezdő iránytű bezárása">×</button>
-                      </div>
-                    </div>
-                    <div class="admin-guide-title">${escapeHtml(nextStep.title)}</div>
-                    <div class="small muted">${escapeHtml(nextStep.description)}</div>
-                    <div class="row gap wrap top-space">
-                      <button
-                        class="btn"
-                        type="button"
-                        data-admin-workspace-jump="${escapeHtml(nextStep.workspace)}"
-                        ${nextStep.section ? `data-admin-section-jump="${escapeHtml(nextStep.section)}"` : ''}
-                        ${nextStep.focusTarget ? `data-admin-focus-target="${escapeHtml(nextStep.focusTarget)}"` : ''}
-                      >${escapeHtml(nextStep.cta)}</button>
-                      ${secondaryActions.map(action => `
-                        <button
-                          class="btn btn-ghost"
-                          type="button"
-                          data-admin-workspace-jump="${escapeHtml(action.workspace)}"
-                          ${action.section ? `data-admin-section-jump="${escapeHtml(action.section)}"` : ''}
-                          ${action.focusTarget ? `data-admin-focus-target="${escapeHtml(action.focusTarget)}"` : ''}
-                        >${escapeHtml(action.label)}</button>
-                      `).join('')}
-                    </div>
-                  </div>
-                `
-            }
-          `
-      }
-
-      ${
-        checklistDismissed || homeMode === 'operational'
-          ? ''
-          : `
-            <div class="event-card">
-              <div class="row between align-center wrap gap">
-                <strong>Setup checklist</strong>
-                <div class="row gap wrap align-center">
-                  <span class="badge badge-muted">${escapeHtml(String(completedChecklistCount))}/${escapeHtml(String(checklist.length))}</span>
-                  <button class="btn btn-ghost" type="button" data-admin-home-dismiss="checklist">Skip</button>
-                  <button class="btn btn-ghost" type="button" data-admin-home-dismiss="checklist" aria-label="Setup checklist bezárása">×</button>
-                </div>
-              </div>
-              <div class="small muted top-space">
-                ${focusedChecklist.length
-                  ? 'Most a következő nyitott lépések fontosak. Ha ezeket megcsinálod, a többi magától tisztul tovább.'
-                  : 'Az alap setup kör kész van. A teljes checklist lent továbbra is bármikor visszanézhető.'}
-              </div>
-              <div class="stack top-space" data-admin-checklist-primary="true">
-                ${(focusedChecklist.length ? focusedChecklist : checklist.slice(0, 1)).map(item => `
-                  <div class="admin-checklist-item ${item.done ? 'is-done' : ''}">
-                    <div class="row between align-center wrap gap">
-                      <div class="row gap align-center">
-                        <span class="admin-checklist-dot">${item.done ? '✓' : '•'}</span>
-                        <span>${escapeHtml(item.label)}</span>
-                      </div>
-                      <button
-                        class="btn btn-ghost"
-                        type="button"
-                        data-admin-workspace-jump="${escapeHtml(item.workspace)}"
-                        ${item.section ? `data-admin-section-jump="${escapeHtml(item.section)}"` : ''}
-                        ${item.focusTarget ? `data-admin-focus-target="${escapeHtml(item.focusTarget)}"` : ''}
-                      >${item.done ? 'Megnézem' : 'Folytatás'}</button>
-                    </div>
-                  </div>
-                `).join('')}
-              </div>
-              <details class="top-space">
-                <summary class="small muted">Teljes checklist megnyitása</summary>
-                <div class="stack top-space" data-admin-checklist-full="true">
-                  ${remainingChecklist.map(item => `
-                    <div class="admin-checklist-item ${item.done ? 'is-done' : ''}">
-                      <div class="row between align-center wrap gap">
-                        <div class="row gap align-center">
-                          <span class="admin-checklist-dot">${item.done ? '✓' : '•'}</span>
-                          <span>${escapeHtml(item.label)}</span>
-                        </div>
-                        <button
-                          class="btn btn-ghost"
-                          type="button"
-                          data-admin-workspace-jump="${escapeHtml(item.workspace)}"
-                          ${item.section ? `data-admin-section-jump="${escapeHtml(item.section)}"` : ''}
-                          ${item.focusTarget ? `data-admin-focus-target="${escapeHtml(item.focusTarget)}"` : ''}
-                        >${item.done ? 'Megnézem' : 'Folytatás'}</button>
-                      </div>
-                    </div>
-                  `).join('')}
-                </div>
-              </details>
-            </div>
-          `
-      }
+      ${renderAdminHomePrimaryActionCard(nextStep, secondaryActions)}
+      ${renderAdminHomeFocusEventPanel(events)}
+      ${renderAdminHomeSimpleProgress(onboarding)}
     </div>
   `;
 
@@ -6249,8 +7033,8 @@ function renderAdminHome() {
     <div class="stack">
       <div class="event-card admin-home-sidecard">
         <div class="row between align-center wrap gap">
-          <strong>Gyors áttekintés</strong>
-          <span class="badge badge-muted">admin</span>
+          <strong>Állapotkép</strong>
+          <span class="badge badge-muted">egy pillantás</span>
         </div>
         <div class="grid two-col inner-grid top-space">
           <div class="detail-box">
@@ -6279,14 +7063,13 @@ function renderAdminHome() {
           </div>
         </div>
       </div>
-
-      ${
-        shouldShowSummaryExtras
-          ? `
-            ${renderAdminHomeCashPanel(events)}
-          `
-          : ''
-      }
+      <details class="admin-home-shelf">
+        <summary class="small muted">Polcra tett extra panelek</summary>
+        <div class="stack top-space">
+          ${renderAdminHomeDrawPanel()}
+          ${renderAdminHomeCashPanel(events)}
+        </div>
+      </details>
     </div>
   `;
 }
@@ -6576,22 +7359,38 @@ function renderAdminStatisticsPanel() {
 
   els.adminStatisticsContent.innerHTML = `
     <div class="stack">
-      <div class="event-card admin-workspace-guide">
+      <div class="event-card admin-home-primary-card">
         <div class="row between align-center wrap gap">
-          <strong>Ez vezetői rálátás.</strong>
+          <div class="small muted">Most ezt nézd meg</div>
           <span class="badge badge-muted">nem napi operáció</span>
         </div>
+        <div class="admin-home-primary-title top-space">Ez vezetői rálátás.</div>
         <div class="small muted top-space">
           Itt gyorsan észreveheted, kikre lehet stabilan számítani, kik kezdenek lemorzsolódni, és hol van pénzügyi vagy no-show kockázat.
         </div>
       </div>
       ${renderStatisticsOverviewCards(viewModel)}
-      <div class="grid two-col">
-        ${renderStatisticsRankDistribution(viewModel)}
+      <div class="stack">
         ${renderStatisticsAttentionPanel(viewModel)}
       </div>
-      ${renderStatisticsAttendanceTable(viewModel)}
-      ${renderStatisticsFinanceTable(viewModel)}
+      <details class="admin-home-shelf">
+        <summary>Polcra tett rangkép</summary>
+        <div class="top-space">
+          ${renderStatisticsRankDistribution(viewModel)}
+        </div>
+      </details>
+      <details class="admin-home-shelf">
+        <summary>Polcra tett jelenléti bontás</summary>
+        <div class="top-space">
+          ${renderStatisticsAttendanceTable(viewModel)}
+        </div>
+      </details>
+      <details class="admin-home-shelf">
+        <summary>Polcra tett pénzügyi bontás</summary>
+        <div class="top-space">
+          ${renderStatisticsFinanceTable(viewModel)}
+        </div>
+      </details>
     </div>
   `;
 }
@@ -6599,8 +7398,7 @@ function renderAdminStatisticsPanel() {
 function renderAdminFinancePanel() {
   if (!els.adminFinanceContent || !els.adminAttendanceContent) return;
 
-  const finishedEvents = (state.adminEvents || []).filter(event => event.status === 'finished');
-  const adminFocusEvent = getAdminFocusEvent();
+  const adminFocusEvent = getAdminWorkspaceFocusEvent();
   const selectedDetailEvent = state.selectedAdminEventDetail?.event || adminFocusEvent || null;
   const selectedPaymentSummary = state.selectedAdminEventDetail?.summary?.paymentSummary || {};
   const hasRecordedAttendance = Boolean(
@@ -6645,22 +7443,31 @@ function renderAdminFinancePanel() {
   ];
 
   const financeGuideCard = `
-    <div class="event-card admin-workspace-guide">
+    <div class="event-card admin-home-primary-card">
       <div id="adminFinanceProgressSummary" class="event-form-progress-summary bottom-space"></div>
       <div class="row between align-center wrap gap">
-        <strong>Ez már utómunka, nem szervezés.</strong>
+        <div class="small muted">Most ezzel foglalkozz</div>
         <span class="badge badge-warning">elszámolás</span>
       </div>
+      <div class="admin-home-primary-title top-space">Ez már utómunka, nem szervezés.</div>
       <div class="small muted top-space">
         Itt a már megvalósult események adminisztrációja történik: jelenlét, no-show, befizetés és végül a kézi lezárás.
       </div>
-      <div class="top-space">
-        ${renderWorkspaceFlowCard('Pénzügyi munkafolyamat', 'Egy megvalósult eseménynél mindig ebben a sorrendben érdemes haladni.', financeFlowSteps)}
-      </div>
       <div class="row gap wrap top-space">
         <button class="btn" type="button" data-admin-finance-section="settlement">Elszámolás</button>
-        <button class="btn btn-ghost" type="button" data-admin-finance-section="balances">Egyenlegek</button>
       </div>
+      <details class="admin-home-shelf top-space">
+        <summary>Polcon még van pár pénzügyes út</summary>
+        <div class="row gap wrap top-space">
+          <button class="btn btn-ghost" type="button" data-admin-finance-section="balances">Egyenlegek</button>
+        </div>
+      </details>
+      <details class="admin-home-shelf top-space">
+        <summary>Polcra tett pénzügyi folyamat</summary>
+        <div class="top-space">
+          ${renderWorkspaceFlowCard('Pénzügyi munkafolyamat', 'Egy megvalósult eseménynél mindig ebben a sorrendben érdemes haladni.', financeFlowSteps)}
+        </div>
+      </details>
     </div>
   `;
 
@@ -6677,14 +7484,15 @@ function renderAdminFinancePanel() {
     return;
   }
 
-    els.adminFinanceContent.innerHTML = `
-      <div class="stack">
-        ${financeGuideCard}
+  const balancesShelf = `
+    <details class="admin-home-shelf">
+      <summary>Polcra tett pénzügyi háttér</summary>
+      <div class="stack top-space">
         <div class="event-card finance-prep-card">
-        <div class="row between align-center wrap gap">
-          <strong>Pénzügy / kassza áttekintés</strong>
-          <span class="badge ${state.currentTeam.cash_module_enabled ? 'badge-success' : 'badge-muted'}">${state.currentTeam.cash_module_enabled ? 'előkészítve' : 'még inaktív'}</span>
-        </div>
+          <div class="row between align-center wrap gap">
+            <strong>Pénzügy / kassza áttekintés</strong>
+            <span class="badge ${state.currentTeam.cash_module_enabled ? 'badge-success' : 'badge-muted'}">${state.currentTeam.cash_module_enabled ? 'előkészítve' : 'még inaktív'}</span>
+          </div>
           <div class="small muted top-space">
             Itt látod egy helyen a már kézzel lezárt eseményekből származó könyvelt összegeket.
           </div>
@@ -6692,7 +7500,15 @@ function renderAdminFinancePanel() {
         </div>
         ${renderTeamFinanceBalances()}
       </div>
-    `;
+    </details>
+  `;
+
+  els.adminFinanceContent.innerHTML = `
+    <div class="stack">
+      ${financeGuideCard}
+      ${balancesShelf}
+    </div>
+  `;
 
   if (!adminFocusEvent) {
     els.adminAttendanceContent.innerHTML = emptyState(
@@ -6703,20 +7519,26 @@ function renderAdminFinancePanel() {
     return;
   }
 
-  els.adminAttendanceContent.innerHTML = `
-    <div class="stack">
-      <div class="event-card admin-workspace-guide">
-        <div class="row between align-center wrap gap">
-          <strong>Elszámolási sorrend</strong>
-          <span class="badge badge-muted">1 → 2 → 3</span>
-        </div>
-        <div class="small muted top-space">
-          1. Jelöld, ki jelent meg vagy lett no-show. 2. Rögzítsd a befizetéseket. 3. Ha minden kész, csak utána zárd le kézzel az eseményt.
-        </div>
+  const settlementGuideCard = `
+    <div class="event-card admin-home-primary-card">
+      <div class="row between align-center wrap gap">
+        <div class="small muted">Most ezzel foglalkozz</div>
+        <span class="badge badge-muted">1 → 2 → 3</span>
+      </div>
+      <div class="admin-home-primary-title top-space">Elszámolási sorrend</div>
+      <div class="small muted top-space">
+        1. Jelöld, ki jelent meg vagy lett no-show. 2. Rögzítsd a befizetéseket. 3. Ha minden kész, csak utána zárd le kézzel az eseményt.
+      </div>
+      <details class="admin-home-shelf top-space">
+        <summary>Polcra tett elszámolási folyamat</summary>
         <div class="top-space">
           ${renderWorkspaceFlowCard('Aktuális elszámolási lépések', 'A rendszer mutatja, hol tartasz a könyvelésben.', financeFlowSteps)}
         </div>
-      </div>
+      </details>
+    </div>
+  `;
+
+  const selectedEventCard = `
       <div class="event-card">
         <div class="row between align-center wrap gap">
           <strong>Kiválasztott esemény</strong>
@@ -6726,6 +7548,12 @@ function renderAdminFinancePanel() {
         <div class="small muted">${escapeHtml(formatDateTime(adminFocusEvent.start_at))}</div>
         <div class="small muted">${escapeHtml(adminFocusEvent.location_name || 'Nincs helyszín')}</div>
       </div>
+  `;
+
+  els.adminAttendanceContent.innerHTML = `
+    <div class="stack">
+      ${settlementGuideCard}
+      ${selectedEventCard}
       ${renderAdminAttendanceManager()}
     </div>
   `;
@@ -6764,21 +7592,60 @@ function shouldShowCreateTeam() {
   return state.user?.can_create_team === true;
 }
 
+function getUserRegistrationPath() {
+  return String(state.user?.registration_path || '').trim();
+}
+
+function isTournamentOrganizer() {
+  return getUserRegistrationPath() === 'tournament_organizer';
+}
+
+function isActivityOrganizer() {
+  return getUserRegistrationPath() === 'activity_organizer';
+}
+
+function isTeamSportOrganizer() {
+  return getUserRegistrationPath() === 'team_sport_organizer';
+}
+
+function shouldShowTournamentWorkspace() {
+  return Boolean(state.token && isTournamentOrganizer());
+}
+
+function shouldShowTeamAdminView() {
+  return canAccessAdminView() && !isTournamentOrganizer();
+}
+
+function getPostAuthDefaultView() {
+  if (!state.token) return 'authView';
+  if (isPlatformOwner()) return 'platformView';
+  if (shouldShowTournamentWorkspace()) return 'tournamentView';
+  if (shouldShowTeamAdminView()) return 'adminView';
+  return 'userView';
+}
+
 function applyRoleAwareUi() {
+  const tournamentNav = document.querySelector('[data-view="tournamentView"]');
   const adminNav = document.querySelector('[data-view="adminView"]');
   const userNav = document.querySelector('[data-view="userView"]');
   const authNav = document.querySelector('[data-view="authView"]');
   const platformNav = document.querySelector('[data-view="platformView"]');
+  const tournamentView = document.getElementById('tournamentView');
   const adminView = document.getElementById('adminView');
   const platformView = document.getElementById('platformView');
 
   if (authNav) authNav.style.display = state.token ? 'none' : '';
   if (userNav) userNav.style.display = state.token ? '' : 'none';
-  if (adminNav) adminNav.style.display = canAccessAdminView() ? '' : 'none';
+  if (tournamentNav) tournamentNav.style.display = shouldShowTournamentWorkspace() ? '' : 'none';
+  if (adminNav) adminNav.style.display = shouldShowTeamAdminView() ? '' : 'none';
   if (platformNav) platformNav.style.display = isPlatformOwner() ? '' : 'none';
 
+  if (tournamentView) {
+    tournamentView.hidden = !shouldShowTournamentWorkspace();
+  }
+
   if (adminView) {
-    adminView.hidden = !canAccessAdminView();
+    adminView.hidden = !shouldShowTeamAdminView();
   }
 
   if (platformView) {
@@ -6807,6 +7674,13 @@ function applyRoleAwareUi() {
     `;
   }
 
+  if (els.joinLinkRole) {
+    els.joinLinkRole.innerHTML = `
+      <option value="member">tag</option>
+      ${canAssignManagerRole() ? '<option value="team_manager">csapatkapitány-helyettes</option>' : ''}
+    `;
+  }
+
   if (els.memberRole) {
     els.memberRole.innerHTML = `
       <option value="member">tag</option>
@@ -6814,10 +7688,16 @@ function applyRoleAwareUi() {
     `;
   }
 
+  renderTournamentWorkspace();
   renderAdminHome();
   renderAdminFinancePanel();
   renderAdminStatisticsPanel();
-  setAdminWorkspace(state.adminWorkspace);
+  if (shouldShowTeamAdminView()) {
+    setAdminWorkspace(state.adminWorkspace);
+  }
+  if (shouldShowTournamentWorkspace()) {
+    setTournamentWorkspace(state.tournamentWorkspace);
+  }
 }
 
 function renderInviteLanding() {
@@ -6925,13 +7805,280 @@ function renderPlatformOwnerOverview() {
   `).join('') || emptyState('Nincs esemény adat.', 'Még nincs megjeleníthető esemény.');
 }
 
-function switchView(viewId) {
-  if (viewId === 'platformView' && !isPlatformOwner()) {
-    viewId = state.token ? 'userView' : 'authView';
+function getTournamentWorkspaceButtons() {
+  return [...document.querySelectorAll('[data-tournament-workspace]')];
+}
+
+function getTournamentWorkspacePanels() {
+  return [...document.querySelectorAll('[data-tournament-workspace-panel]')];
+}
+
+function renderTournamentWorkspace() {
+  if (!els.tournamentOverviewCards || !els.tournamentHomeContent || !els.tournamentWorkspaceSummary) return;
+
+  if (!shouldShowTournamentWorkspace()) {
+    els.tournamentOverviewCards.innerHTML = '';
+    els.tournamentHomeContent.innerHTML = '';
+    els.tournamentWorkspaceSummary.innerHTML = '';
+    return;
   }
 
-  if (viewId === 'adminView' && !canAccessAdminView()) {
-    viewId = state.token ? 'userView' : 'authView';
+  const tournamentDraft = loadTournamentSetupDraft();
+  const hasTeams = (state.myTeams || []).length > 0;
+  const pendingInvites = (state.myInvites || []).filter(invite => invite?.status === 'pending').length;
+  const upcomingEvents = (state.myEvents || []).filter(event => isFuturePublishedEvent(event)).length;
+  const hasTournamentBasics = Boolean(
+    String(tournamentDraft.title || '').trim()
+    && String(tournamentDraft.locationName || '').trim()
+    && Number(tournamentDraft.teamCount || 0) >= 2
+    && Number(tournamentDraft.fieldCount || 0) >= 1
+  );
+  const formatLabel = tournamentDraft.formatHint === 'round_robin'
+    ? 'körmérkőzés'
+    : tournamentDraft.formatHint === 'knockout'
+      ? 'egyenes kiesés'
+      : 'csoportkör + kieséses ág';
+
+  els.tournamentOverviewCards.innerHTML = [
+    { label: 'Tornaalapok', value: hasTournamentBasics ? 'készül' : 'még üres' },
+    { label: 'Saját csapatok', value: state.myTeams?.length ?? 0 },
+    { label: 'Függő meghívók', value: pendingInvites },
+    { label: 'Látható események', value: upcomingEvents }
+  ].map(item => `
+    <div class="stat-card">
+      <div class="stat-label">${escapeHtml(item.label)}</div>
+      <div class="stat-value">${escapeHtml(String(item.value))}</div>
+    </div>
+  `).join('');
+
+  els.tournamentHomeContent.innerHTML = `
+    <div class="event-card admin-home-sidecard">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Most ezzel foglalkozz</strong>
+          <div class="admin-guide-title top-space">A tornaszervezői munkatér külön világra váltott.</div>
+        </div>
+        <span class="badge badge-live">főmodul</span>
+      </div>
+      <div class="small muted top-space">Előbb hozd létre az első tornát, utána hívd meg a csapatkapitányokat, majd építsd fel a lebonyolítást. A részletes meccs-, pénzügy- és kommunikációs modulok innen nőnek tovább.</div>
+      <div class="row gap wrap top-space">
+        <button class="btn btn-secondary" type="button" data-tournament-workspace-jump="tournaments">Torna alapjai</button>
+        <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="registrations">Nevezések</button>
+        <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="format">Lebonyolítás</button>
+      </div>
+    </div>
+    <div class="grid two-col inner-grid top-space">
+      <div class="detail-box">
+        <div class="detail-label">Mi kész van már?</div>
+        <div class="detail-value">${hasTournamentBasics ? 'Az első torna alapjai már rögzítve vannak.' : (hasTeams ? 'Van saját szervezői jelenléted a rendszerben.' : 'Még nincs saját csapat vagy meghívott kör.')}</div>
+      </div>
+      <div class="detail-box">
+        <div class="detail-label">Mi jön most?</div>
+        <div class="detail-value">${hasTournamentBasics ? 'Következhetnek a csapatkapitányok és a nevezések.' : 'A torna alapadatait érdemes most összerakni: helyszín, csapatszám, pályaszám, meccshossz.'}</div>
+      </div>
+    </div>
+  `;
+
+  els.tournamentWorkspaceSummary.innerHTML = `
+    <div class="event-card compact-team-card">
+      <strong>Itt tart most a struktúra</strong>
+      <div class="small muted top-space">Ez már nem a csapatsportos admin starter. A tornaszervező külön menüt, külön kezdőpultot és külön folyamatot kap.</div>
+      <div class="row gap wrap top-space">
+        <span class="badge ${hasTournamentBasics ? 'badge-live' : 'badge-draft'}">${hasTournamentBasics ? 'van tornaalap' : 'még indul a főmodul'}</span>
+        <span class="badge badge-muted">${pendingInvites} függő meghívó</span>
+      </div>
+    </div>
+    <div class="event-card compact-team-card top-space">
+      <strong>${escapeHtml(tournamentDraft.title || 'Még nincs elnevezett torna')}</strong>
+      <div class="small muted top-space">
+        ${hasTournamentBasics
+          ? `${escapeHtml(String(tournamentDraft.teamCount))} csapat · ${escapeHtml(String(tournamentDraft.fieldCount))} pálya · ${escapeHtml(String(tournamentDraft.matchDurationMinutes))} perces meccsek`
+          : 'Ha kitöltöd az alapokat, itt rögtön látni fogod a torna fő paramétereit.'}
+      </div>
+      <div class="small muted">${escapeHtml(tournamentDraft.locationName || 'Még nincs helyszín megadva.')} · ${escapeHtml(formatLabel)}</div>
+      <div class="small muted">${escapeHtml(tournamentDraft.startDate ? formatDateTime(tournamentDraft.startDate) : 'Még nincs kezdő időpont megadva.')}</div>
+    </div>
+    <details class="admin-collapse top-space">
+      <summary><span>Polcon maradt fejlesztési útvonalak</span></summary>
+      <div class="admin-collapse-body stack">
+        <div class="small muted">Tornák: alapbeállítások, csapatszám, pályák, helyszín, meccshossz.</div>
+        <div class="small muted">Csapatok és nevezések: meghívott csapatkapitányok, keretek, visszaigazolások.</div>
+        <div class="small muted">Lebonyolítás és mérkőzések: csoportok, pályabeosztás, eredmények, statisztika.</div>
+      </div>
+    </details>
+  `;
+
+  const tournamentsPanel = document.getElementById('tournamentTournamentsPanel');
+  if (tournamentsPanel) {
+    tournamentsPanel.innerHTML = `
+      <div class="event-card admin-home-sidecard">
+        <div class="row between align-center wrap gap">
+          <div>
+            <strong>Torna alapjai</strong>
+            <div class="admin-guide-title top-space">${escapeHtml(tournamentDraft.title || 'Itt indul az első torna váza')}</div>
+          </div>
+          <span class="badge ${hasTournamentBasics ? 'badge-live' : 'badge-draft'}">${hasTournamentBasics ? 'mentve' : 'első kör'}</span>
+        </div>
+        <div class="small muted top-space">Add meg a torna nevét, a csapatok számát, a pályák számát, a helyszínt és a meccsek hosszát. Ez lesz a teljes későbbi lebonyolítás alapja.</div>
+      </div>
+      <form id="tournamentSetupForm" class="stack top-space">
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="tournamentTitle">Torna neve</label>
+            <input id="tournamentTitle" name="title" type="text" placeholder="Tavaszi Városi Kupa" value="${escapeAttribute(tournamentDraft.title || '')}" required />
+          </div>
+          <div>
+            <label class="label" for="tournamentLocationName">Helyszín</label>
+            <input id="tournamentLocationName" name="locationName" type="text" placeholder="Budapest, Vasas pálya" value="${escapeAttribute(tournamentDraft.locationName || '')}" required />
+          </div>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="tournamentTeamCount">Hány csapatos?</label>
+            <input id="tournamentTeamCount" name="teamCount" type="number" min="2" max="128" value="${escapeAttribute(String(tournamentDraft.teamCount || 16))}" required />
+          </div>
+          <div>
+            <label class="label" for="tournamentFieldCount">Egyszerre hány pálya van?</label>
+            <input id="tournamentFieldCount" name="fieldCount" type="number" min="1" max="24" value="${escapeAttribute(String(tournamentDraft.fieldCount || 2))}" required />
+          </div>
+          <div>
+            <label class="label" for="tournamentMatchDuration">Egy mérkőzés hány perces?</label>
+            <input id="tournamentMatchDuration" name="matchDurationMinutes" type="number" min="5" max="180" value="${escapeAttribute(String(tournamentDraft.matchDurationMinutes || 20))}" required />
+          </div>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="tournamentStartDate">Kezdő időpont</label>
+            <input id="tournamentStartDate" name="startDate" type="datetime-local" value="${escapeAttribute(tournamentDraft.startDate || '')}" />
+          </div>
+          <div>
+            <label class="label" for="tournamentFormatHint">Milyen irányban gondolkodsz?</label>
+            <select id="tournamentFormatHint" name="formatHint">
+              <option value="group_knockout"${tournamentDraft.formatHint === 'group_knockout' ? ' selected' : ''}>Csoportkör + kieséses ág</option>
+              <option value="round_robin"${tournamentDraft.formatHint === 'round_robin' ? ' selected' : ''}>Körmérkőzés</option>
+              <option value="knockout"${tournamentDraft.formatHint === 'knockout' ? ' selected' : ''}>Egyenes kiesés</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="label" for="tournamentNotes">Szervezői megjegyzés</label>
+          <textarea id="tournamentNotes" name="notes" rows="3" placeholder="Például: vasárnap délelőtt, 2 pályán párhuzamosan, büfé külön, döntő 17:00-kor.">${escapeHtml(tournamentDraft.notes || '')}</textarea>
+        </div>
+        <div class="row gap wrap">
+          <button class="btn" type="submit">Tornaalapok mentése</button>
+          <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="registrations">Tovább a nevezésekhez</button>
+        </div>
+      </form>
+    `;
+  }
+
+  const placeholderMap = {
+    tournamentRegistrationsPanel: ['Itt jönnek a nevezések.', 'A csapatkapitányok meghívása és a benevezett keretek külön kezelést kapnak.'],
+    tournamentFormatPanel: ['Itt épül fel a lebonyolítás.', 'Csoportkör, kieséses ág és pálya-idő logika kerül ide.'],
+    tournamentMatchesPanel: ['Itt lesznek a mérkőzések.', 'Eredmények, gólok, asszisztok és élő állapotok jönnek ide.'],
+    tournamentFinancePanel: ['Itt lesz a torna pénzügye.', 'Nevezési díj, csapatonkénti befizetés és lezárás kerül ide.'],
+    tournamentCommsPanel: ['Itt lesz a kommunikáció.', 'Központi tájékoztatás, csapatkapitányi üzenetek és értesítések ide kerülnek.'],
+    tournamentStatsPanel: ['Itt lesz a torna statisztikája.', 'Tabella, játékosmutatók és összesített zárókép jelenik meg itt.']
+  };
+
+  Object.entries(placeholderMap).forEach(([elementId, [title, hint]]) => {
+    const mount = document.getElementById(elementId);
+    if (!mount) return;
+    mount.innerHTML = emptyState(title, hint);
+  });
+}
+
+function setTournamentWorkspace(workspace = 'home') {
+  const nextWorkspace = ['home', 'tournaments', 'registrations', 'format', 'matches', 'finance', 'comms', 'stats'].includes(workspace)
+    ? workspace
+    : 'home';
+  state.tournamentWorkspace = nextWorkspace;
+
+  getTournamentWorkspaceButtons().forEach(button => {
+    button.classList.toggle('active', button.dataset.tournamentWorkspace === nextWorkspace);
+  });
+
+  getTournamentWorkspacePanels().forEach(panel => {
+    const isActive = panel.dataset.tournamentWorkspacePanel === nextWorkspace;
+    panel.classList.toggle('hidden', !isActive);
+    panel.toggleAttribute('hidden', !isActive);
+  });
+}
+
+async function handleTournamentSetupSubmit(event) {
+  event.preventDefault();
+  clearMessage();
+
+  const form = event.target;
+  if (!form || form.id !== 'tournamentSetupForm') return;
+
+  const formData = new FormData(form);
+  const title = String(formData.get('title') || '').trim();
+  const locationName = String(formData.get('locationName') || '').trim();
+  const teamCount = Number(formData.get('teamCount') || 0);
+  const fieldCount = Number(formData.get('fieldCount') || 0);
+  const matchDurationMinutes = Number(formData.get('matchDurationMinutes') || 0);
+  const startDate = String(formData.get('startDate') || '').trim();
+  const formatHint = String(formData.get('formatHint') || 'group_knockout').trim();
+  const notes = String(formData.get('notes') || '').trim();
+
+  if (!title) {
+    showMessage('Adj nevet a tornának.', 'error');
+    document.getElementById('tournamentTitle')?.focus();
+    return;
+  }
+
+  if (!locationName) {
+    showMessage('Add meg a torna helyszínét.', 'error');
+    document.getElementById('tournamentLocationName')?.focus();
+    return;
+  }
+
+  if (!Number.isFinite(teamCount) || teamCount < 2) {
+    showMessage('Legalább 2 csapattal számolj a torna indulásához.', 'error');
+    document.getElementById('tournamentTeamCount')?.focus();
+    return;
+  }
+
+  if (!Number.isFinite(fieldCount) || fieldCount < 1) {
+    showMessage('Legalább 1 pálya szükséges a torna felépítéséhez.', 'error');
+    document.getElementById('tournamentFieldCount')?.focus();
+    return;
+  }
+
+  if (!Number.isFinite(matchDurationMinutes) || matchDurationMinutes < 5) {
+    showMessage('A mérkőzés hossza legalább 5 perc legyen.', 'error');
+    document.getElementById('tournamentMatchDuration')?.focus();
+    return;
+  }
+
+  saveTournamentSetupDraft({
+    title,
+    locationName,
+    teamCount,
+    fieldCount,
+    matchDurationMinutes,
+    startDate,
+    formatHint,
+    notes
+  });
+
+  renderTournamentWorkspace();
+  setTournamentWorkspace('tournaments');
+  showMessage('A torna alapjai elmentve. Következhetnek a csapatkapitányok és a nevezések.', 'success');
+}
+
+function switchView(viewId) {
+  if (viewId === 'tournamentView' && !shouldShowTournamentWorkspace()) {
+    viewId = getPostAuthDefaultView();
+  }
+
+  if (viewId === 'platformView' && !isPlatformOwner()) {
+    viewId = state.token ? getPostAuthDefaultView() : 'authView';
+  }
+
+  if (viewId === 'adminView' && !shouldShowTeamAdminView()) {
+    viewId = state.token ? getPostAuthDefaultView() : 'authView';
   }
 
   if (state.layoutEditor.isEditing && state.layoutEditor.viewId && state.layoutEditor.viewId !== viewId) {
@@ -6952,6 +8099,10 @@ function switchView(viewId) {
     applySurfaceLayout(viewId);
   }
 
+  if (viewId === 'tournamentView') {
+    setTournamentWorkspace(state.tournamentWorkspace);
+  }
+
   renderProfilePanel(getProfileDraftFromForm());
   syncAuthLayout();
 }
@@ -6965,7 +8116,7 @@ async function bootSession() {
   syncAuthLayout();
   ensureEventPricingUi();
   els.userWeatherModule?.closest('.card')?.remove();
-  ['adminView', 'userView'].forEach(viewId => applySurfaceLayout(viewId));
+  ['tournamentView', 'adminView', 'userView'].forEach(viewId => applySurfaceLayout(viewId));
   if (els.apiBase) {
     els.apiBase.value = state.apiBase;
   }
@@ -6998,11 +8149,7 @@ async function bootSession() {
       await loadTeam(state.currentTeamId);
     }
 
-    if (isPlatformOwner()) {
-      switchView('platformView');
-    } else if (canAccessAdminView()) {
-      switchView('adminView');
-    }
+    switchView(getPostAuthDefaultView());
   } catch {
     clearAuth();
   }
@@ -7035,14 +8182,18 @@ async function handleLogin(event) {
       await loadTeam(state.currentTeamId);
     }
 
-    const targetView = isPlatformOwner()
-      ? 'platformView'
-      : (canAccessAdminView() ? 'adminView' : 'userView');
+    const targetView = getPostAuthDefaultView();
 
     showMessage('Sikeres bejelentkezés.', 'success');
     switchView(
       targetView
     );
+    if (targetView === 'tournamentView') {
+      setTournamentWorkspace('home');
+    }
+    if (targetView === 'adminView') {
+      setAdminWorkspace('home');
+    }
     if (targetView === 'userView') {
       triggerPendingInvitePulse();
     }
@@ -7060,12 +8211,25 @@ async function handleRegister(event) {
   const phone = document.getElementById('registerPhone')?.value.trim() || null;
   const password = document.getElementById('registerPassword').value;
   const inviteToken = document.getElementById('registerInviteToken')?.value.trim() || state.pendingInviteToken || null;
-  const registerAsOrganizer = document.getElementById('registerAsOrganizer')?.checked === true;
+  const registrationPath = getSelectedRegistrationPath();
+  if (!registrationPath) {
+    showMessage('Előbb válassz egy belépési kártyát.', 'error');
+    return;
+  }
+  const registerAsOrganizer = registrationPath !== 'invited_participant';
 
   try {
     const result = await api('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ name, email, phone, password, inviteToken, registerAsOrganizer })
+      body: JSON.stringify({
+        name,
+        email,
+        phone,
+        password,
+        inviteToken,
+        registrationPath,
+        registerAsOrganizer
+      })
     });
 
     setAuth(result.token, result.user);
@@ -7081,14 +8245,18 @@ async function handleRegister(event) {
       await loadTeam(state.currentTeamId);
     }
 
-    const targetView = isPlatformOwner()
-      ? 'platformView'
-      : (canAccessAdminView() ? 'adminView' : 'userView');
+    const targetView = getPostAuthDefaultView();
 
     showMessage(result.message || 'Sikeres regisztráció és automatikus belépés.', 'success');
     switchView(
       targetView
     );
+    if (targetView === 'tournamentView') {
+      setTournamentWorkspace('home');
+    }
+    if (targetView === 'adminView') {
+      setAdminWorkspace('home');
+    }
     if (targetView === 'userView') {
       triggerPendingInvitePulse();
     }
@@ -7272,6 +8440,7 @@ async function loadMyEvents() {
     await hydrateUserEventDetailsCache(state.myEvents);
     renderMyEvents(state.myEvents);
     renderUserOverview();
+    triggerUserNewEventsPulse();
   } catch (error) {
     console.error('Saját események betöltési hiba:', error);
     renderHeroEvent(null);
@@ -7491,12 +8660,17 @@ async function loadTeamInvites() {
 function renderTeamInviteAdminCard(invite) {
   const isPending = invite.status === 'pending';
   const hint = inviteActionHint(invite.status);
+  const isJoinLink = invite.invite_kind === 'join_link';
+  const shareUrl = `${window.location.origin}${invite.invite_link || ''}`;
+  const title = isJoinLink
+    ? 'Messengeres csatlakozó link'
+    : (invite.invited_email || 'Tokenes meghívó');
 
   return `
     <div class="event-card invite-card ${isPending ? 'is-pending' : 'is-closed'}">
       <div class="row between align-center gap wrap">
         <div>
-          <strong>${escapeHtml(invite.invited_email || 'Tokenes meghívó')}</strong>
+          <strong>${escapeHtml(title)}</strong>
           <div class="small muted">Szerepkör: ${escapeHtml(formatTeamRole(invite.role || 'member'))}</div>
         </div>
         ${inviteStatusBadge(invite.status)}
@@ -7504,12 +8678,16 @@ function renderTeamInviteAdminCard(invite) {
       <div class="small muted top-space">Meghívta: ${escapeHtml(invite.invited_by_name || invite.invited_by_email || '-')}</div>
       <div class="small muted">Lejárat: ${escapeHtml(formatDateTime(invite.expires_at))}</div>
       <div class="small muted">Kód: ${escapeHtml(invite.invite_code || '-')}</div>
-      <div class="small muted">Link: <span class="detail-multiline">${escapeHtml(`${window.location.origin}${invite.invite_link || ''}`)}</span></div>
+      <div class="small muted">Link: <span class="detail-multiline">${escapeHtml(shareUrl)}</span></div>
+      ${isJoinLink ? `<div class="small muted">Felhasználás: ${escapeHtml(String(invite.used_count || 0))}/${escapeHtml(String(invite.max_uses || 0))}</div>` : ''}
       <div class="small muted">Üzenet: ${escapeHtml(invite.message || 'Nincs külön üzenet')}</div>
       <div class="small muted">Email állapot: ${buildInviteEmailDeliveryLine(invite)}</div>
       ${invite.email_delivery_error ? `<div class="small muted">Hiba: ${escapeHtml(invite.email_delivery_error)}</div>` : ''}
       ${isPending ? `
         <div class="event-actions">
+          <button class="btn btn-secondary" type="button" data-team-invite-action="copy-link" data-share-url="${escapeAttribute(shareUrl)}">
+            Link másolása
+          </button>
           <button class="btn btn-danger" type="button" data-team-invite-action="revoke" data-invite-id="${invite.id}">
             Visszavonás
           </button>
@@ -7826,9 +9004,9 @@ function getTeamWorkspaceGuideModel() {
     return {
       title: 'Most a keret építése a fő feladat.',
       description: 'Kezdd a meghívásokkal, hogy legyen elég aktív játékosod a következő eseményhez.',
-      primary: { section: 'invites', label: 'Meghívások' },
+      primary: { workspace: 'team', section: 'invites', focusTarget: 'team-invites', label: 'Meghívások' },
       secondary: [
-        { section: 'members', label: 'Tagok' }
+        { workspace: 'team', section: 'members', focusTarget: 'team-members', label: 'Tagok' }
       ],
       badge: 'csapatépítés'
     };
@@ -7838,9 +9016,9 @@ function getTeamWorkspaceGuideModel() {
     return {
       title: 'Előbb jelölj ki legalább két kapust.',
       description: 'A csapatsorsolás csak akkor lesz stabil, ha a keretben megvannak a kapusok is.',
-      primary: { section: 'advanced', label: 'Kapusok beállítása' },
+      primary: { workspace: 'team', section: 'members', focusTarget: 'team-members', label: 'Kapusok beállítása' },
       secondary: [
-        { section: 'members', label: 'Tagok' }
+        { workspace: 'team', section: 'advanced', focusTarget: 'team-advanced', label: 'Haladó beállítások' }
       ],
       badge: 'kapusok hiányoznak'
     };
@@ -7850,10 +9028,10 @@ function getTeamWorkspaceGuideModel() {
     return {
       title: 'Most a csapatsorsolás a fókusz.',
       description: 'Itt már a kiválasztott eseményhez tudsz preview-t készíteni, ellenőrizni és menteni.',
-      primary: { section: 'draw', label: 'Csapatsorsolás' },
+      primary: { workspace: 'team', section: 'draw', focusTarget: 'team-draw', label: 'Csapatsorsolás' },
       secondary: [
-        { section: 'members', label: 'Tagok' },
-        { section: 'advanced', label: 'Haladó beállítások' }
+        { workspace: 'team', section: 'members', focusTarget: 'team-members', label: 'Tagok' },
+        { workspace: 'team', section: 'advanced', focusTarget: 'team-advanced', label: 'Haladó beállítások' }
       ],
       badge: 'sorsolási szakasz'
     };
@@ -7862,10 +9040,10 @@ function getTeamWorkspaceGuideModel() {
   return {
     title: 'A csapat már épül, most nézd át az embereket.',
     description: 'Itt már inkább a bent lévő tagok, szerepkörök és az esemény előkészítése a fontos.',
-    primary: { section: 'members', label: 'Tagok' },
+    primary: { workspace: 'team', section: 'members', focusTarget: 'team-members', label: 'Tagok' },
     secondary: [
-      { section: 'invites', label: 'Meghívások' },
-      { section: 'advanced', label: 'Haladó beállítások' }
+      { workspace: 'team', section: 'invites', focusTarget: 'team-invites', label: 'Meghívások' },
+      { workspace: 'team', section: 'advanced', focusTarget: 'team-advanced', label: 'Haladó beállítások' }
     ],
     badge: 'aktív csapat'
   };
@@ -7976,6 +9154,99 @@ function renderTeamWorkspaceFlow() {
   `;
 }
 
+function renderTeamPrimaryActionCard(teamGuide) {
+  return `
+    <div class="event-card admin-home-primary-card">
+      <div class="row between align-center wrap gap">
+        <div>
+          <div class="small muted">Most ezzel foglalkozz</div>
+          <div class="admin-home-primary-title">${escapeHtml(teamGuide.title)}</div>
+        </div>
+        <span class="badge badge-success">${escapeHtml(teamGuide.badge)}</span>
+      </div>
+      <div class="small muted top-space">${escapeHtml(teamGuide.description)}</div>
+      <div class="row gap wrap top-space">
+        <button
+          class="btn"
+          type="button"
+          data-admin-workspace-jump="${escapeHtml(teamGuide.primary.workspace || 'team')}"
+          data-admin-section-jump="${escapeHtml(teamGuide.primary.section)}"
+          ${teamGuide.primary.focusTarget ? `data-admin-focus-target="${escapeHtml(teamGuide.primary.focusTarget)}"` : ''}
+        >${escapeHtml(teamGuide.primary.label)}</button>
+      </div>
+      ${teamGuide.secondary.length ? `
+        <details class="admin-home-shelf top-space">
+          <summary class="small muted">Polcon még van pár csapatos lépés</summary>
+          <div class="row gap wrap top-space">
+            ${teamGuide.secondary.map(action => `
+              <button
+                class="btn btn-ghost"
+                type="button"
+                data-admin-workspace-jump="${escapeHtml(action.workspace || 'team')}"
+                data-admin-section-jump="${escapeHtml(action.section)}"
+                ${action.focusTarget ? `data-admin-focus-target="${escapeHtml(action.focusTarget)}"` : ''}
+              >${escapeHtml(action.label)}</button>
+            `).join('')}
+          </div>
+        </details>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderTeamSimpleProgress(onboarding) {
+  const activeMembers = onboarding.activeMembersCount;
+  const pendingInvites = onboarding.pendingInviteCount;
+  const activeGoalkeepers = onboarding.activeGoalkeepersCount;
+  const hasFocusEvent = Boolean(onboarding.focusEvent);
+  const hasDraw = Boolean(state.adminSavedEventDraw || state.teamDrawPreview);
+  const rows = [
+    {
+      label: 'Keret épül',
+      done: activeMembers > 1 && pendingInvites === 0,
+      hint: pendingInvites > 0
+        ? `${pendingInvites} függő meghívó`
+        : activeMembers > 1
+          ? `${activeMembers} aktív tag`
+          : 'még kell legalább 1 játékos'
+    },
+    {
+      label: 'Kapusok rendben',
+      done: activeGoalkeepers >= 2,
+      hint: `${activeGoalkeepers}/2 kijelölve`
+    },
+    {
+      label: 'Sorsolásra kész',
+      done: hasFocusEvent && hasDraw,
+      hint: !hasFocusEvent
+        ? 'előbb válassz fókusz eseményt'
+        : hasDraw
+          ? 'van preview vagy mentett leosztás'
+          : 'még nincs leosztás'
+    }
+  ];
+
+  return `
+    <div class="event-card admin-home-progress-card">
+      <div class="row between align-center wrap gap">
+        <strong>Itt tart a csapat</strong>
+        <span class="badge badge-muted">${escapeHtml(String(rows.filter(row => row.done).length))}/3 kész</span>
+      </div>
+      <div class="stack top-space">
+        ${rows.map(row => `
+          <div class="admin-home-progress-row ${row.done ? 'is-done' : ''}">
+            <span class="admin-home-progress-mark">${row.done ? '✓' : '•'}</span>
+            <div>
+              <div class="admin-home-progress-label">${escapeHtml(row.label)}</div>
+              <div class="small muted">${escapeHtml(row.hint)}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderTeamSummary(team) {
   if (!els.teamSummary) return;
 
@@ -7983,43 +9254,20 @@ function renderTeamSummary(team) {
   const skillModuleEnabled = isTeamSkillModuleEnabled();
   const rankModuleEnabled = isRankModuleEnabled();
   const drawMode = getTeamDrawMode();
-  const adminFocusEvent = getAdminFocusEvent();
+  const adminFocusEvent = getAdminWorkspaceFocusEvent();
   const activeGoalkeeperCount = countActiveGoalkeepers(state.teamMembers);
   const activeMembersCount = onboarding.activeMembersCount;
   const pendingInviteCount = onboarding.pendingInviteCount;
   const teamGuide = getTeamWorkspaceGuideModel();
   const summaryHtml = `
     <div id="adminTeamProgressSummary" class="event-form-progress-summary bottom-space"></div>
-
-    <div class="event-card admin-workspace-guide">
-      <div class="row between align-center wrap gap">
-        <strong>Mit csinálj itt most?</strong>
-        <span class="badge badge-success">${escapeHtml(teamGuide.badge)}</span>
-      </div>
-      <div class="small muted top-space">
-        ${escapeHtml(teamGuide.title)}
-      </div>
-      <div class="small muted top-space">
-        ${escapeHtml(teamGuide.description)}
-      </div>
-      <div class="row gap wrap top-space">
-        <button
-          class="btn"
-          type="button"
-          data-admin-team-section="${escapeHtml(teamGuide.primary.section)}"
-        >${escapeHtml(teamGuide.primary.label)}</button>
-        ${teamGuide.secondary.map(action => `
-          <button class="btn btn-ghost" type="button" data-admin-team-section="${escapeHtml(action.section)}">${escapeHtml(action.label)}</button>
-        `).join('')}
-      </div>
-    </div>
-
-    ${renderTeamWorkspaceFlow()}
+    ${renderTeamPrimaryActionCard(teamGuide)}
+    ${renderTeamSimpleProgress(onboarding)}
 
     <div class="event-card admin-home-sidecard top-space">
       <div class="row between align-center wrap gap">
         <div>
-          <strong>Csapatfókusz</strong>
+          <strong>Csapatkép</strong>
           <div class="admin-guide-title top-space">${escapeHtml(team.name)}</div>
         </div>
         <span class="badge badge-draft">szerep: ${escapeHtml(isPlatformOwner() ? 'platform owner' : formatTeamRole(state.teamRole || 'member'))}</span>
@@ -8042,14 +9290,18 @@ function renderTeamSummary(team) {
           <div class="detail-value">${escapeHtml(adminFocusEvent?.title || 'még nincs kijelölve')}</div>
         </div>
       </div>
-      <details class="top-space">
-        <summary class="small muted">Technikai adatok</summary>
+      <details class="admin-home-shelf top-space">
+        <summary class="small muted">Polcra tett csapatinfók</summary>
         <div class="small muted top-space">Belső csapatazonosító: ${escapeHtml(team.id)}</div>
+        <div class="small muted">A kiválasztott csapat jelenleg minden admin művelet célpontja.</div>
+        <div class="small muted">A sorsolás csak akkor fut le, ha a kiválasztott esemény going résztvevői között legalább 2 kapusnak jelölt játékos van.</div>
       </details>
     </div>
 
-    <div class="small muted">A kiválasztott csapat jelenleg minden admin művelet célpontja.</div>
-    <div class="small muted top-space">A sorsolás csak akkor fut le, ha a kiválasztott esemény going résztvevői között legalább 2 kapusnak jelölt játékos van.</div>
+    <details class="admin-home-shelf top-space">
+      <summary class="small muted">Polcra tett csapatfolyamat</summary>
+      ${renderTeamWorkspaceFlow()}
+    </details>
   `;
 
   const advancedHtml = `
@@ -8192,6 +9444,14 @@ function renderTeamSummary(team) {
       ? advancedHtml
       : emptyState('Még nincs haladó beállítás.', 'Itt fognak megjelenni a rang- és skill-alapú csapatműködési kapcsolók.');
   }
+
+  document.querySelectorAll('#teamSummary [data-team-summary-action], #teamDrawContent [data-team-summary-action], #teamAdvancedContent [data-team-summary-action]').forEach(button => {
+    if (button.dataset.boundTeamSummaryAction !== 'true') {
+      button.addEventListener('click', handleTeamSummaryAction);
+      button.dataset.boundTeamSummaryAction = 'true';
+    }
+  });
+
   syncAdminTeamSectionProgress();
 }
 
@@ -8216,12 +9476,20 @@ function renderTeamInvitesAdmin(invites) {
   }
 
   const sortedInvites = [...invites].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-  const pendingInvites = sortedInvites.filter(invite => invite.status === 'pending');
-  const acceptedInvites = sortedInvites.filter(invite => invite.status === 'accepted');
-  const closedInvites = sortedInvites.filter(invite => !['pending', 'accepted'].includes(invite.status));
+  const joinLinks = sortedInvites.filter(invite => invite.invite_kind === 'join_link');
+  const emailInvites = sortedInvites.filter(invite => invite.invite_kind !== 'join_link');
+  const pendingInvites = emailInvites.filter(invite => invite.status === 'pending');
+  const acceptedInvites = emailInvites.filter(invite => invite.status === 'accepted');
+  const closedInvites = emailInvites.filter(invite => !['pending', 'accepted'].includes(invite.status));
+  const activeJoinLinks = joinLinks.filter(invite => invite.status === 'pending');
+  const closedJoinLinks = joinLinks.filter(invite => invite.status !== 'pending');
 
   els.teamInvitesAdminList.innerHTML = [
     intro,
+    renderInviteAdminGroup('Messengeres csatlakozó linkek', activeJoinLinks, {
+      open: true,
+      emptyMessage: 'Még nincs aktív csatlakozó linked ehhez a csapathoz.'
+    }),
     renderInviteAdminGroup('Függőben lévő meghívók', pendingInvites, {
       open: false,
       emptyMessage: 'Jelenleg nincs függőben lévő meghívó.'
@@ -8233,6 +9501,10 @@ function renderTeamInvitesAdmin(invites) {
     renderInviteAdminGroup('Lezárt meghívók', closedInvites, {
       open: false,
       emptyMessage: 'Nincs lezárt meghívó ebben a csapatban.'
+    }),
+    renderInviteAdminGroup('Lezárt csatlakozó linkek', closedJoinLinks, {
+      open: false,
+      emptyMessage: 'Nincs lezárt csatlakozó link ebben a csapatban.'
     })
   ].join('');
 }
@@ -8527,8 +9799,9 @@ async function handleAddMember(event) {
 async function handleTeamInviteAdminAction(event) {
   const action = event.target.dataset.teamInviteAction;
   const inviteId = event.target.dataset.inviteId;
+  const shareUrl = event.target.dataset.shareUrl;
 
-  if (!action || !inviteId) return;
+  if (!action) return;
 
   clearMessage();
 
@@ -8538,6 +9811,14 @@ async function handleTeamInviteAdminAction(event) {
   }
 
   try {
+    if (action === 'copy-link') {
+      await copyTextToClipboard(shareUrl);
+      showMessage('A csatlakozó linket kimásoltam a vágólapra.', 'success');
+      return;
+    }
+
+    if (!inviteId) return;
+
     if (action === 'revoke') {
       const confirmed = window.confirm('Biztosan visszavonod ezt a meghívót?');
       if (!confirmed) return;
@@ -8796,23 +10077,28 @@ async function handleTeamSummaryAction(event) {
     }
 
     if (action === 'preview-team-draw') {
-      if (!state.selectedAdminEvent?.id) {
+      const drawEvent = state.selectedAdminEvent || getAdminWorkspaceFocusEvent();
+      if (!drawEvent?.id) {
         showMessage('Nincs kiválasztott közelgő esemény a csapatgeneráláshoz.', 'error');
         return;
       }
 
-      const result = await api(`/events/${state.selectedAdminEvent.id}/team-draw/preview`, {
+      state.selectedAdminEvent = drawEvent;
+      const result = await api(`/events/${drawEvent.id}/team-draw/preview`, {
         method: 'POST'
       });
 
       state.teamDrawPreview = result.draw || null;
       renderTeamSummary(state.currentTeam);
+      setAdminTeamSection('draw');
+      scrollAdminFocusTargetIntoView('team-draw');
       showMessage(result.message, 'success');
       return;
     }
 
     if (action === 'save-event-draw') {
-      if (!state.selectedAdminEvent?.id) {
+      const drawEvent = state.selectedAdminEvent || getAdminWorkspaceFocusEvent();
+      if (!drawEvent?.id) {
         showMessage('Nincs kiválasztott esemény a mentéshez.', 'error');
         return;
       }
@@ -8822,22 +10108,62 @@ async function handleTeamSummaryAction(event) {
         return;
       }
 
-      const result = await api(`/events/${state.selectedAdminEvent.id}/team-draw/save`, {
+      state.selectedAdminEvent = drawEvent;
+      const result = await api(`/events/${drawEvent.id}/team-draw/save`, {
         method: 'POST',
         body: JSON.stringify({ draw: state.teamDrawPreview })
       });
 
       state.savedEventDraw = result.draw || null;
-      state.savedEventDrawEventId = result.draw ? state.selectedAdminEvent.id : null;
+      state.savedEventDrawEventId = result.draw ? drawEvent.id : null;
       state.adminSavedEventDraw = result.draw || null;
-      state.adminSavedEventDrawEventId = result.draw ? state.selectedAdminEvent.id : null;
-      await loadAdminSavedEventDraw(state.selectedAdminEvent.id);
+      state.adminSavedEventDrawEventId = result.draw ? drawEvent.id : null;
+      await loadAdminSavedEventDraw(drawEvent.id);
       renderTeamSummary(state.currentTeam);
-      if (state.selectedAdminEventDetail?.event || state.selectedAdminEvent) {
-        setAdminEventFormMode('edit', state.selectedAdminEventDetail?.event || state.selectedAdminEvent);
+      if (state.selectedAdminEventDetail?.event || drawEvent) {
+        setAdminEventFormMode('edit', state.selectedAdminEventDetail?.event || drawEvent);
       }
+      setAdminTeamSection('draw');
+      scrollAdminFocusTargetIntoView('team-draw');
       showMessage(result.message, 'success');
       return;
+    }
+  } catch (error) {
+    showMessage(error.message, 'error');
+  }
+}
+
+async function handleCreateJoinLink(event) {
+  event.preventDefault();
+  clearMessage();
+
+  if (!state.currentTeamId) {
+    showMessage('Előbb tölts be egy csapatot.', 'error');
+    return;
+  }
+
+  try {
+    const result = await api(`/teams/${state.currentTeamId}/join-links`, {
+      method: 'POST',
+      body: JSON.stringify({
+        role: els.joinLinkRole?.value || 'member',
+        message: els.joinLinkMessage?.value.trim() || null
+      })
+    });
+
+    els.createJoinLinkForm?.reset();
+    if (els.joinLinkRole) {
+      els.joinLinkRole.value = 'member';
+    }
+
+    await loadTeamInvites();
+
+    const shareUrl = `${window.location.origin}${result.invite?.invite_link || ''}`;
+    if (shareUrl) {
+      await copyTextToClipboard(shareUrl);
+      showMessage(`${result.message} A linket kimásoltam a vágólapra.`, 'success');
+    } else {
+      showMessage(result.message, 'success');
     }
   } catch (error) {
     showMessage(error.message, 'error');
@@ -9058,6 +10384,8 @@ async function handleTeamMemberAdminAction(event) {
       });
 
       await loadTeam(state.currentTeamId);
+      setAdminTeamSection('members');
+      scrollAdminFocusTargetIntoView('team-members');
       showMessage(result.message, 'success');
       return;
     }
@@ -9225,11 +10553,19 @@ async function handleCreateEvent(event) {
   const isRecurring = Boolean(els.recurringToggle?.checked);
   const wasEditMode = state.adminEventFormMode === 'edit';
   const editingEventId = state.adminEditingEventId;
+  const startAtInputValue = document.getElementById('eventStartAt').value.trim();
+
+  if (!isValidDateTimeLocalInput(startAtInputValue)) {
+    showMessage('A kezdés érvénytelen dátum. Ellenőrizd az év, hónap, nap és idő értékét.', 'error');
+    document.getElementById('eventStartAt')?.focus();
+    setAdminEventFormSection('basics');
+    return;
+  }
 
   const basePayload = {
     title: document.getElementById('eventTitle').value.trim(),
     description: document.getElementById('eventDescription').value.trim() || null,
-    startAt: toIsoFromInput(document.getElementById('eventStartAt').value),
+    startAt: toIsoFromInput(startAtInputValue),
     locationName: document.getElementById('eventLocation').value.trim(),
     minPlayers: Number(document.getElementById('eventMinPlayers').value),
     playersOnFieldTotal: Number(document.getElementById('eventPlayersOnField').value),
@@ -9562,19 +10898,19 @@ function renderAdminEvents(events) {
   ];
 
   const upcomingGuide = `
-    <div class="event-card admin-workspace-guide">
+    <div class="event-card admin-home-primary-card">
       <div id="adminEventsProgressSummary" class="event-form-progress-summary bottom-space"></div>
       <div class="row between align-center wrap gap">
-        <strong>${escapeHtml(isEditing ? 'Most egy meglévő eseményt szerkesztesz.' : nextAction.title)}</strong>
+        <div>
+          <div class="small muted">Most ezzel foglalkozz</div>
+          <div class="admin-home-primary-title">${escapeHtml(isEditing ? 'Most egy meglévő eseményt szerkesztesz.' : nextAction.title)}</div>
+        </div>
         <span class="badge ${escapeHtml(isEditing ? 'badge-warning' : nextAction.badgeClass)}">${escapeHtml(isEditing ? 'szerkesztési mód' : nextAction.badgeText)}</span>
       </div>
       <div class="small muted top-space">
         ${isEditing
           ? 'A jobb oldali űrlap most a kiválasztott eseményt szerkeszti. Ha végeztél, ments, vagy válts vissza új esemény módra.'
           : escapeHtml(nextAction.description)}
-      </div>
-      <div class="top-space">
-        ${renderWorkspaceFlowCard('Eseményszervezési sor', 'A közelgő meccsek szervezése legyen lineáris és átlátható.', eventFlowSteps)}
       </div>
       ${
         eventsWorkspace.focusEvent && nextAction.targetSection === 'upcoming'
@@ -9595,20 +10931,35 @@ function renderAdminEvents(events) {
             : ''
         }
         <button class="btn" type="button" data-admin-events-section="upcoming">${escapeHtml(primaryUpcomingLabel)}</button>
-        <button class="btn btn-ghost" type="button" data-admin-events-section="${nextAction.mode === 'manage-upcoming' ? 'closed' : 'upcoming'}">${escapeHtml(secondaryUpcomingLabel)}</button>
       </div>
+      <details class="admin-home-shelf top-space">
+        <summary class="small muted">Polcon még van pár eseményes út</summary>
+        <div class="row gap wrap top-space">
+          <button class="btn btn-ghost" type="button" data-admin-events-section="${nextAction.mode === 'manage-upcoming' ? 'closed' : 'upcoming'}">${escapeHtml(secondaryUpcomingLabel)}</button>
+          <button class="btn btn-ghost" type="button" data-admin-workspace-jump="finance">Elszámolás</button>
+        </div>
+      </details>
+      <details class="admin-home-shelf top-space">
+        <summary class="small muted">Polcra tett eseményfolyamat</summary>
+        <div class="top-space">
+          ${renderWorkspaceFlowCard('Eseményszervezési sor', 'A közelgő meccsek szervezése legyen lineáris és átlátható.', eventFlowSteps)}
+        </div>
+      </details>
     </div>
   `;
   const closedGuide = `
-    <div class="event-card admin-workspace-guide">
+    <div class="event-card admin-home-primary-card">
       <div class="row between align-center wrap gap">
-        <strong>${escapeHtml(
-          manageablePastEvents.length
-            ? 'Itt vannak a megvalósult, de még adminisztrálásra váró eseményeid.'
-            : finishedEvents.length
-              ? 'Itt látod a már lezárt események utáni állapotot.'
-              : 'Itt jelennek meg a megvalósult eseményeid.'
-        )}</strong>
+        <div>
+          <div class="small muted">Most ezzel foglalkozz</div>
+          <div class="admin-home-primary-title">${escapeHtml(
+            manageablePastEvents.length
+              ? 'Itt vannak a megvalósult, de még adminisztrálásra váró eseményeid.'
+              : finishedEvents.length
+                ? 'Itt látod a már lezárt események utáni állapotot.'
+                : 'Itt jelennek meg a megvalósult eseményeid.'
+          )}</div>
+        </div>
         <span class="badge ${manageablePastEvents.length ? 'badge-warning' : 'badge-muted'}">${escapeHtml(manageablePastEvents.length ? 'utómunka' : 'ellenőrzés')}</span>
       </div>
       <div class="small muted top-space">
@@ -9617,11 +10968,8 @@ function renderAdminEvents(events) {
             ? 'Itt tudod rögzíteni a megjelenteket, a no-show-t és a befizetéseket. A lezárás csak ezek után történjen meg.'
             : finishedEvents.length
               ? 'Nyitott utómunka most nincs. Ha újra lesz megvalósult esemény, itt fog megjelenni adminisztrálásra.'
-              : 'Ha egy esemény már lezajlott, de még pénzügyi és jelenléti adminisztrációra vár, itt jelenik meg.'
+            : 'Ha egy esemény már lezajlott, de még pénzügyi és jelenléti adminisztrációra vár, itt jelenik meg.'
         )}
-      </div>
-      <div class="top-space">
-        ${renderWorkspaceFlowCard('Megvalósult esemény folyamata', 'Itt már nem szervezés, hanem adminisztráció történik.', eventFlowSteps)}
       </div>
       ${
         manageablePastEvents[0]
@@ -9636,8 +10984,19 @@ function renderAdminEvents(events) {
       }
       <div class="row gap wrap top-space">
         <button class="btn" type="button" data-admin-workspace-jump="finance">Elszámolás megnyitása</button>
-        <button class="btn btn-ghost" type="button" data-admin-events-section="upcoming">Vissza a közelgőkhöz</button>
       </div>
+      <details class="admin-home-shelf top-space">
+        <summary class="small muted">Polcon még van pár eseményes út</summary>
+        <div class="row gap wrap top-space">
+          <button class="btn btn-ghost" type="button" data-admin-events-section="upcoming">Vissza a közelgőkhöz</button>
+        </div>
+      </details>
+      <details class="admin-home-shelf top-space">
+        <summary class="small muted">Polcra tett eseményfolyamat</summary>
+        <div class="top-space">
+          ${renderWorkspaceFlowCard('Megvalósult esemény folyamata', 'Itt már nem szervezés, hanem adminisztráció történik.', eventFlowSteps)}
+        </div>
+      </details>
     </div>
   `;
 
@@ -9885,7 +11244,7 @@ function renderUserEvents(events) {
         <div><strong>Szabad hely:</strong> ${escapeHtml(event.spots_left)}</div>
         <div><strong>Hátralévő idő:</strong> ${renderCountdown(event.start_at)}</div>
       </div>
-      ${renderUserPaymentSummary(event)}
+      ${renderUserPaymentSummary(event, { financeOverview: state.currentTeamFinance })}
 ${renderRankRegistrationNotice(event.registration_window, { compact: true, currentStatus: event.my_registration_status })}
       ${
         event.registration_window && !event.registration_window.isRestrictedByRank
@@ -9968,11 +11327,13 @@ async function openEventForUser(eventId) {
   clearMessage();
   try {
     const result = await api(`/events/${eventId}`, { method: 'GET' });
+    markUserEventAsSeen(eventId);
     state.selectedUserEvent = result.event;
     state.selectedUserEventDetail = result;
     state.userEventDetailsById[String(eventId)] = result;
     await loadSavedEventDraw(eventId);
     renderUserEventDetail(result);
+    renderUserOverview();
   } catch (error) {
     showMessage(error.message, 'error');
   }
@@ -10012,7 +11373,7 @@ function renderUserEventDetail(result) {
       <div><strong>Helyszín:</strong> ${escapeHtml(event.location_name || '-')}</div>
       <div><strong>Szabályok:</strong> ${escapeHtml(event.rules_text || '-')}</div>
       ${renderEventWeatherModule(event, { widgetId: detailWeatherWidgetId })}
-      ${renderUserPaymentSummary(result.summary.paymentSummary)}
+      ${renderUserPaymentSummary(enrichedEvent, { forceVisible: true, financeOverview: state.currentTeamFinance })}
       ${renderCaptainPaymentCard(enrichedEvent)}
       ${
         event.status === 'finished'
@@ -10066,7 +11427,10 @@ async function registerForEvent(eventId) {
   try {
     const result = await api(`/events/${eventId}/register`, { method: 'POST' });
     showMessage(result.message, 'success');
-    await Promise.all([loadUserEvents(), openEventForUser(eventId), loadAdminEvents(), loadMyEvents()]);
+    await loadUserEvents();
+    await loadAdminEvents();
+    await loadMyEvents();
+    await openEventForUser(eventId);
   } catch (error) {
     if (error.body?.cancellationLimitReached) {
       const blockedEvent = state.userTeamEvents.find(item => item.id === eventId)
@@ -10089,7 +11453,10 @@ async function cancelRegistration(eventId) {
   try {
     const result = await api(`/events/${eventId}/cancel`, { method: 'POST' });
     showMessage(result.message, 'success');
-    await Promise.all([loadUserEvents(), openEventForUser(eventId), loadAdminEvents(), loadMyEvents()]);
+    await loadUserEvents();
+    await loadAdminEvents();
+    await loadMyEvents();
+    await openEventForUser(eventId);
   } catch (error) {
     showMessage(error.message, 'error');
   }
@@ -10100,6 +11467,11 @@ function bindEvents() {
   document.addEventListener('pointermove', handleSurfaceLayoutPointerMove);
   document.addEventListener('pointerup', handleSurfaceLayoutPointerUp);
   document.addEventListener('pointercancel', handleSurfaceLayoutPointerUp);
+  document.addEventListener('submit', async event => {
+    if (event.target?.id === 'tournamentSetupForm') {
+      await handleTournamentSetupSubmit(event);
+    }
+  });
   document.addEventListener('click', async event => {
     if (event.target?.id === 'paymentQrPreviewOverlay' || event.target.closest('[data-payment-qr-close]')) {
       closePaymentQrPreview();
@@ -10119,6 +11491,9 @@ function bindEvents() {
     if (userOverviewAction) {
       if (userOverviewAction.dataset.userOverviewAction === 'pending-invites') {
         jumpToPendingInvites();
+      }
+      if (userOverviewAction.dataset.userOverviewAction === 'new-events') {
+        await jumpToNewestUnregisteredEvent();
       }
       return;
     }
@@ -10166,6 +11541,18 @@ function bindEvents() {
       if (workspaceSwitch.dataset.adminWorkspace === 'finance') {
         await ensureAdminFinanceFocusEvent();
       }
+      return;
+    }
+
+    const tournamentWorkspaceSwitch = event.target.closest('[data-tournament-workspace]');
+    if (tournamentWorkspaceSwitch) {
+      setTournamentWorkspace(tournamentWorkspaceSwitch.dataset.tournamentWorkspace);
+      return;
+    }
+
+    const tournamentWorkspaceJump = event.target.closest('[data-tournament-workspace-jump]');
+    if (tournamentWorkspaceJump) {
+      setTournamentWorkspace(tournamentWorkspaceJump.dataset.tournamentWorkspaceJump);
       return;
     }
 
@@ -10236,6 +11623,10 @@ function bindEvents() {
     els.createInviteForm.addEventListener('submit', handleCreateInvite);
   }
 
+  if (els.createJoinLinkForm) {
+    els.createJoinLinkForm.addEventListener('submit', handleCreateJoinLink);
+  }
+
   if (els.addMemberForm) {
     els.addMemberForm.addEventListener('submit', handleAddMember);
   }
@@ -10265,6 +11656,10 @@ function bindEvents() {
   if (els.teamAdvancedContent) {
     els.teamAdvancedContent.addEventListener('click', handleTeamSummaryAction);
     els.teamAdvancedContent.addEventListener('change', handleSkillModuleToggleChange);
+  }
+
+  if (els.teamDrawContent) {
+    els.teamDrawContent.addEventListener('click', handleTeamSummaryAction);
   }
 
   if (els.adminAttendanceContent) {

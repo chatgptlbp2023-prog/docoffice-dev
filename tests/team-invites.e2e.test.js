@@ -344,6 +344,41 @@ describe('Team invites E2E', () => {
     expect(acceptRes.body.ok).toBe(false);
   });
 
+  test('team_admin can create a messenger-friendly join link without email', async () => {
+    const createRes = await request(app)
+      .post(`/api/teams/${teamId}/join-links`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        role: 'member',
+        message: 'Ezen a linken tudsz belépni a csapatba.'
+      });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.ok).toBe(true);
+    expect(createRes.body.invite.invited_email).toBe(null);
+    expect(createRes.body.invite.invite_kind).toBe('join_link');
+    expect(createRes.body.invite.max_uses).toBeGreaterThan(1);
+    expect(createRes.body.shareUrl).toContain('/?invite=');
+
+    const acceptRes = await request(app)
+      .post(`/api/invite-links/${createRes.body.invite.invite_token}/accept`)
+      .set('Authorization', `Bearer ${invitedToken}`);
+
+    expect(acceptRes.status).toBe(200);
+    expect(acceptRes.body.ok).toBe(true);
+    expect(acceptRes.body.member.email).toBe(invitedEmail);
+
+    const listRes = await request(app)
+      .get(`/api/teams/${teamId}/invites`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(listRes.status).toBe(200);
+    const createdInvite = listRes.body.invites.find(invite => invite.id === createRes.body.invite.id);
+    expect(createdInvite).toBeTruthy();
+    expect(createdInvite.used_count).toBe(1);
+    expect(createdInvite.status).toBe('pending');
+  });
+
   test('invited user can decline invite', async () => {
     const createRes = await request(app)
       .post(`/api/teams/${teamId}/invites`)

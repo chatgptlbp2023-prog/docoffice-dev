@@ -3,6 +3,7 @@ const requireAuth = require('../middleware/requireAuth');
 const { isCaptainOrViceCaptain } = require('../middleware/teamPermissions');
 const {
   createInvite,
+  createJoinLink,
   getInviteByToken,
   getTeamInvites,
   getMyInvites,
@@ -13,6 +14,7 @@ const {
 } = require('../controllers/inviteController');
 const {
   validateCreateInvite,
+  validateCreateJoinLink,
 } = require('../middleware/requestValidation');
 
 const router = express.Router();
@@ -23,6 +25,14 @@ router.post(
   isCaptainOrViceCaptain,
   validateCreateInvite,
   createInvite
+);
+
+router.post(
+  '/teams/:teamId/join-links',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  validateCreateJoinLink,
+  createJoinLink
 );
 
 router.get(

@@ -1,5 +1,18 @@
 # TODO
 
+## P0 - Új termékirány rögzítése és visszabontási alap
+
+- [x] Új termékirány rögzítve a `PRODUCT_DIRECTION.md` fájlban
+- [x] Regisztrációs belépési utak első specifikációja elkészült a `REGISTRATION_ENTRY_SPEC.md` fájlban
+- [x] A külön tornaszervezői munkatér első információs architektúrája elkészült a `TOURNAMENT_WORKSPACE_SPEC.md` fájlban
+- [x] Elkészült a jelenlegi auth, onboarding és admin UI visszabontási terve a `PLATFORM_RESTRUCTURE_PLAN.md` fájlban
+- [x] A `Saját esemény szervezés` almodul első újraszűkítése elkészült az `OWN_EVENT_MODULE_SPEC.md` fájlban
+- [x] A jelenlegi adminfelület felülvizsgálata elkészült az `ADMIN_SURFACE_REVIEW.md` fájlban
+- [x] A moduláris kapcsolótábla-terv elkészült a `MODULE_SWITCHBOARD_SPEC.md` fájlban
+- [x] Az onboarding és marketingnyelv első specifikációja elkészült az `ONBOARDING_MARKETING_SPEC.md` fájlban
+- [x] A `registration_path` bevezetésének technikai terve elkészült a `REGISTRATION_PATH_IMPLEMENTATION_PLAN.md` fájlban
+- [ ] Regisztrációs belépési utak implementációja: `tornaszervező` / `csapatsport-szervező` / `egyéb szervező`
+
 ## P0 - Pilot launch
 
 - [ ] Backend deploy kulon hosztra

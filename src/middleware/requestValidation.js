@@ -13,6 +13,24 @@ const {
 } = require('../utils/paymentLinks');
 const { validateAvatarDataUrl } = require('../utils/imageDataUrl');
 
+const REGISTRATION_PATH_VALUES = Object.freeze([
+  'tournament_organizer',
+  'team_sport_organizer',
+  'activity_organizer',
+  'invited_participant'
+]);
+
+const ORGANIZER_ACTIVITY_TYPE_VALUES = Object.freeze([
+  'football',
+  'basketball',
+  'yoga',
+  'pilates',
+  'running',
+  'cycling',
+  'hiking',
+  'other'
+]);
+
 function badRequest(res, message, extra = {}) {
   return res.status(400).json({
     ok: false,
@@ -40,6 +58,16 @@ function normalizeString(value) {
 
 function normalizeEmail(value) {
   return normalizeString(value).toLowerCase();
+}
+
+function normalizeRegistrationPathValue(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  return REGISTRATION_PATH_VALUES.includes(normalized) ? normalized : null;
+}
+
+function normalizeOrganizerActivityTypeValue(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  return normalized || null;
 }
 
 function isValidEmail(value) {
@@ -393,6 +421,26 @@ function validateCreateInvite(req, res, next) {
 
   req.body.email = email;
   req.body.phone = phone;
+  req.body.role = role;
+  req.body.message = messageResult.value ?? null;
+  return next();
+}
+
+function validateCreateJoinLink(req, res, next) {
+  if (!ensureBodyObject(req, res)) {
+    return;
+  }
+
+  const role = normalizeString(req.body.role || 'member').toLowerCase();
+  if (!['member', 'team_manager'].includes(role)) {
+    return badRequest(res, 'A role csak member vagy team_manager lehet.');
+  }
+
+  const messageResult = validateOptionalString(req.body.message, 'Az üzenet', { maxLength: 500, allowNull: true });
+  if (messageResult.error) {
+    return badRequest(res, messageResult.error);
+  }
+
   req.body.role = role;
   req.body.message = messageResult.value ?? null;
   return next();
@@ -875,6 +923,7 @@ module.exports = {
   validateCaptainTransfer,
   validateTeamFinanceAdjustment,
   validateCreateInvite,
+  validateCreateJoinLink,
   validateGoogleAuth,
   validateUpdateProfile,
   validateCreateEvent,

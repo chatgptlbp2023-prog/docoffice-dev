@@ -264,10 +264,23 @@ describe('Frontend cash module UI', () => {
       state.currentTeamFinance = {
         current_balance_amount: -100,
         entry_count: 2,
+        adjustment_count: 1,
         total_expected_amount: 2600,
         total_actual_paid_amount: 2500,
+        total_adjustment_amount: 300,
         entries: [
           {
+            entry_type: 'adjustment',
+            event_title: 'Kulon penzugyi korrekcio',
+            event_start_at: '2026-04-17T18:00:00.000Z',
+            note: 'atutalasi korrekcio',
+            expected_total_amount: 0,
+            actual_paid_amount: 300,
+            event_delta_amount: 300,
+            balance_after_event: -100
+          },
+          {
+            entry_type: 'event',
             event_title: 'Masodik meccs',
             event_start_at: '2026-04-16T18:00:00.000Z',
             event_location_name: 'Pálya 2',
@@ -277,6 +290,7 @@ describe('Frontend cash module UI', () => {
             balance_after_event: -100
           },
           {
+            entry_type: 'event',
             event_title: 'Elso meccs',
             event_start_at: '2026-04-15T18:00:00.000Z',
             event_location_name: 'Pálya 1',
@@ -295,7 +309,9 @@ describe('Frontend cash module UI', () => {
     expect(html).toContain('-100 Ft');
     expect(html).toContain('Csapatkapitány fizetési profilja');
     expect(html).toContain('@kapitany');
-    expect(html).toContain('Masodik meccs');
+    expect(html).toContain('Nyitott tartozás');
+    expect(html).toContain('Kézi korrekciók');
+    expect(html).toContain('Kulon penzugyi korrekcio');
     expect(html).toContain('Befizetett');
     expect(html).toContain('Új egyenleg');
   });
@@ -362,6 +378,15 @@ describe('Frontend cash module UI', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
+      state.currentTeamFinance = {
+        current_balance_amount: -400,
+        entry_count: 1,
+        adjustment_count: 0,
+        total_expected_amount: 1300,
+        total_actual_paid_amount: 900,
+        total_adjustment_amount: 0,
+        entries: []
+      };
       state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
       state.teamMembers = [{
         user_id: 'captain-1',
@@ -411,9 +436,166 @@ describe('Frontend cash module UI', () => {
 
     const html = document.getElementById('userEventDetail').innerHTML;
     expect(html).toContain('https://pay.example.com/event-link');
-    expect(html).toContain('Fizetés Revolut linkkel');
+    expect(html).toContain('Fizetés Revolut linkkel · 1700 Ft');
     expect(html).toContain('Kapitany');
-    expect(html).toContain('1300 Ft');
+    expect(html).toContain('Most rendezendő');
+    expect(html).toContain('Áthozott tartozás');
+    expect(html).toContain('1700 Ft');
+  });
+
+  test('a user esemeny fizetesi osszeg mutatja az athozott tartozast is', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamFinance = {
+        current_balance_amount: -400,
+        entry_count: 1,
+        adjustment_count: 0,
+        total_expected_amount: 1300,
+        total_actual_paid_amount: 900,
+        total_adjustment_amount: 0,
+        entries: []
+      };
+      renderUserEventDetail({
+        event: {
+          id: 'event-1',
+          team_id: 'team-1',
+          title: 'Teszt meccs',
+          start_at: '2026-04-20T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          rules_text: 'Baratsagos',
+          status: 'published',
+          my_registration_status: 'going'
+        },
+        registrations: {
+          going: [],
+          waitingList: [],
+          rankWaitingList: [],
+          cancelled: []
+        },
+        summary: {
+          eventReadiness: 'open',
+          goingCount: 0,
+          waitingCount: 0,
+          rankWaitingCount: 0,
+          cancelledCount: 0,
+          spotsLeft: 10,
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            is_visible_to_user: true
+          }
+        },
+        registrationWindow: {
+          isRestrictedByRank: false,
+          message: 'Nyitva'
+        }
+      });
+    `);
+
+    const html = document.getElementById('userEventDetail').innerHTML;
+    expect(html).toContain('Most rendezendő');
+    expect(html).toContain('Áthozott tartozás');
+    expect(html).toContain('1700 Ft');
+  });
+
+  test('a user esemeny fizetesi osszeg levonja az athozott eloleget', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamFinance = {
+        current_balance_amount: 500,
+        entry_count: 1,
+        adjustment_count: 1,
+        total_expected_amount: 1300,
+        total_actual_paid_amount: 1800,
+        total_adjustment_amount: 500,
+        entries: []
+      };
+      renderUserEventDetail({
+        event: {
+          id: 'event-1',
+          team_id: 'team-1',
+          title: 'Teszt meccs',
+          start_at: '2026-04-20T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          rules_text: 'Baratsagos',
+          status: 'published',
+          my_registration_status: 'going'
+        },
+        registrations: {
+          going: [],
+          waitingList: [],
+          rankWaitingList: [],
+          cancelled: []
+        },
+        summary: {
+          eventReadiness: 'open',
+          goingCount: 0,
+          waitingCount: 0,
+          rankWaitingCount: 0,
+          cancelledCount: 0,
+          spotsLeft: 10,
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            is_visible_to_user: true
+          }
+        },
+        registrationWindow: {
+          isRestrictedByRank: false,
+          message: 'Nyitva'
+        }
+      });
+    `);
+
+    const html = document.getElementById('userEventDetail').innerHTML;
+    expect(html).toContain('Levonható előleg');
+    expect(html).toContain('800 Ft');
+  });
+
+  test('a kapitany QR nagyitott nezeteben is latszik a most rendezendo osszeg', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamFinance = {
+        current_balance_amount: -400,
+        entry_count: 1,
+        adjustment_count: 0,
+        total_expected_amount: 1300,
+        total_actual_paid_amount: 900,
+        total_adjustment_amount: 0,
+        entries: []
+      };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamMembers = [{
+        user_id: 'captain-1',
+        name: 'Kapitany',
+        role: 'team_admin',
+        membership_status: 'active',
+        payment_provider: 'revolut',
+        payment_username: '@kapitany',
+        payment_qr_data_url: 'data:image/png;base64,AAA='
+      }];
+      state.selectedUserEventDetail = {
+        event: {
+          id: 'event-1',
+          team_id: 'team-1',
+          title: 'Teszt meccs',
+          start_at: '2026-04-20T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'published',
+          payment_summary: {
+            final_amount_per_person: 1300,
+            is_visible_to_user: true
+          }
+        }
+      };
+      openPaymentQrPreviewForUserId('captain-1', 'captain');
+    `);
+
+    const overlayHtml = document.body.innerHTML;
+    expect(overlayHtml).toContain('Most rendezendő összeg');
+    expect(overlayHtml).toContain('1700 Ft');
+    expect(overlayHtml).toContain('Áthozott tartozás');
   });
 
   test('az admin penzugyi nezet mutatja a tagonkenti egyenlegeket es a szuroket', async () => {
@@ -499,7 +681,7 @@ describe('Frontend cash module UI', () => {
 
       if (target.includes('/teams/team-1/finance-adjustments/user-1')) {
         return createJsonResponse({
-          message: 'Kulon befizetes sikeresen rogzitve.'
+          message: 'Penzugyi korrekcio sikeresen rogzitve.'
         });
       }
 
@@ -560,5 +742,124 @@ describe('Frontend cash module UI', () => {
         })
       })
     );
+  });
+
+  test('az admin negativ penzugyi korrekciot is tud rogziteni a tagi egyenleghez', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/teams/team-1/finance-adjustments/user-1')) {
+        return createJsonResponse({
+          message: 'Penzugyi korrekcio sikeresen rogzitve.'
+        });
+      }
+
+      if (target.includes('/teams/team-1')) {
+        return createJsonResponse({
+          team: { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true, capabilities: {} },
+          members: [],
+          current_user_finance: null,
+          team_finance_entries: []
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.teamMembers = [
+        {
+          user_id: 'user-1',
+          name: 'Pluszos Pali',
+          email: 'pali@example.com',
+          membership_status: 'active',
+          finance_stats: {
+            current_balance_amount: 1200,
+            credit_amount: 1200,
+            debt_amount: 0,
+            adjustment_count: 2,
+            total_adjustment_amount: 1200,
+            entry_count: 2,
+            total_expected_amount: 2600,
+            total_actual_paid_amount: 3800
+          }
+        }
+      ];
+      state.teamFinanceEntries = [];
+      renderAdminFinancePanel();
+    `);
+
+    document.querySelector('details.finance-member-collapse').open = true;
+    const amountInput = document.querySelector('[data-finance-adjustment-amount][data-finance-user-id="user-1"]');
+    amountInput.value = '-500';
+    const noteInput = document.querySelector('[data-finance-adjustment-note][data-finance-user-id="user-1"]');
+    noteInput.value = 'teves jovairas javitasa';
+
+    document.querySelector('[data-team-summary-action="record-finance-adjustment"]').click();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/teams/team-1/finance-adjustments/user-1'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          adjustmentAmount: -500,
+          note: 'teves jovairas javitasa'
+        })
+      })
+    );
+  });
+
+  test('a kapitany QR nezeteben is megjelenik a most rendezendo osszeg', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamFinance = {
+        current_balance_amount: -400,
+        entry_count: 1,
+        adjustment_count: 0,
+        total_expected_amount: 1300,
+        total_actual_paid_amount: 900,
+        total_adjustment_amount: 0,
+        entries: []
+      };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamMembers = [{
+        user_id: 'captain-1',
+        name: 'Kapitany',
+        role: 'team_admin',
+        membership_status: 'active',
+        payment_provider: 'revolut',
+        payment_username: '@kapitany',
+        payment_qr_data_url: 'data:image/png;base64,AAA='
+      }];
+      state.selectedUserEvent = {
+        id: 'event-1',
+        team_id: 'team-1',
+        title: 'Teszt meccs',
+        start_at: '2026-04-20T18:00:00.000Z',
+        status: 'published',
+        payment_summary: {
+          final_amount_per_person: 1300,
+          is_visible_to_user: true
+        }
+      };
+      openPaymentQrPreviewForUserId('captain-1', 'captain');
+    `);
+
+    const html = document.body.innerHTML;
+    expect(html).toContain('Most rendezendő összeg');
+    expect(html).toContain('1700 Ft');
+    expect(html).toContain('Áthozott tartozás');
   });
 });

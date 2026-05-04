@@ -183,6 +183,100 @@ describe('Frontend auth UI smoke tests', () => {
     expect(document.getElementById('authCardTitle')?.textContent).toBe('Bejelentkezés');
   });
 
+  test('a regisztrációs nézetben megjelenik az új belépési útvonal választó', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.setAuthMode('register');
+
+    const chooser = document.getElementById('registrationPathChooser');
+    const options = [...document.querySelectorAll('.auth-path-panel')];
+    const details = document.getElementById('registerFormDetails');
+
+    expect(chooser).toBeTruthy();
+    expect(options.map(option => option.dataset.registrationPath)).toEqual([
+      'tournament_organizer',
+      'team_sport_organizer',
+      'activity_organizer',
+      'invited_participant'
+    ]);
+    expect(details.hidden).toBe(true);
+
+    options[0].querySelector('.auth-path-trigger').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    expect(details.hidden).toBe(false);
+    expect(options[0].classList.contains('is-active')).toBe(true);
+  });
+
+  test('a regisztráció elküldi a választott registrationPath értéket', async () => {
+    const { window, document, fetchMock } = await bootFrontend();
+
+    fetchMock.mockImplementation(async (url) => {
+      const target = String(url);
+
+      if (target.includes('/auth/register')) {
+        return createJsonResponse({
+          ok: true,
+          message: 'Sikeres regisztráció.',
+          token: 'demo-token',
+          user: {
+            id: 'user-1',
+            name: 'Tournament User',
+            email: 'tournament@example.com',
+            can_create_team: true,
+            registration_path: 'tournament_organizer'
+          }
+        }, { status: 201 });
+      }
+
+      if (target.includes('/version')) {
+        return createJsonResponse({
+          version: {
+            name: 'Foci App',
+            version: '1.0.0',
+            commit: 'abc1234',
+            environment: 'test',
+            builtAt: '2026-05-01T20:40:00.000Z',
+            startedAt: '2026-05-01T20:45:00.000Z'
+          }
+        });
+      }
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/auth/me')) {
+        return createJsonResponse({ user: null }, { status: 401, ok: false });
+      }
+
+      if (target.includes('/my/')) {
+        return createJsonResponse({ teams: [], events: [], invites: [] });
+      }
+
+      if (target.includes('/platform/summary')) {
+        return createJsonResponse({ ok: true, summary: null });
+      }
+
+      return createJsonResponse({});
+    });
+
+    window.setAuthMode('register');
+
+    document.getElementById('registerName').value = 'Tournament User';
+    document.getElementById('registerEmail').value = 'tournament@example.com';
+    document.getElementById('registerPassword').value = 'titok123';
+    const tournamentCard = document.querySelector('.auth-path-panel[data-registration-path="tournament_organizer"] .auth-path-trigger');
+    tournamentCard.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    document.getElementById('registerForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flushMicrotasks();
+
+    const registerCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/auth/register'));
+    expect(registerCall).toBeTruthy();
+    const payload = JSON.parse(registerCall[1].body);
+    expect(payload.registrationPath).toBe('tournament_organizer');
+    expect(payload.registerAsOrganizer).toBe(true);
+  });
+
   test('a profil a sidebarban jelenik meg belépés után, és kijelentkezve eltűnik', async () => {
     const { window, document } = await bootFrontend();
 
@@ -407,20 +501,49 @@ describe('Frontend auth UI smoke tests', () => {
     expect(acceptButton.focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 
+  test('az új esemény kártya mutatja a még nem reagált eseményeket és kiemelhető', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.user = { id: 'user-1' };
+      state.myInvites = [];
+      state.myTeams = [{ id: 'team-1', membership_status: 'active' }];
+      state.myEvents = [{
+        id: 'event-1',
+        title: 'Új pénteki foci',
+        status: 'published',
+        start_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        my_registration_status: null,
+        my_cancelled_count: 0,
+        is_registration_open: true
+      }];
+      state.userNewEventsPulseUntil = Date.now() + 5000;
+      renderUserOverview();
+    `);
+
+    const newEventCard = document.querySelector('[data-user-overview-action="new-events"]');
+    expect(newEventCard).toBeTruthy();
+    expect(newEventCard.textContent).toContain('Új esemény');
+    expect(newEventCard.textContent).toContain('1');
+    expect(newEventCard.textContent).toContain('Kattints a legközelebbi új eseményhez');
+    expect(newEventCard.classList.contains('user-invite-alert-card')).toBe(true);
+    expect(newEventCard.classList.contains('is-pulsing')).toBe(true);
+  });
+
   test('kijelentkez?s ut?n a regisztr?ci?s email mez? ki?r?l ?s szerkeszthet? marad', async () => {
     const { window, document } = await bootFrontend();
 
     const registerEmail = document.getElementById('registerEmail');
     const registerPhone = document.getElementById('registerPhone');
     const registerInviteToken = document.getElementById('registerInviteToken');
-    const organizerToggle = document.getElementById('registerAsOrganizer');
+    const invitedParticipantCard = document.querySelector('.auth-path-panel[data-registration-path="invited_participant"] .auth-path-trigger');
 
     registerEmail.value = 'akos@example.com';
     registerEmail.disabled = true;
     registerEmail.readOnly = true;
     registerPhone.value = '+36123456789';
     registerInviteToken.value = 'invite-token';
-    organizerToggle.checked = true;
+    invitedParticipantCard.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
     window.clearAuth();
     window.setAuthMode('register');
@@ -431,7 +554,7 @@ describe('Frontend auth UI smoke tests', () => {
     registerEmail.value = 'uj@example.com';
     expect(registerEmail.value).toBe('uj@example.com');
     expect(registerPhone.value).toBe('');
-    expect(organizerToggle.checked).toBe(false);
+    expect(document.querySelector('.auth-path-panel.is-active')).toBeNull();
     expect(registerInviteToken.value).toBe('invite-token');
   });
 
@@ -527,6 +650,69 @@ describe('Frontend auth UI smoke tests', () => {
       applyRoleAwareUi();
     `);
     expect(secondBoot.document.querySelector('[data-view="adminView"]').style.display).not.toBe('none');
+  });
+
+  test('a tornaszervezo kulon munkateret kap, es nem a csapatsport adminba esik vissza', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.setAuth('tournament-token', {
+      id: 'user-tournament',
+      name: 'Tornaszervező',
+      email: 'tournament@example.com',
+      can_create_team: true,
+      registration_path: 'tournament_organizer'
+    });
+
+    window.switchView('tournamentView');
+
+    expect(document.querySelector('[data-view="tournamentView"]').style.display).not.toBe('none');
+    expect(document.querySelector('[data-view="adminView"]').style.display).toBe('none');
+    expect(document.getElementById('tournamentView').hidden).toBe(false);
+    expect(document.getElementById('tournamentView').classList.contains('active')).toBe(true);
+    expect(document.getElementById('adminView').hidden).toBe(true);
+    expect(document.getElementById('tournamentHomeContent').textContent).toContain('tornaszervezői munkatér');
+  });
+
+  test('a tornaszervezo el tudja menteni a torna alapjait a sajat munkateren', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.setAuth('tournament-token', {
+      id: 'user-tournament-save',
+      name: 'Tornaszervező',
+      email: 'tournament-save@example.com',
+      can_create_team: true,
+      registration_path: 'tournament_organizer'
+    });
+    window.switchView('tournamentView');
+
+    document.querySelector('[data-tournament-workspace="tournaments"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+
+    const form = document.getElementById('tournamentSetupForm');
+    expect(form).toBeTruthy();
+
+    document.getElementById('tournamentTitle').value = 'Tavaszi Városi Kupa';
+    document.getElementById('tournamentLocationName').value = 'Vasas pálya';
+    document.getElementById('tournamentTeamCount').value = '16';
+    document.getElementById('tournamentFieldCount').value = '2';
+    document.getElementById('tournamentMatchDuration').value = '18';
+    document.getElementById('tournamentStartDate').value = '2026-05-24T09:00';
+    document.getElementById('tournamentFormatHint').value = 'group_knockout';
+    document.getElementById('tournamentNotes').value = 'Két pályán párhuzamos lebonyolítás.';
+
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flushMicrotasks();
+
+    const savedRaw = window.localStorage.getItem('foci_tournament_setup_user-tournament-save');
+    expect(savedRaw).toBeTruthy();
+    const saved = JSON.parse(savedRaw);
+    expect(saved.title).toBe('Tavaszi Városi Kupa');
+    expect(saved.locationName).toBe('Vasas pálya');
+    expect(saved.teamCount).toBe(16);
+    expect(saved.fieldCount).toBe(2);
+    expect(saved.matchDurationMinutes).toBe(18);
+    expect(document.getElementById('tournamentWorkspaceSummary').textContent).toContain('Tavaszi Városi Kupa');
   });
 
   test('login utan az auth/me alapjan is admin starterre valt, ha a login valaszban hianyzik a flag', async () => {
@@ -631,6 +817,126 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(window.document.getElementById('adminView').classList.contains('active')).toBe(true);
     expect(window.document.querySelector('[data-view="adminView"]').style.display).not.toBe('none');
+  });
+
+  test('login utan a tournament_organizer nem az admin starterre, hanem a tornaszervezoi shellre erkezik', async () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    const dom = new JSDOM(html, {
+      url: 'http://localhost:3000',
+      pretendToBeVisual: true,
+      runScripts: 'outside-only'
+    });
+
+    const { window } = dom;
+    const fetchMock = jest.fn(async (url) => {
+      const target = String(url);
+
+      if (target.includes('/version')) {
+        return createJsonResponse({
+          version: {
+            name: 'Foci App',
+            version: '1.0.0',
+            commit: 'abc1234',
+            environment: 'test',
+            builtAt: '2026-05-01T20:40:00.000Z',
+            startedAt: '2026-05-01T20:45:00.000Z'
+          }
+        });
+      }
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/auth/login')) {
+        return createJsonResponse({
+          ok: true,
+          token: 'demo-token',
+          user: {
+            id: 'user-login',
+            name: 'Tornagazda',
+            email: 'tornagazda@example.com',
+            platform_role: 'user',
+            registration_path: 'tournament_organizer'
+          }
+        });
+      }
+
+      if (target.includes('/auth/me')) {
+        return createJsonResponse({
+          ok: true,
+          user: {
+            id: 'user-login',
+            name: 'Tornagazda',
+            email: 'tornagazda@example.com',
+            platform_role: 'user',
+            can_create_team: true,
+            registration_path: 'tournament_organizer'
+          }
+        });
+      }
+
+      if (target.includes('/my/teams')) return createJsonResponse({ ok: true, teams: [], count: 0 });
+      if (target.includes('/my/events')) return createJsonResponse({ ok: true, events: [], count: 0 });
+      if (target.includes('/my/invites')) return createJsonResponse({ ok: true, invites: [], count: 0 });
+      if (target.includes('/my/platform-summary')) {
+        return createJsonResponse({ ok: true, counts: {}, recent_teams: [], recent_events: [] });
+      }
+
+      return createJsonResponse({});
+    });
+
+    Object.assign(window, {
+      fetch: fetchMock,
+      confirm: jest.fn(() => true),
+      alert: jest.fn(),
+      scrollTo: jest.fn(),
+      google: {
+        accounts: {
+          id: {
+            initialize: jest.fn(),
+            renderButton: jest.fn()
+          }
+        }
+      }
+    });
+
+    window.setInterval = jest.fn(() => 1);
+    window.clearInterval = jest.fn();
+    window.setTimeout = jest.fn(() => 1);
+    window.clearTimeout = jest.fn();
+
+    class MockFileReader {
+      readAsDataURL() {
+        this.result = 'data:image/png;base64,AAA=';
+        if (typeof this.onload === 'function') {
+          this.onload({ target: { result: this.result } });
+        }
+      }
+    }
+
+    window.FileReader = MockFileReader;
+
+    const script = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    vm.runInContext(script, dom.getInternalVMContext());
+
+    for (let i = 0; i < 20; i += 1) {
+      await Promise.resolve();
+    }
+
+    window.document.getElementById('loginEmail').value = 'tornagazda@example.com';
+    window.document.getElementById('loginPassword').value = 'teszt123';
+    window.document.getElementById('loginForm').dispatchEvent(
+      new window.Event('submit', { bubbles: true, cancelable: true })
+    );
+
+    for (let i = 0; i < 120; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(window.document.getElementById('tournamentView').classList.contains('active')).toBe(true);
+    expect(window.document.querySelector('[data-view="tournamentView"]').style.display).not.toBe('none');
+    expect(window.document.querySelector('[data-view="adminView"]').style.display).toBe('none');
   });
 
   test.skip('a m?ltbeli published esem?ny a megval?sult csoportba ker?l admin oldalon', async () => {
@@ -1063,8 +1369,8 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('új kapitány mód');
-    expect(adminHomeContent.textContent).toContain('Most épül fel az első csapatod.');
+    expect(adminHomeContent.textContent).toContain('Most ezzel foglalkozz');
+    expect(adminHomeContent.textContent).toContain('Hívj meg játékosokat a csapatba.');
 
     const invitesPanel = document.querySelector('[data-admin-team-panel="invites"]');
     const membersPanel = document.querySelector('[data-admin-team-panel="members"]');
@@ -1091,7 +1397,7 @@ describe('Frontend auth UI smoke tests', () => {
       renderTeamSummary(state.currentTeam);
     `);
 
-    expect(document.getElementById('teamSummary').textContent).toContain('csapatépítés');
+    expect(document.getElementById('teamSummary').textContent).toContain('Most ezzel foglalkozz');
     expect(document.getElementById('teamSummary').textContent).toContain('Meghívások');
 
     window.eval(`
@@ -1102,7 +1408,7 @@ describe('Frontend auth UI smoke tests', () => {
       renderTeamSummary(state.currentTeam);
     `);
 
-    expect(document.getElementById('teamSummary').textContent).toContain('kapusok hiányoznak');
+    expect(document.getElementById('teamSummary').textContent).toContain('Kapusok beállítása');
     expect(document.getElementById('teamSummary').textContent).toContain('Kapusok beállítása');
 
     window.eval(`
@@ -1120,7 +1426,7 @@ describe('Frontend auth UI smoke tests', () => {
       renderTeamSummary(state.currentTeam);
     `);
 
-    expect(document.getElementById('teamSummary').textContent).toContain('sorsolási szakasz');
+    expect(document.getElementById('teamSummary').textContent).toContain('Csapatsorsolás');
     expect(document.getElementById('teamSummary').textContent).toContain('Csapatsorsolás');
   });
 
@@ -1144,6 +1450,25 @@ describe('Frontend auth UI smoke tests', () => {
     expect(progress.textContent).toContain('haladó beállítások');
     expect(document.querySelector('[data-admin-team-section="members"]').classList.contains('is-done')).toBe(true);
     expect(document.querySelector('[data-admin-team-section="advanced"]').classList.contains('is-current-focus')).toBe(true);
+  });
+
+  test('a csapat fókuszkártya gombja már ugrási célponttal nyitja a megfelelő részt', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamMembers = [
+        { user_id: 'admin-1', name: 'Captain', membership_status: 'active', is_goalkeeper: true }
+      ];
+      state.teamInvites = [];
+      renderTeamSummary(state.currentTeam);
+    `);
+
+    const primaryButton = document.querySelector('#teamSummary [data-admin-workspace-jump]');
+    expect(primaryButton).toBeTruthy();
+    expect(primaryButton.dataset.adminWorkspaceJump).toBe('team');
+    expect(primaryButton.dataset.adminSectionJump).toBe('invites');
+    expect(primaryButton.dataset.adminFocusTarget).toBe('team-invites');
   });
 
   test('a csapat oldali vezérfonal a helyzetnek megfelelő lépést emeli ki és kattintható', async () => {
@@ -1172,12 +1497,14 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const teamSummary = document.getElementById('teamSummary');
-    expect(teamSummary.textContent).toContain('Csapatépítési sorrend');
-    expect(teamSummary.textContent).toContain('1. Keretépítés');
-    expect(teamSummary.textContent).toContain('2. Kapusok');
-    expect(teamSummary.textContent).toContain('3. Fókusz esemény');
-    expect(teamSummary.textContent).toContain('4. Csapatsorsolás');
-    expect(teamSummary.textContent).toContain('most ez jön');
+    expect(teamSummary.textContent).toContain('Most ezzel foglalkozz');
+    expect(teamSummary.textContent).toContain('Itt tart a csapat');
+    expect(teamSummary.textContent).toContain('Polcra tett csapatfolyamat');
+
+    const flowShelf = [...teamSummary.querySelectorAll('details')].find(section =>
+      section.textContent.includes('Polcra tett csapatfolyamat')
+    );
+    flowShelf.open = true;
 
     const focusStep = [...teamSummary.querySelectorAll('[data-admin-workspace-jump]')].find(button =>
       button.textContent.includes('3. Fókusz esemény')
@@ -1416,7 +1743,8 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(document.getElementById('adminFinanceSettlementCard').hidden).toBe(false);
     expect(document.getElementById('adminFinanceBalancesCard').hidden).toBe(true);
-    expect(document.getElementById('adminAttendanceContent').textContent).toContain('Aktuális elszámolási lépések');
+    expect(document.getElementById('adminAttendanceContent').textContent).toContain('Elszámolási sorrend');
+    expect(document.getElementById('adminAttendanceContent').textContent).toContain('Polcra tett elszámolási folyamat');
     expect(document.getElementById('adminAttendanceContent').textContent).toContain('3. Könyvelés');
 
     document.querySelector('[data-admin-finance-section="balances"]').dispatchEvent(
@@ -1425,7 +1753,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(document.getElementById('adminFinanceSettlementCard').hidden).toBe(true);
     expect(document.getElementById('adminFinanceBalancesCard').hidden).toBe(false);
-    expect(document.getElementById('adminFinanceContent').textContent).toContain('Pénzügyi munkafolyamat');
+    expect(document.getElementById('adminFinanceContent').textContent).toContain('Polcra tett pénzügyi háttér');
   });
 
   test('a pénzügy menü a következő fókuszt mutatja és a gombokat állapot szerint jelöli', async () => {
@@ -1456,8 +1784,62 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     expect(document.getElementById('adminFinanceProgressSummary').textContent).toContain('Egyenlegek áttekintése');
+    expect(document.getElementById('adminFinanceContent').textContent).toContain('Polcon még van pár pénzügyes út');
     expect(document.querySelector('[data-admin-finance-section="balances"]').classList.contains('is-current-focus')).toBe(true);
     expect(document.querySelector('[data-admin-finance-section="balances"]').classList.contains('is-done')).toBe(true);
+  });
+
+  test('a statisztikák nézetben csak a vezetői összkép marad elöl, a részletek polcra kerülnek', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.user = { id: 'captain-1', can_create_team: true };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      state.teamMembers = [
+        {
+          user_id: 'member-1',
+          name: 'Ákos',
+          email: 'akos@example.com',
+          membership_status: 'active',
+          role: 'member',
+          stats_joined_count: 4,
+          stats_cancelled_count: 1,
+          stats_non_response_count: 0,
+          stats_present_count: 3,
+          stats_no_show_count: 0,
+          stats_current_balance_amount: 0,
+          stats_total_actual_paid_amount: 3000,
+          stats_total_expected_amount: 3000,
+          stats_finance_entry_count: 2
+        },
+        {
+          user_id: 'member-2',
+          name: 'Béla',
+          email: 'bela@example.com',
+          membership_status: 'active',
+          role: 'member',
+          stats_joined_count: 1,
+          stats_cancelled_count: 0,
+          stats_non_response_count: 3,
+          stats_present_count: 0,
+          stats_no_show_count: 1,
+          stats_current_balance_amount: -1500,
+          stats_total_actual_paid_amount: 0,
+          stats_total_expected_amount: 1500,
+          stats_finance_entry_count: 1
+        }
+      ];
+      renderAdminStatisticsPanel();
+    `);
+
+    const statsText = document.getElementById('adminStatisticsContent').textContent;
+    expect(statsText).toContain('Ez vezetői rálátás.');
+    expect(statsText).toContain('Figyelmet igenyel');
+    expect(statsText).toContain('Polcra tett rangkép');
+    expect(statsText).toContain('Polcra tett jelenléti bontás');
+    expect(statsText).toContain('Polcra tett pénzügyi bontás');
   });
 
   test('a csapatgenerálás preview a csapat nézetben azonnal látszik, ha már van eredmény', async () => {
@@ -1496,6 +1878,29 @@ describe('Frontend auth UI smoke tests', () => {
     expect(teamDrawContent.textContent).toContain('Csapatsorsolás preview');
     expect(teamDrawContent.textContent).toContain('Leosztás mentése');
   });
+
+  test('a tagok panel megnyitásakor a belső lista is automatikusan lenyílik', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.user = { id: 'captain-1', can_create_team: true };
+      state.teamRole = 'team_admin';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamMembers = [
+        { user_id: 'captain-1', membership_status: 'active', role: 'team_admin', name: 'Kapitány', email: 'captain@example.com', is_goalkeeper: true },
+        { user_id: 'member-2', membership_status: 'active', role: 'member', name: 'Tag 2', email: 'tag2@example.com', is_goalkeeper: false }
+      ];
+      renderTeamMembersAdmin(state.teamMembers);
+      setAdminTeamSection('members');
+    `);
+
+    const membersPanel = document.querySelector('[data-admin-team-panel="members"]');
+    const membersDetails = membersPanel.querySelector('details');
+
+    expect(membersPanel.hidden).toBe(false);
+    expect(membersDetails.open).toBe(true);
+  });
+
   test('több saját csapatnál a csapatkontextus dropdown név alapján tölti a választható csapatokat', async () => {
     const { window, document } = await bootFrontend();
 
@@ -1626,10 +2031,11 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('7/9');
-    expect(adminHomeContent.textContent).toContain('Van publik');
-    expect(adminHomeContent.textContent).toContain('kapust a csapatban');
-    expect(adminHomeContent.textContent).toContain('csapatsorsol');
+    expect(adminHomeContent.textContent).toContain('Itt tartasz most');
+    expect(adminHomeContent.textContent).toContain('2/3 kész');
+    expect(adminHomeContent.textContent).toContain('Közelgő esemény kész');
+    expect(adminHomeContent.textContent).toContain('1 publikált esemény');
+    expect(adminHomeContent.textContent).toContain('még nem jutottál el idáig');
   });
 
   test('a setup checklist a mentett csapatsorsol?st is elv?gzett l?p?sk?nt kezeli', async () => {
@@ -1655,8 +2061,8 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('7/9');
-    expect(adminHomeContent.textContent).toContain('mentve lett csapatsorsolás');
+    expect(adminHomeContent.textContent).toContain('2/3 kész');
+    expect(document.getElementById('adminHomeSummary').textContent).toContain('Polcra tett extra panelek');
   });
 
   test('az iránytű előbb a publikált állapotig terel, ha már van piszkozat esemény', async () => {
@@ -1684,7 +2090,7 @@ describe('Frontend auth UI smoke tests', () => {
     expect(adminHomeContent.textContent).not.toContain('Jelölj ki legalább két kapust');
   });
 
-  test('a setup checklist nem duplazza ugyanazt a nyitott lepest a ket listaban', async () => {
+  test('a kezdolap egyszeruen csak egyetlen haladasi blokkot mutat', async () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
@@ -1704,12 +2110,9 @@ describe('Frontend auth UI smoke tests', () => {
       renderAdminHome();
     `);
 
-    const primaryChecklist = document.querySelector('[data-admin-checklist-primary="true"]');
-    const fullChecklist = document.querySelector('[data-admin-checklist-full="true"]');
-    const combinedText = `${primaryChecklist.textContent}\n${fullChecklist.textContent}`;
-    const publishMatches = combinedText.match(/Van publik/gi) || [];
-
-    expect(publishMatches.length).toBe(1);
+    const progressCard = [...document.querySelectorAll('#adminHomeContent .admin-home-progress-card')];
+    expect(progressCard).toHaveLength(1);
+    expect(progressCard[0].querySelectorAll('.admin-home-progress-row')).toHaveLength(3);
   });
 
   test('az esemény workspace automatikusan a megvalósult panelre vált, ha már csak utómunka maradt', async () => {
@@ -1939,8 +2342,8 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('8/9');
-    expect(adminHomeContent.textContent).toContain('megvalósult esemény adminisztrálásáig');
+    expect(adminHomeContent.textContent).toContain('2/3 kész');
+    expect(adminHomeContent.textContent).toContain('1 megvalósult esemény vár rád');
   });
 
   test('a kezdőlapi checklist újrarenderelődik, amikor később töltődnek be az admin események', async () => {
@@ -1999,16 +2402,26 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('Első esemény létrehozva');
-    expect(adminHomeContent.textContent).toContain('•');
+    expect(adminHomeContent.textContent).toContain('Közelgő esemény kész');
+    expect(adminHomeContent.textContent).toContain('még nincs esemény');
 
-    await window.loadAdminEvents();
+    window.eval(`
+      state.adminEvents = [{
+        id: 'evt-1',
+        title: 'Elso meccs',
+        status: 'published',
+        start_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        event_readiness: 'open'
+      }];
+      renderAdminHome();
+    `);
 
-    expect(adminHomeContent.textContent).toContain('Van publikált eseményed');
-    expect(adminHomeContent.textContent).toContain('3/9');
+    expect(adminHomeContent.textContent).toContain('1 publikált esemény');
+    expect(adminHomeContent.textContent).toContain('2/3 kész');
+    expect(adminHomeContent.textContent).toContain('még nem jutottál el idáig');
   });
 
-  test('a kezdőlapi iránytű skip gombbal elrejthető, és a fókusz esemény panel lép a helyére', async () => {
+  test('a kezdőlapi fókusz állandóan látszik, és nincs külön bezárandó iránytű', async () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
@@ -2034,16 +2447,10 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('Most ezt csináld');
-
-    const skipButton = [...adminHomeContent.querySelectorAll('[data-admin-home-dismiss]')].find(button =>
-      button.getAttribute('data-admin-home-dismiss') === 'guide' && button.textContent.includes('Skip')
-    );
-    skipButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-
     expect(adminHomeContent.textContent).toContain('Fókusz esemény');
     expect(adminHomeContent.textContent).toContain('F?kusz meccs');
-    expect(adminHomeContent.textContent).not.toContain('Most ezt csináld');
+    expect(adminHomeContent.textContent).toContain('Most ezzel foglalkozz');
+    expect(adminHomeContent.querySelector('[data-admin-home-dismiss]')).toBeNull();
   });
 
   test('a kezd?lapi ir?nyt? egy f? l?p?sre ?s legfeljebb k?t mell?k?tra sz?k?ti a figyelmet', async () => {
@@ -2068,8 +2475,7 @@ describe('Frontend auth UI smoke tests', () => {
       renderAdminHome();
     `);
 
-    const guideCard = [...document.querySelectorAll('#adminHomeContent .admin-guide-card')]
-      .find(card => card.textContent.includes('Most ezt csináld'));
+    const guideCard = document.querySelector('#adminHomeContent .admin-home-primary-card');
     expect(guideCard).toBeTruthy();
 
     const actionButtons = guideCard.querySelectorAll('[data-admin-workspace-jump]');
@@ -2153,7 +2559,7 @@ describe('Frontend auth UI smoke tests', () => {
     expect(document.querySelector('.finance-task-block.is-current, .finance-finish-row.is-current')).toBeTruthy();
   });
 
-  test('a setup checklist is k?l?n bez?rhat?', async () => {
+  test('a nem létfontosságú panelek a polcra kerülnek', async () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
@@ -2177,20 +2583,17 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('Setup checklist');
+    const adminHomeSummary = document.getElementById('adminHomeSummary');
+    expect(adminHomeSummary.textContent).toContain('Polcra tett extra panelek');
 
-    const skipButton = [...adminHomeContent.querySelectorAll('[data-admin-home-dismiss]')].find(button =>
-      button.getAttribute('data-admin-home-dismiss') === 'checklist' && button.textContent.includes('Skip')
-    );
-    skipButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const shelf = adminHomeSummary.querySelector('details');
+    shelf.open = true;
 
-    expect(adminHomeContent.textContent).not.toContain('Setup checklist');
-    expect(adminHomeContent.textContent).toContain('Fókusz esemény');
-    expect(adminHomeContent.textContent).toContain('Csapatleosztás');
-    expect(document.getElementById('adminHomeSummary').textContent).toContain('Csapatpénztár');
+    expect(adminHomeSummary.textContent).toContain('Csapatleosztás');
+    expect(adminHomeSummary.textContent).toContain('Csapatpénztár');
   });
 
-  test('a setup checklist els?dlegesen csak a k?vetkez? n?h?ny nyitott l?p?st emeli ki', async () => {
+  test('a kezdőlapon csak rövid 3 soros haladási blokk marad', async () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
@@ -2206,13 +2609,10 @@ describe('Frontend auth UI smoke tests', () => {
       renderAdminHome();
     `);
 
-    const primaryChecklist = document.querySelector('[data-admin-checklist-primary="true"]');
-    expect(primaryChecklist).toBeTruthy();
-    expect(primaryChecklist.querySelectorAll('.admin-checklist-item').length).toBeLessThanOrEqual(3);
-
-    const fullChecklist = document.querySelector('[data-admin-checklist-full="true"]');
-    expect(fullChecklist).toBeTruthy();
-    expect(document.getElementById('adminHomeContent').textContent).toContain('Teljes checklist megnyitása');
+    const progressCard = document.querySelector('#adminHomeContent .admin-home-progress-card');
+    expect(progressCard).toBeTruthy();
+    expect(progressCard.querySelectorAll('.admin-home-progress-row')).toHaveLength(3);
+    expect(document.getElementById('adminHomeContent').textContent).not.toContain('Setup checklist');
   });
 
   test('a halad?bb admin kezd?lap operat?v m?dra v?lt ?s a checklist h?tt?rbe ker?l', async () => {
@@ -2266,11 +2666,11 @@ describe('Frontend auth UI smoke tests', () => {
     `);
 
     const adminHomeContent = document.getElementById('adminHomeContent');
-    expect(adminHomeContent.textContent).toContain('Napi admin fókusz');
-    expect(adminHomeContent.textContent).toContain('operatív mód');
+    expect(adminHomeContent.textContent).toContain('Most ezzel foglalkozz');
+    expect(adminHomeContent.textContent).toContain('Nézd át a pénzügyi összesítést.');
     expect(adminHomeContent.textContent).not.toContain('Setup checklist');
     expect(adminHomeContent.textContent).toContain('Fókusz esemény');
-    expect(adminHomeContent.textContent).toContain('Csapatleosztás');
+    expect(document.getElementById('adminHomeSummary').textContent).toContain('Polcra tett extra panelek');
   });
 });
 

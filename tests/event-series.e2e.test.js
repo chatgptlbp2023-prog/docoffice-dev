@@ -198,7 +198,8 @@ describe('Event series E2E', () => {
         initialStatus: 'published',
         recurrenceType: 'weekly',
         seriesEndType: 'occurrence_count',
-        seriesOccurrenceCount: 4
+        seriesOccurrenceCount: 4,
+        confirmHolidayOverride: true
       });
 
     expect(createRes.status).toBe(201);
