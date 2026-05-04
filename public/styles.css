@@ -178,7 +178,7 @@ h1, h2, h3, h4, p {
 .auth-shell.auth-shell-register-mode {
   grid-template-columns: 1fr;
   width: 100%;
-  max-width: 1932px;
+  max-width: 1848px;
 }
 
 .auth-shell.auth-shell-register-mode .auth-poster {
@@ -339,6 +339,7 @@ h1, h2, h3, h4, p {
   gap: 16px;
   width: 100%;
   min-width: 0;
+  align-items: stretch;
 }
 
 .auth-path-panel {
@@ -346,7 +347,7 @@ h1, h2, h3, h4, p {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  min-height: 760px;
+  min-height: 740px;
   border: 1px solid rgba(220, 232, 249, 0.68);
   border-radius: 28px;
   padding: 20px 20px 18px;
@@ -550,7 +551,7 @@ h1, h2, h3, h4, p {
 
 .auth-path-copy strong {
   max-width: 9ch;
-  font-size: clamp(2.95rem, 3.9vw, 4.9rem);
+  font-size: clamp(2.2rem, 2.95vw, 3.68rem);
   line-height: 0.92;
   letter-spacing: -0.03em;
   text-wrap: balance;
@@ -3014,8 +3015,56 @@ hr {
     grid-template-columns: 1fr;
   }
 
+  .auth-shell.auth-shell-register-mode {
+    max-width: 100%;
+  }
+
+  .auth-shell-register-mode #registerPanel {
+    padding: 0 12px;
+    overflow-x: visible;
+  }
+
   .auth-path-grid {
-    grid-template-columns: 1fr;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: min(84vw, 360px);
+    grid-template-columns: none;
+    gap: 14px;
+    width: auto;
+    min-width: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 6px 10px;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .auth-path-grid::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  .auth-path-grid::-webkit-scrollbar-thumb {
+    background: rgba(103, 128, 160, 0.45);
+    border-radius: 999px;
+  }
+
+  .auth-path-panel {
+    width: min(84vw, 360px);
+    min-height: auto;
+    aspect-ratio: 9 / 16;
+    scroll-snap-align: start;
+  }
+
+  .auth-path-copy strong {
+    font-size: clamp(1.95rem, 9vw, 2.7rem);
+    max-width: 8ch;
+  }
+
+  .auth-path-lead,
+  .auth-path-bullets,
+  .auth-path-footer {
+    max-width: 100%;
   }
 
   .auth-card-head,
