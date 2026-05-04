@@ -177,6 +177,7 @@ h1, h2, h3, h4, p {
 
 .auth-shell.auth-shell-register-mode {
   grid-template-columns: 1fr;
+  width: 100%;
   max-width: 1932px;
 }
 
@@ -188,8 +189,9 @@ h1, h2, h3, h4, p {
   background: transparent;
   border: none;
   box-shadow: none;
-  padding: 0;
-  overflow-x: auto;
+  padding: 0 24px;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .auth-card {
@@ -333,8 +335,10 @@ h1, h2, h3, h4, p {
 
 .auth-path-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(450px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
+  width: 100%;
+  min-width: 0;
 }
 
 .auth-path-panel {
@@ -393,6 +397,17 @@ h1, h2, h3, h4, p {
   transform: translateY(-2px);
   border-color: rgba(204, 246, 221, 0.95);
   box-shadow: 0 22px 42px rgba(109, 205, 153, 0.24);
+}
+
+.auth-path-panel.is-invite-landing-highlight {
+  border-color: rgba(239, 68, 68, 0.92);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18), 0 24px 44px rgba(239, 68, 68, 0.22);
+  animation: authInviteLandingPulse 1s ease-in-out 5;
+}
+
+.auth-path-panel.is-invite-landing-highlight .auth-path-trigger {
+  border-color: rgba(239, 68, 68, 0.92);
+  box-shadow: 0 18px 34px rgba(239, 68, 68, 0.18);
 }
 
 .auth-path-panel::after {
@@ -2272,6 +2287,16 @@ hr {
 
   50% {
     transform: scale(1.02);
+  }
+}
+
+@keyframes authInviteLandingPulse {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+
+  50% {
+    transform: translateY(-6px) scale(1.015);
   }
 }
 

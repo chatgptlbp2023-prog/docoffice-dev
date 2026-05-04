@@ -30,10 +30,10 @@ async function flushMicrotasks() {
   await new Promise(resolve => setImmediate(resolve));
 }
 
-async function bootFrontend() {
+async function bootFrontend(options = {}) {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   const dom = new JSDOM(html, {
-    url: 'http://localhost:3000',
+    url: options.url || 'http://localhost:3000',
     pretendToBeVisual: true,
     runScripts: 'outside-only'
   });
@@ -204,6 +204,25 @@ describe('Frontend auth UI smoke tests', () => {
     options[0].querySelector('.auth-path-trigger').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
     expect(details.hidden).toBe(false);
     expect(options[0].classList.contains('is-active')).toBe(true);
+  });
+
+  test('meghívólinkkel érkezve a regisztrációs nézet nyílik meg, és a meghívós csempe kap fókuszt', async () => {
+    const { document } = await bootFrontend({ url: 'http://localhost:3000/?invite=token-123' });
+
+    const loginPanel = document.getElementById('loginPanel');
+    const registerPanel = document.getElementById('registerPanel');
+    const inviteCard = document.querySelector('.auth-path-panel[data-registration-path="invited_participant"]');
+    const inviteTokenInput = document.getElementById('registerInviteToken');
+    const inviteLandingCard = document.getElementById('inviteLandingCard');
+
+    expect(loginPanel.classList.contains('hidden')).toBe(true);
+    expect(loginPanel.style.display).toBe('none');
+    expect(registerPanel.classList.contains('hidden')).toBe(false);
+    expect(registerPanel.style.display).toBe('flex');
+    expect(inviteCard.classList.contains('is-active')).toBe(true);
+    expect(inviteCard.classList.contains('is-invite-landing-highlight')).toBe(true);
+    expect(inviteTokenInput.value).toBe('token-123');
+    expect(inviteLandingCard.hidden).toBe(true);
   });
 
   test('a regisztráció elküldi a választott registrationPath értéket', async () => {

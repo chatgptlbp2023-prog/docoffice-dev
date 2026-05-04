@@ -43,7 +43,14 @@ async function getRegistrationCounts() {
       count(*)::int as total_count,
       count(*) filter (
         where (created_at at time zone 'Europe/Budapest')::date = (now() at time zone 'Europe/Budapest')::date
-      )::int as daily_count
+      )::int as daily_count,
+      coalesce(
+        array_agg(email order by created_at asc) filter (
+          where (created_at at time zone 'Europe/Budapest')::date = (now() at time zone 'Europe/Budapest')::date
+            and nullif(trim(email), '') is not null
+        ),
+        '{}'
+      ) as daily_emails
     from users
     where registration_path = any($1::text[])
     group by registration_path
@@ -55,24 +62,42 @@ async function getRegistrationCounts() {
     row.registration_path,
     {
       dailyCount: Number(row.daily_count || 0),
-      totalCount: Number(row.total_count || 0)
+      totalCount: Number(row.total_count || 0),
+      dailyEmails: Array.isArray(row.daily_emails)
+        ? row.daily_emails.map(email => String(email || '').trim()).filter(Boolean)
+        : []
     }
   ]));
 
   return REGISTRATION_PATH_ROWS.map(item => ({
     ...item,
     dailyCount: byPath.get(item.path)?.dailyCount || 0,
-    totalCount: byPath.get(item.path)?.totalCount || 0
+    totalCount: byPath.get(item.path)?.totalCount || 0,
+    dailyEmails: byPath.get(item.path)?.dailyEmails || []
   }));
 }
 
 function buildRegistrationNotificationContent({ counts, platformName, timestampLabel }) {
-  const lines = counts.map(item => `${item.label}: ${item.dailyCount}/${item.totalCount}`);
   const subject = `${timestampLabel} új regisztráció történt a ${platformName}`;
-  const text = lines.join('\n');
+
+  const text = counts.map(item => {
+    const lines = [`${item.label}: ${item.dailyCount}/${item.totalCount}`];
+    if (Array.isArray(item.dailyEmails) && item.dailyEmails.length > 0) {
+      lines.push(...item.dailyEmails);
+    }
+    return lines.join('\n');
+  }).join('\n\n');
+
   const html = `
     <div>
-      ${lines.map(line => `<div>${line}</div>`).join('')}
+      ${counts.map(item => `
+        <div style="margin-bottom: 14px;">
+          <div><strong>${item.label}: ${item.dailyCount}/${item.totalCount}</strong></div>
+          ${(Array.isArray(item.dailyEmails) && item.dailyEmails.length > 0)
+            ? `<div style="margin-top: 6px;">${item.dailyEmails.map(email => `<div>${email}</div>`).join('')}</div>`
+            : ''}
+        </div>
+      `).join('')}
     </div>
   `;
 

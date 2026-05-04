@@ -290,6 +290,10 @@ function getSelectedRegistrationPath() {
   return state.selectedRegistrationPath || getDefaultRegistrationPath() || '';
 }
 
+function shouldHighlightInviteRegistrationPath() {
+  return Boolean(state.pendingInviteToken) && !state.token;
+}
+
 function setSelectedRegistrationPath(path) {
   const nextPath = path || getDefaultRegistrationPath() || '';
   state.selectedRegistrationPath = nextPath;
@@ -304,6 +308,10 @@ function syncRegistrationPathUi() {
 
   document.querySelectorAll('.auth-path-panel').forEach(option => {
     option.classList.toggle('is-active', option.dataset.registrationPath === selectedPath);
+    option.classList.toggle(
+      'is-invite-landing-highlight',
+      shouldHighlightInviteRegistrationPath() && option.dataset.registrationPath === 'invited_participant'
+    );
   });
 
   const details = document.getElementById('registerFormDetails');
@@ -913,8 +921,10 @@ function setAuthMode(mode = 'login') {
 
   if (isRegister) {
     syncRegistrationPathUi();
+    renderInviteLanding();
   } else {
     syncAuthPoster();
+    renderInviteLanding();
   }
 }
 
@@ -7703,7 +7713,7 @@ function applyRoleAwareUi() {
 function renderInviteLanding() {
   if (!els.inviteLandingCard) return;
 
-  if (!state.pendingInviteToken) {
+  if (!state.pendingInviteToken || state.authMode === 'register') {
     els.inviteLandingCard.hidden = true;
     els.inviteLandingCard.innerHTML = '';
     return;
@@ -8112,7 +8122,7 @@ async function bootSession() {
   ensureAuthShell();
   ensureAuthOnboardingUi();
   ensureAdminStatisticsUi();
-  setAuthMode('login');
+  setAuthMode(state.pendingInviteToken ? 'register' : 'login');
   syncAuthLayout();
   ensureEventPricingUi();
   els.userWeatherModule?.closest('.card')?.remove();

@@ -17,18 +17,39 @@ describe('Registration notification service', () => {
     await pool.query('delete from registration_notification_log');
   });
 
-  test('budapesti idobelyeget ad a targyhoz', () => {
+  test('budapesti időbélyeget ad a tárgyhoz', () => {
     const formatted = formatBudapestTimestamp(new Date('2026-05-04T08:07:00.000Z'));
 
     expect(formatted).toBe('2026.05.04 10:07');
   });
 
-  test('a level targya es torzse a vart bontasban epul fel', () => {
-    const counts = REGISTRATION_PATH_ROWS.map(item => ({
-      ...item,
-      dailyCount: item.path === 'tournament_organizer' ? 2 : 0,
-      totalCount: item.path === 'tournament_organizer' ? 5 : 1
-    }));
+  test('a levél tárgya és törzse a várt bontásban épül fel napi email listával', () => {
+    const counts = REGISTRATION_PATH_ROWS.map(item => {
+      if (item.path === 'team_sport_organizer') {
+        return {
+          ...item,
+          dailyCount: 1,
+          totalCount: 2,
+          dailyEmails: ['emailx@example.com']
+        };
+      }
+
+      if (item.path === 'invited_participant') {
+        return {
+          ...item,
+          dailyCount: 2,
+          totalCount: 2,
+          dailyEmails: ['email1@example.com', 'email2@example.com']
+        };
+      }
+
+      return {
+        ...item,
+        dailyCount: 0,
+        totalCount: 0,
+        dailyEmails: []
+      };
+    });
 
     const content = buildRegistrationNotificationContent({
       counts,
@@ -37,14 +58,18 @@ describe('Registration notification service', () => {
     });
 
     expect(content.subject).toBe('2026.05.04 10:07 új regisztráció történt a Foci App');
-    expect(content.text).toContain('tornaszervező: 2/5');
-    expect(content.text).toContain('haveri csapatszervező: 0/1');
-    expect(content.text).toContain('csoportos órák: 0/1');
-    expect(content.text).toContain('tag: 0/1');
-    expect(content.html).toContain('tornaszervező: 2/5');
+    expect(content.text).toContain('tornaszervező: 0/0');
+    expect(content.text).toContain('haveri csapatszervező: 1/2');
+    expect(content.text).toContain('emailx@example.com');
+    expect(content.text).toContain('csoportos órák: 0/0');
+    expect(content.text).toContain('tag: 2/2');
+    expect(content.text).toContain('email1@example.com');
+    expect(content.text).toContain('email2@example.com');
+    expect(content.html).toContain('haveri csapatszervező: 1/2');
+    expect(content.html).toContain('emailx@example.com');
   });
 
-  test('a kuldes allapota DB-be mentodik', async () => {
+  test('a küldés állapota DB-be mentődik', async () => {
     sendEmail.mockResolvedValue({
       status: 'sent',
       messageId: 'message-123'
@@ -78,7 +103,7 @@ describe('Registration notification service', () => {
     }));
   });
 
-  test('a not_configured allapot is DB-be mentodik', async () => {
+  test('a not_configured állapot is DB-be mentődik', async () => {
     sendEmail.mockResolvedValue({
       status: 'skipped',
       reason: 'not_configured'
