@@ -714,10 +714,10 @@ function ensureAuthShell() {
   authView.style.display = authView.classList.contains('active') ? 'flex' : '';
   authView.style.justifyContent = 'center';
   authView.style.alignItems = 'flex-start';
-  authView.style.paddingTop = '24px';
+  authView.style.paddingTop = '12px';
   authShell.style.margin = '0 auto';
   authShell.style.width = '100%';
-  authShell.style.maxWidth = '1460px';
+  authShell.style.removeProperty('max-width');
 
   let formStage = authShell.querySelector('.auth-form-stage');
   if (!formStage) {
@@ -1038,7 +1038,7 @@ function syncAuthLayout() {
     authView.style.display = activeViewId === 'authView' ? 'flex' : '';
     authView.style.justifyContent = 'center';
     authView.style.alignItems = 'flex-start';
-    authView.style.paddingTop = '24px';
+    authView.style.paddingTop = '12px';
   }
   syncSidebarCollapse();
 }
@@ -3145,15 +3145,42 @@ function buildVersionSummary(versionInfo) {
   return lines.join(' • ');
 }
 
+function buildVersionSummaryLines(versionInfo) {
+  if (!versionInfo) {
+    return ['Verzióadatok nem elérhetők.'];
+  }
+
+  const version = versionInfo.version || 'ismeretlen';
+  const commit = versionInfo.commit || 'unknown';
+  const environment = versionInfo.environment || 'unknown';
+  const builtAt = formatVersionTimestamp(versionInfo.builtAt);
+  const startedAt = formatVersionTimestamp(versionInfo.startedAt);
+
+  const lines = [
+    `Verzió: ${version} •`,
+    `Commit: ${commit} •`,
+    `Környezet: ${environment} •`
+  ];
+
+  if (builtAt) {
+    lines.push(`Build: ${builtAt}`);
+  } else if (startedAt) {
+    lines.push(`Indult: ${startedAt}`);
+  }
+
+  return lines;
+}
+
 function renderVersionInfo() {
   const summary = buildVersionSummary(state.versionInfo);
+  const summaryLines = buildVersionSummaryLines(state.versionInfo);
 
   if (els.sidebarVersionInfo) {
     els.sidebarVersionInfo.textContent = summary;
   }
 
   if (els.authVersionInfo) {
-    els.authVersionInfo.textContent = summary;
+    els.authVersionInfo.innerHTML = summaryLines.map(line => escapeHtml(line)).join('<br>');
   }
 }
 
