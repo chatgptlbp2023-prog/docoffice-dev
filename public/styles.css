@@ -10,7 +10,7 @@
   --danger: #ef4444;
   --warning: #f59e0b;
   --secondary: #3b82f6;
-  --content-max-width: 1320px;
+  --content-max-width: 1620px;
   --auth-max-width: 980px;
   --auth-register-max-width: 1380px;
   --auth-poster-width: 420px;
@@ -139,7 +139,7 @@ body::after {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
 }
 
 h1, h2, h3, h4, p {
@@ -1124,6 +1124,16 @@ textarea {
   padding: 10px 12px;
 }
 
+.admin-finance-layout {
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+#adminFinanceSettlementCard {
+  min-width: 0;
+  width: 100%;
+}
+
 .event-form-subnav-card {
   padding: 8px 10px;
   background: rgba(247, 251, 255, 0.86);
@@ -2083,6 +2093,8 @@ hr {
     padding: 16px 16px 24px 12px;
   }
   .two-col, .three-col, .four-col, .five-col { grid-template-columns: 1fr; }
+  .admin-finance-layout { grid-template-columns: 1fr; }
+  #adminFinanceBalancesCard { max-width: none; }
 }
 
 
@@ -2583,33 +2595,44 @@ hr {
 
 .attendance-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(140px, 190px) auto;
-  gap: 12px;
+  grid-template-columns: minmax(180px, 220px) minmax(240px, 1.15fr) minmax(150px, 0.7fr) minmax(220px, 0.95fr) minmax(150px, 0.7fr) auto;
+  gap: 16px;
   align-items: center;
-  padding: 12px 14px;
+  padding: 16px;
   border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 14px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.78);
 }
 
-.attendance-row-main {
+.attendance-row-identity {
   min-width: 0;
+  display: grid;
+  gap: 6px;
 }
 
 .attendance-row-name {
   font-weight: 700;
+  font-size: 1.05rem;
 }
 
-.attendance-row-status {
-  display: inline-flex;
-  justify-content: center;
+.attendance-row-finance,
+.attendance-row-target,
+.attendance-row-statuscell {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
 }
 
-.attendance-row-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.attendance-row-finance-meta {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: var(--muted);
 }
 
 .attendance-row-payment {
@@ -2617,39 +2640,49 @@ hr {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  align-self: center;
 }
 
-.finance-player-summary-grid .detail-box {
-  min-height: 78px;
-}
-
-.finance-player-settlement-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.finance-player-settlement-item {
+.attendance-row-actions {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(248, 250, 252, 0.76);
+  gap: 8px;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
 }
 
-.finance-player-settlement-item .detail-value {
-  margin-left: auto;
+.attendance-row-actions .btn {
+  flex: 0 0 auto;
+  min-width: 108px;
+  justify-content: center;
 }
 
 .attendance-payment-input {
   min-width: 0;
+  width: 100%;
+}
+
+.attendance-row-target .detail-value,
+.attendance-row-statuscell .detail-value {
+  font-size: 1rem;
+  font-weight: 700;
 }
 
 .attendance-row-payment .small.muted {
   line-height: 1.35;
+}
+
+@media (max-width: 1180px) {
+  .attendance-row {
+    grid-template-columns: 1fr;
+  }
+
+  .attendance-row-payment {
+    width: 100%;
+  }
+
+  .attendance-row-actions {
+    justify-content: flex-start;
+  }
 }
 
 .payment-qr-preview-card {
@@ -3147,29 +3180,13 @@ hr {
     flex: 1 1 0;
   }
 
-  .attendance-row {
-    grid-template-columns: 1fr;
-  }
-
-  .attendance-row-actions {
-    justify-content: flex-start;
-  }
-
-  .attendance-row-payment {
-    width: 100%;
+  .attendance-row-actions .btn {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
   }
 
   .attendance-ledger-row {
     grid-template-columns: 1fr;
-  }
-
-  .finance-player-settlement-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .finance-player-settlement-item {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .payment-qr-preview-card {

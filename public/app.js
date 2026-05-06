@@ -42,6 +42,7 @@
     status: 'all',
     search: ''
   },
+  attendancePaymentDrafts: {},
   paymentQrPreview: null,
   adminWorkspace: 'home',
   tournamentWorkspace: 'home',
@@ -4058,15 +4059,61 @@ function getAdminWorkspaceFocusEvent(events = state.adminEvents || []) {
   return finishedEvents[0] || null;
 }
 
+function getAdminFinanceFocusEvent(events = state.adminEvents || []) {
+  const selectedDetailEvent = state.selectedAdminEventDetail?.event;
+  if (canManageAttendanceForEvent(selectedDetailEvent)) {
+    return selectedDetailEvent;
+  }
+
+  const selectedEvent = state.selectedAdminEvent;
+  if (canManageAttendanceForEvent(selectedEvent)) {
+    return selectedEvent;
+  }
+
+  const manageableEvents = [...events]
+    .filter(event => canManageAttendanceForEvent(event))
+    .sort((a, b) => getEventStartTimestamp(b) - getEventStartTimestamp(a));
+  if (manageableEvents[0]) {
+    return manageableEvents[0];
+  }
+
+  return getAdminWorkspaceFocusEvent(events);
+}
+
 function getAttendanceDefaultPaymentAmount(detail) {
   const paymentSummary = detail?.summary?.paymentSummary || {};
   const amount = Number(paymentSummary.final_amount_per_person || 0);
   return Number.isFinite(amount) && amount >= 0 ? Math.round(amount) : 0;
 }
 
+function hasStoredAttendanceFinanceValue(player, detail) {
+  const defaultAmount = getAttendanceDefaultPaymentAmount(detail);
+  const expectedTotal = Number(player?.finance_expected_total_amount);
+  const settlementTarget = Number(player?.finance_settlement_target_amount);
+  const actualPaid = Number(player?.finance_actual_paid_amount);
+
+  if (hasRecordedAttendancePayment(player)) {
+    return true;
+  }
+
+  if (defaultAmount <= 0) {
+    return true;
+  }
+
+  return (
+    (Number.isFinite(expectedTotal) && expectedTotal > 0) ||
+    (Number.isFinite(settlementTarget) && settlementTarget > 0) ||
+    (Number.isFinite(actualPaid) && actualPaid > 0)
+  );
+}
+
 function getAttendanceSettlementTargetAmount(player, detail) {
   const explicitTarget = Number(player?.finance_settlement_target_amount);
-  if (Number.isFinite(explicitTarget) && explicitTarget >= 0) {
+  if (
+    Number.isFinite(explicitTarget)
+    && explicitTarget >= 0
+    && hasStoredAttendanceFinanceValue(player, detail)
+  ) {
     return Math.round(explicitTarget);
   }
 
@@ -4076,19 +4123,71 @@ function getAttendanceSettlementTargetAmount(player, detail) {
 
 function getAttendanceExpectedTotalAmount(player, detail) {
   const explicitTotal = Number(player?.finance_expected_total_amount);
-  if (Number.isFinite(explicitTotal) && explicitTotal >= 0) {
+  if (
+    Number.isFinite(explicitTotal)
+    && explicitTotal >= 0
+    && hasStoredAttendanceFinanceValue(player, detail)
+  ) {
     return Math.round(explicitTotal);
   }
 
   return getAttendanceDefaultPaymentAmount(detail);
 }
 
+function hasRecordedAttendancePayment(player) {
+  return Boolean(
+    player
+    && (
+      ['present', 'no_show'].includes(player.attendance_status)
+      || player.attendance_marked_at
+      || player.attendance_payment_recorded_at
+    )
+  );
+}
+
 function getAttendancePaymentInputValue(player, detail) {
-  if (player?.attendance_payment_amount != null && player.attendance_payment_amount !== '') {
-    return String(player.attendance_payment_amount);
+  const eventId = detail?.event?.id;
+  const userId = player?.user_id;
+  const draftAmount = readAttendancePaymentDraft(eventId, userId);
+  if (draftAmount != null) {
+    return String(draftAmount);
+  }
+
+  if (hasRecordedAttendancePayment(player)) {
+    const recordedAmount = Number(
+      player?.finance_actual_paid_amount
+      ?? player?.attendance_payment_amount
+    );
+    if (Number.isFinite(recordedAmount) && recordedAmount >= 0) {
+      return String(Math.round(recordedAmount));
+    }
   }
 
   return String(getAttendanceSettlementTargetAmount(player, detail));
+}
+
+function getAttendancePaymentDraftKey(eventId, userId) {
+  const normalizedEventId = String(eventId || '').trim();
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedEventId || !normalizedUserId) return '';
+  return `${normalizedEventId}:${normalizedUserId}`;
+}
+
+function readAttendancePaymentDraft(eventId, userId) {
+  const key = getAttendancePaymentDraftKey(eventId, userId);
+  if (!key) return null;
+  const value = state.attendancePaymentDrafts[key];
+  return Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
+function writeAttendancePaymentDraft(eventId, userId, amount) {
+  const key = getAttendancePaymentDraftKey(eventId, userId);
+  if (!key) return;
+  if (amount == null || amount === '' || !Number.isFinite(Number(amount)) || Number(amount) < 0) {
+    delete state.attendancePaymentDrafts[key];
+    return;
+  }
+  state.attendancePaymentDrafts[key] = Math.round(Number(amount));
 }
 
 function getAttendanceProjectedBalanceAfter(player, detail, paidAmount = null) {
@@ -4118,8 +4217,11 @@ function getSignedMoneyClass(value) {
 }
 
 function readAttendancePaymentAmountForUser(userId) {
-  const input = document.querySelector(`[data-attendance-payment][data-attendance-user-id="${String(userId)}"]`);
-  if (!input) return null;
+  const scope = els.adminAttendanceContent || document;
+  const input = scope.querySelector(`[data-attendance-payment][data-attendance-user-id="${String(userId)}"]`);
+  if (!input) {
+    return readAttendancePaymentDraft(state.selectedAdminEventDetail?.event?.id || state.selectedAdminEvent?.id, userId);
+  }
   const raw = String(input.value || '').trim();
   if (!raw) return null;
   const amount = Number(raw);
@@ -4132,22 +4234,24 @@ function syncAttendancePaymentPreview(userId) {
   if (!player) return;
 
   const paidAmount = readAttendancePaymentAmountForUser(userId) ?? 0;
+  writeAttendancePaymentDraft(detail?.event?.id, userId, paidAmount);
   const projectedAfter = getAttendanceProjectedBalanceAfter(player, detail, paidAmount);
   const projectedDelta = getAttendanceProjectedDelta(player, detail, paidAmount);
 
-  const actualPaidNode = document.querySelector(`[data-attendance-actual-paid][data-attendance-user-id="${String(userId)}"]`);
+  const scope = els.adminAttendanceContent || document;
+  const actualPaidNode = scope.querySelector(`[data-attendance-actual-paid][data-attendance-user-id="${String(userId)}"]`);
   if (actualPaidNode) {
     actualPaidNode.textContent = formatMoney(paidAmount);
   }
 
-  const afterNode = document.querySelector(`[data-attendance-projected-after][data-attendance-user-id="${String(userId)}"]`);
+  const afterNode = scope.querySelector(`[data-attendance-projected-after][data-attendance-user-id="${String(userId)}"]`);
   if (afterNode) {
     afterNode.textContent = formatSignedMoney(projectedAfter);
     afterNode.classList.remove('finance-delta-positive', 'finance-delta-negative', 'finance-delta-neutral');
     afterNode.classList.add(getSignedMoneyClass(projectedAfter));
   }
 
-  const deltaNode = document.querySelector(`[data-attendance-payment-delta][data-attendance-user-id="${String(userId)}"]`);
+  const deltaNode = scope.querySelector(`[data-attendance-payment-delta][data-attendance-user-id="${String(userId)}"]`);
   if (deltaNode) {
     deltaNode.textContent = formatSignedMoney(projectedDelta);
     deltaNode.classList.remove('finance-delta-positive', 'finance-delta-negative', 'finance-delta-neutral');
@@ -4716,41 +4820,9 @@ function renderAdminAttendanceManager() {
             going.length
               ? going.map(player => `
                 <div class="attendance-row">
-                  <div class="attendance-row-main">
+                  <div class="attendance-row-identity">
                     <div class="attendance-row-name">${escapeHtml(player.name || 'Ismeretlen játékos')}</div>
                     <div class="small muted">${escapeHtml(player.email || '-')}</div>
-                    <div class="grid four-col inner-grid top-space attendance-summary-grid finance-player-summary-grid">
-                      <div class="detail-box">
-                        <div class="detail-label">Esemény díja</div>
-                        <div class="detail-value">${escapeHtml(formatMoney(getAttendanceExpectedTotalAmount(player, detail)))}</div>
-                      </div>
-                      <div class="detail-box">
-                        <div class="detail-label">Előző egyenleg</div>
-                        <div class="detail-value">${escapeHtml(formatSignedMoney(Number(player.finance_balance_before_event || 0)))}</div>
-                      </div>
-                      <div class="detail-box">
-                        <div class="detail-label">Most rendezendő</div>
-                        <div class="detail-value">${escapeHtml(formatMoney(getAttendanceSettlementTargetAmount(player, detail)))}</div>
-                      </div>
-                      <div class="detail-box">
-                        <div class="detail-label">Utána egyenleg</div>
-                        <div class="detail-value ${escapeHtml(getSignedMoneyClass(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}" data-attendance-projected-after data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}</div>
-                      </div>
-                    </div>
-                    <div class="finance-player-settlement-strip top-space">
-                      <div class="finance-player-settlement-item">
-                        <span class="detail-label">Állapot most</span>
-                        <span class="detail-value">${attendanceStatusBadge(player.attendance_status)}</span>
-                      </div>
-                      <div class="finance-player-settlement-item">
-                        <span class="detail-label">Tényleges befizetés</span>
-                        <span class="detail-value" data-attendance-actual-paid data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatMoney(Number(readAttendancePaymentAmountForUser(player.user_id) ?? getAttendancePaymentInputValue(player, detail) ?? 0)))}</span>
-                      </div>
-                      <div class="finance-player-settlement-item">
-                        <span class="detail-label">Eltérés most</span>
-                        <span class="detail-value ${escapeHtml(getSignedMoneyClass(getAttendanceProjectedDelta(player, detail)))}" data-attendance-payment-delta data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(getAttendanceProjectedDelta(player, detail)))}</span>
-                      </div>
-                    </div>
                     ${
                       getUserPaymentProfile(player)
                         ? `
@@ -4762,6 +4834,18 @@ function renderAdminAttendanceManager() {
                         `
                         : ''
                     }
+                  </div>
+                  <div class="attendance-row-finance">
+                    <div class="detail-label">Pénzügyi alap</div>
+                    <div class="attendance-row-finance-meta">
+                      <span>Esemény díja: <strong>${escapeHtml(formatMoney(getAttendanceExpectedTotalAmount(player, detail)))}</strong></span>
+                      <span>Előző: <strong>${escapeHtml(formatSignedMoney(Number(player.finance_balance_before_event || 0)))}</strong></span>
+                      <span>Utána: <strong class="${escapeHtml(getSignedMoneyClass(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}" data-attendance-projected-after data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}</strong></span>
+                    </div>
+                  </div>
+                  <div class="attendance-row-target">
+                    <div class="detail-label">Most rendezendő</div>
+                    <div class="detail-value">${escapeHtml(formatMoney(getAttendanceSettlementTargetAmount(player, detail)))}</div>
                   </div>
                   <div class="attendance-row-payment">
                     <label class="label small" for="attendancePayment_${escapeHtml(player.user_id)}">Befizetés</label>
@@ -4779,28 +4863,34 @@ function renderAdminAttendanceManager() {
                       Célösszeg most: ${escapeHtml(formatMoney(getAttendanceSettlementTargetAmount(player, detail)))}
                     </div>
                   </div>
+                  <div class="attendance-row-statuscell">
+                    <div class="detail-label">Állapot</div>
+                    <div class="detail-value">${attendanceStatusBadge(player.attendance_status)}</div>
+                    <div class="small muted">Befizetve: <span data-attendance-actual-paid data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatMoney(Number(readAttendancePaymentAmountForUser(player.user_id) ?? getAttendancePaymentInputValue(player, detail) ?? 0)))}</span></div>
+                    <div class="detail-value ${escapeHtml(getSignedMoneyClass(getAttendanceProjectedDelta(player, detail)))}" data-attendance-payment-delta data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(getAttendanceProjectedDelta(player, detail)))}</div>
+                  </div>
                   <div class="attendance-row-actions">
                     <button
                       class="btn btn-secondary"
                       type="button"
-                    data-team-summary-action="set-attendance"
-                    data-attendance-user-id="${escapeHtml(player.user_id)}"
-                    data-attendance-status="present"
-                  >
-                    Megjelent
-                  </button>
-                  <button
-                    class="btn btn-danger"
-                    type="button"
-                    data-team-summary-action="set-attendance"
-                    data-attendance-user-id="${escapeHtml(player.user_id)}"
-                    data-attendance-status="no_show"
-                  >
-                    No-show
-                  </button>
+                      data-team-summary-action="set-attendance"
+                      data-attendance-user-id="${escapeHtml(player.user_id)}"
+                      data-attendance-status="present"
+                    >
+                      Megjelent
+                    </button>
+                    <button
+                      class="btn btn-danger"
+                      type="button"
+                      data-team-summary-action="set-attendance"
+                      data-attendance-user-id="${escapeHtml(player.user_id)}"
+                      data-attendance-status="no_show"
+                    >
+                      No-show
+                    </button>
+                  </div>
                 </div>
-              </div>
-            `).join('')
+              `).join('')
             : '<div class="small muted">Ehhez a lezárt eseményhez nincs going játékos, ezért nincs kit jelölni.</div>'
         }
       </div>
@@ -6443,7 +6533,8 @@ function setAdminWorkspace(workspace = 'home') {
   }
 
   if (nextWorkspace === 'finance') {
-    setAdminFinanceSection(getAdminFocusEvent() ? 'settlement' : 'balances');
+    setAdminFinanceSection(getAdminFinanceFocusEvent() ? 'settlement' : 'balances');
+    void ensureAdminFinanceFocusEvent();
   }
 }
 
@@ -7435,7 +7526,7 @@ function renderAdminStatisticsPanel() {
 function renderAdminFinancePanel() {
   if (!els.adminFinanceContent || !els.adminAttendanceContent) return;
 
-  const adminFocusEvent = getAdminWorkspaceFocusEvent();
+  const adminFocusEvent = getAdminFinanceFocusEvent();
   const selectedDetailEvent = state.selectedAdminEventDetail?.event || adminFocusEvent || null;
   const selectedPaymentSummary = state.selectedAdminEventDetail?.summary?.paymentSummary || {};
   const hasRecordedAttendance = Boolean(
@@ -7600,20 +7691,19 @@ function renderAdminFinancePanel() {
 }
 
 async function ensureAdminFinanceFocusEvent() {
+  const preferredEvent = getAdminFinanceFocusEvent();
   const currentDetailEvent = state.selectedAdminEventDetail?.event;
-  if (currentDetailEvent && canManageAttendanceForEvent(currentDetailEvent)) {
+  if (
+    currentDetailEvent
+    && canManageAttendanceForEvent(currentDetailEvent)
+    && (!preferredEvent || currentDetailEvent.id === preferredEvent.id)
+  ) {
     return;
   }
 
-  const selectedEvent = state.selectedAdminEvent;
-  if (selectedEvent && canManageAttendanceForEvent(selectedEvent)) {
-    await openEventForAdmin(selectedEvent.id);
+  if (preferredEvent?.id) {
+    await openEventForAdmin(preferredEvent.id);
     return;
-  }
-
-  const firstManageableEvent = (state.adminEvents || []).find(event => canManageAttendanceForEvent(event));
-  if (firstManageableEvent?.id) {
-    await openEventForAdmin(firstManageableEvent.id);
   }
 }
 
@@ -10012,11 +10102,13 @@ async function handleTeamSummaryAction(event) {
           }
 
           for (const player of going) {
+            const paymentAmount = readAttendancePaymentAmountForUser(player.user_id);
+            writeAttendancePaymentDraft(currentEventId, player.user_id, paymentAmount);
             await api(`/events/${currentEventId}/attendance/${player.user_id}`, {
               method: 'POST',
               body: JSON.stringify({
                 status: 'present',
-                paymentAmount: readAttendancePaymentAmountForUser(player.user_id)
+                paymentAmount
               })
             });
           }
@@ -10030,6 +10122,11 @@ async function handleTeamSummaryAction(event) {
           const targetUserId = event.target.dataset.attendanceUserId;
           const status = event.target.dataset.attendanceStatus;
           const currentEventId = state.selectedAdminEventDetail?.event?.id || state.selectedAdminEvent?.id;
+          const paymentAmount = status === 'present' ? readAttendancePaymentAmountForUser(targetUserId) : null;
+
+      if (status === 'present') {
+        writeAttendancePaymentDraft(currentEventId, targetUserId, paymentAmount);
+      }
 
       if (!currentEventId) {
         showMessage('Előbb válassz ki egy lezárt eseményt.', 'error');
@@ -10040,7 +10137,7 @@ async function handleTeamSummaryAction(event) {
           method: 'POST',
           body: JSON.stringify({
             status,
-            paymentAmount: status === 'present' ? readAttendancePaymentAmountForUser(targetUserId) : null
+            paymentAmount
           })
         });
 

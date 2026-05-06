@@ -188,6 +188,372 @@ describe('Frontend cash module UI', () => {
     );
   });
 
+  test('az admin attendance panel az elvart osszeget tolti be, ha meg nincs rogzitett jelenlet csak nullas penzugyi mezo', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.adminWorkspace = 'finance';
+      state.adminFinanceSection = 'settlement';
+      state.selectedAdminEvent = {
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-1',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [({
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: -400,
+            finance_settlement_target_amount: 1700,
+            attendance_status: null,
+            attendance_marked_at: null,
+            attendance_payment_recorded_at: null,
+            attendance_payment_amount: 0,
+            finance_actual_paid_amount: 0
+          })]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            base_amount_per_person: 1200,
+            per_player_fee: 100
+          }
+        }
+      };
+      renderAdminFinancePanel();
+    `);
+
+    expect(document.querySelector('[data-attendance-payment][data-attendance-user-id="player-1"]').value).toBe('1700');
+  });
+
+  test('a kezzel atirt befizetes megmarad a megjelent rogzites utan is', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/events/event-1/attendance/player-1')) {
+        return createJsonResponse({
+          message: 'Jelenlet es fizetes sikeresen rogzitve.',
+          attendance: { status: 'present', payment_amount: 900 }
+        });
+      }
+
+      if (target.includes('/events/event-1/team-draw')) {
+        return createJsonResponse({ draw: null });
+      }
+
+      if (target.includes('/events/event-1') && !target.includes('/attendance/')) {
+        return createJsonResponse({
+          event: {
+            id: 'event-1',
+            title: 'Lezart meccs',
+            start_at: '2026-04-15T18:00:00.000Z',
+            location_name: 'Teszt palya',
+            status: 'finished'
+          },
+          registrations: {
+            going: [({
+              user_id: 'player-1',
+              name: 'Player One',
+              finance_balance_before_event: -400,
+              finance_settlement_target_amount: 1700,
+              attendance_status: 'present',
+              attendance_payment_amount: null
+            })]
+          },
+          summary: {
+            attendanceSummary: {
+              presentCount: 1,
+              noShowCount: 0,
+              unmarkedCount: 0,
+              totalPaidAmount: 0
+            },
+            paymentSummary: {
+              final_amount_per_person: 1300,
+              base_amount_per_person: 1200,
+              per_player_fee: 100
+            }
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.adminEvents = [{
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      }];
+      state.selectedAdminEvent = {
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-1',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [({
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: -400,
+            finance_settlement_target_amount: 1700,
+            attendance_status: null,
+            attendance_payment_amount: null
+          })]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            final_amount_per_person: 1300,
+            base_amount_per_person: 1200,
+            per_player_fee: 100
+          }
+        }
+      };
+      renderAdminFinancePanel();
+    `);
+
+    const amountInput = document.querySelector('[data-attendance-payment][data-attendance-user-id="player-1"]');
+    amountInput.value = '900';
+    amountInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+    document.querySelector('[data-team-summary-action="set-attendance"]').click();
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(document.querySelector('[data-attendance-payment][data-attendance-user-id="player-1"]').value).toBe('900');
+  });
+
+  test('ha 1400 helyett 1000 erkezik, azt menti es -400 Ft marad a jatekoson', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/events/event-1/attendance/player-1')) {
+        return createJsonResponse({
+          message: 'Jelenlet es fizetes sikeresen rogzitve.',
+          attendance: { status: 'present', payment_amount: 1000 }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.selectedAdminEvent = {
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-1',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [({
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: 0,
+            finance_settlement_target_amount: 1400,
+            attendance_status: null,
+            attendance_payment_amount: null
+          })]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            final_amount_per_person: 1400,
+            base_amount_per_person: 1300,
+            per_player_fee: 100
+          }
+        }
+      };
+      renderAdminFinancePanel();
+    `);
+
+    const amountInput = document.querySelector('[data-attendance-payment][data-attendance-user-id="player-1"]');
+    expect(amountInput.value).toBe('1400');
+
+    amountInput.value = '1000';
+    amountInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+
+    expect(document.querySelector('[data-attendance-payment-delta][data-attendance-user-id="player-1"]').textContent).toContain('-400');
+    expect(document.querySelector('[data-attendance-projected-after][data-attendance-user-id="player-1"]').textContent).toContain('-400');
+
+    document.querySelector('[data-team-summary-action="set-attendance"]').click();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/events/event-1/attendance/player-1'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'present',
+          paymentAmount: 1000
+        })
+      })
+    );
+  });
+
+  test('a lathato attendance panel inputjat olvassa akkor is, ha van rejtett duplikalt mező a DOM-ban', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/events/event-1/attendance/player-1')) {
+        return createJsonResponse({
+          message: 'Jelenlet es fizetes sikeresen rogzitve.',
+          attendance: { status: 'present', payment_amount: 999 }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    document.getElementById('adminAttendanceContentGhost').innerHTML = `
+      <input data-attendance-payment data-attendance-user-id="player-1" value="1400" />
+      <span data-attendance-actual-paid data-attendance-user-id="player-1">1400 Ft</span>
+      <span data-attendance-projected-after data-attendance-user-id="player-1">0 Ft</span>
+      <span data-attendance-payment-delta data-attendance-user-id="player-1">0 Ft</span>
+    `;
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.selectedAdminEvent = {
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-1',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [({
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: 0,
+            finance_settlement_target_amount: 1400,
+            attendance_status: null,
+            attendance_payment_amount: null
+          })]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            final_amount_per_person: 1400,
+            base_amount_per_person: 1300,
+            per_player_fee: 100
+          }
+        }
+      };
+      renderAdminFinancePanel();
+    `);
+
+    const amountInput = document.querySelector('#adminAttendanceContent [data-attendance-payment][data-attendance-user-id="player-1"]');
+    amountInput.value = '999';
+    amountInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+
+    expect(document.querySelector('#adminAttendanceContent [data-attendance-actual-paid][data-attendance-user-id="player-1"]').textContent).toContain('999');
+    expect(document.querySelector('#adminAttendanceContent [data-attendance-payment-delta][data-attendance-user-id="player-1"]').textContent).toContain('-401');
+
+    document.querySelector('#adminAttendanceContent [data-team-summary-action="set-attendance"]').click();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/events/event-1/attendance/player-1'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'present',
+          paymentAmount: 999
+        })
+      })
+    );
+  });
+
   test('az admin attendance panel gepeles kozben frissiti a vart egyenleget es az elterest', async () => {
     const { window, document } = await bootFrontend();
 
@@ -245,6 +611,97 @@ describe('Frontend cash module UI', () => {
     expect(document.querySelector('[data-attendance-actual-paid][data-attendance-user-id="player-1"]').textContent).toContain('900');
     expect(document.querySelector('[data-attendance-payment-delta][data-attendance-user-id="player-1"]').textContent).toContain('-800');
     expect(document.querySelector('[data-attendance-projected-after][data-attendance-user-id="player-1"]').textContent).toContain('-800');
+  });
+
+  test('a penzugyi munkater a kozelgo esemeny helyett a lezarhato esemenyt nyitja meg no-show adminisztraciohoz', async () => {
+    const fetchMock = jest.fn(async (url) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/events/event-finished')) {
+        return createJsonResponse({
+          event: {
+            id: 'event-finished',
+            title: 'Lezart meccs',
+            start_at: '2026-04-15T18:00:00.000Z',
+            location_name: 'Teszt palya',
+            status: 'finished'
+          },
+          registrations: {
+            going: [{
+              user_id: 'player-1',
+              name: 'Player One',
+              attendance_status: null,
+              attendance_payment_amount: null
+            }]
+          },
+          summary: {
+            attendanceSummary: {
+              presentCount: 0,
+              noShowCount: 0,
+              unmarkedCount: 1,
+              totalPaidAmount: 0
+            },
+            paymentSummary: {
+              final_amount_per_person: 1300,
+              base_amount_per_person: 1200,
+              per_player_fee: 100
+            }
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.adminEvents = [
+        {
+          id: 'event-upcoming',
+          title: 'Kovetkezo meccs',
+          start_at: '2026-06-15T18:00:00.000Z',
+          location_name: 'Jovo palya',
+          status: 'published'
+        },
+        {
+          id: 'event-finished',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        }
+      ];
+      state.selectedAdminEvent = {
+        id: 'event-upcoming',
+        title: 'Kovetkezo meccs',
+        start_at: '2026-06-15T18:00:00.000Z',
+        location_name: 'Jovo palya',
+        status: 'published'
+      };
+      state.selectedAdminEventDetail = null;
+      renderAdminFinancePanel();
+      setAdminWorkspace('finance');
+    `);
+
+    await window.eval('ensureAdminFinanceFocusEvent()');
+    window.eval('renderAdminFinancePanel()');
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/events/event-finished'),
+      expect.any(Object)
+    );
+    expect(document.getElementById('adminAttendanceContent').textContent).toContain('No-show');
+    expect(document.getElementById('adminAttendanceContent').textContent).toContain('Lezart meccs');
   });
 
   test('a user penzugyeim modul mutatja az aktualis egyenleget es az esemenysorokat', async () => {

@@ -316,6 +316,44 @@ describe('Event attendance / no-show E2E', () => {
     expect(detailRes.body.registrations.going[0].attendance_payment_amount).toBe(1400);
   });
 
+  test('if 1400 Ft is due but only 1000 Ft arrives, the event keeps a -400 Ft debt', async () => {
+    const financeEventPayload = {
+      pricingMode: 'fixed_per_person',
+      fixedPricePerPerson: 1300,
+      perPlayerFee: 100
+    };
+    const eventId = await createPublishedEvent(financeEventPayload);
+
+    const regARes = await request(app)
+      .post(`/api/events/${eventId}/register`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+    expect(regARes.status).toBe(201);
+
+    await pool.query(
+      `update events set start_at = now() - interval '2 hour', updated_at = now() where id = $1`,
+      [eventId]
+    );
+
+    const markRes = await request(app)
+      .post(`/api/events/${eventId}/attendance/${memberAUserId}`)
+      .set('Authorization', `Bearer ${teamManagerToken}`)
+      .send({ status: 'present', paymentAmount: 1000 });
+
+    expect(markRes.status).toBe(200);
+    expect(markRes.body.attendance.payment_amount).toBe(1000);
+
+    const detailRes = await request(app)
+      .get(`/api/events/${eventId}`)
+      .set('Authorization', `Bearer ${teamAdminToken}`);
+
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.registrations.going[0].finance_expected_total_amount).toBe(1400);
+    expect(detailRes.body.registrations.going[0].finance_settlement_target_amount).toBe(1400);
+    expect(detailRes.body.registrations.going[0].finance_actual_paid_amount).toBe(1000);
+    expect(detailRes.body.registrations.going[0].finance_balance_after_event).toBe(-400);
+    expect(detailRes.body.registrations.going[0].finance_event_delta_amount).toBe(-400);
+  });
+
   test('past published event can be marked immediately but stays published until explicit closing', async () => {
     const eventId = await createPublishedEvent();
 
