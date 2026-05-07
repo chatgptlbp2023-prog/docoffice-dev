@@ -220,6 +220,43 @@ pool.query(`
   console.error('Schema ensure hiba:', error);
 });
 
+pool.query(`
+  create table if not exists event_email_action_log (
+    id uuid primary key default gen_random_uuid(),
+    event_id uuid not null references events(id) on delete cascade,
+    team_id uuid not null references teams(id) on delete cascade,
+    user_id uuid not null references users(id) on delete cascade,
+    action text not null,
+    status text not null,
+    message text null,
+    token_jti text null,
+    metadata jsonb not null default '{}'::jsonb,
+    acted_at timestamptz not null default now(),
+    created_at timestamptz not null default now()
+  );
+
+  create index if not exists event_email_action_log_event_idx
+    on event_email_action_log(event_id, acted_at desc);
+
+  create index if not exists event_email_action_log_user_idx
+    on event_email_action_log(user_id, acted_at desc);
+
+  do $$
+  begin
+    if not exists (
+      select 1
+      from pg_constraint
+      where conname = 'event_email_action_log_action_check'
+    ) then
+      alter table event_email_action_log
+        add constraint event_email_action_log_action_check
+        check (action in ('register', 'skip'));
+    end if;
+  end $$;
+`).catch(error => {
+  console.error('Schema ensure hiba:', error);
+});
+
   pool.query(`
     create table if not exists event_attendance_marks (
     id uuid primary key default gen_random_uuid(),

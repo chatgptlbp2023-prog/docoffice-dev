@@ -4,6 +4,7 @@ const {
   updateEvent,
   updateEventStatus,
   registerForEvent,
+  handleEventEmailAction,
   cancelEventRegistration,
   setEventAttendanceStatus,
   getEventById,
@@ -22,6 +23,11 @@ const {
 } = require('../middleware/requestValidation');
 
 const router = express.Router();
+
+router.get(
+  '/event-email-actions/:token',
+  handleEventEmailAction
+);
 
 router.post(
   '/teams/:teamId/events',

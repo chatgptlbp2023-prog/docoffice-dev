@@ -1,6 +1,16 @@
 const eventService = require('../services/eventService');
 const registrationService = require('../services/registrationService');
 const eventAttendanceService = require('../services/eventAttendanceService');
+const eventNotificationService = require('../services/eventNotificationService');
+const eventEmailActionService = require('../services/eventEmailActionService');
+
+async function runNotificationSafely(work, label) {
+  try {
+    await work();
+  } catch (error) {
+    console.error(label, error);
+  }
+}
 
 function handleServiceError(res, error, logLabel, fallbackMessage) {
   if (error && error.statusCode) {
@@ -28,6 +38,14 @@ async function createEvent(req, res) {
       data: req.body
     });
 
+    await runNotificationSafely(
+      () => eventNotificationService.notifyEventCreated({
+        eventId: result.event.id,
+        actorUserId: req.user.id
+      }),
+      'Esemeny letrehozasi ertesites hiba:'
+    );
+
     return res.status(201).json({
       ok: true,
       ...result
@@ -48,6 +66,14 @@ async function updateEvent(req, res) {
       eventId: req.params.eventId,
       data: req.body
     });
+
+    await runNotificationSafely(
+      () => eventNotificationService.notifyEventUpdated({
+        eventId: req.params.eventId,
+        previousEvent: result.previousEvent
+      }),
+      'Esemeny modositas ertesitesi hiba:'
+    );
 
     return res.status(200).json({
       ok: true,
@@ -70,6 +96,25 @@ async function updateEventStatus(req, res) {
       nextStatus: req.body.status
     });
 
+    if (result.transition?.to === 'published') {
+      await runNotificationSafely(
+        () => eventNotificationService.notifyEventCreated({
+          eventId: req.params.eventId,
+          actorUserId: req.user.id
+        }),
+        'Esemeny publish ertesitesi hiba:'
+      );
+    }
+
+    if (result.transition?.to === 'cancelled') {
+      await runNotificationSafely(
+        () => eventNotificationService.notifyEventCancelled({
+          eventId: req.params.eventId
+        }),
+        'Esemeny torles ertesitesi hiba:'
+      );
+    }
+
     return res.status(200).json({
       ok: true,
       ...result
@@ -90,6 +135,16 @@ async function cancelEventRegistration(req, res) {
       eventId: req.params.eventId,
       userId: req.user.id
     });
+
+    await runNotificationSafely(
+      () => eventNotificationService.notifyRegistrationActivity({
+        eventId: req.params.eventId,
+        promotedUserId: result.promotedRegistration?.user_id || null,
+        includeNewRegistrationNotification: false,
+        includeCapacityNotifications: false
+      }),
+      'Varolista promoci o ertesitesi hiba:'
+    );
 
     return res.status(200).json({
       ok: true,
@@ -148,6 +203,15 @@ async function registerForEvent(req, res) {
       userId: req.user.id
     });
 
+    await runNotificationSafely(
+      () => eventNotificationService.notifyRegistrationActivity({
+        eventId: req.params.eventId,
+        actorUserId: req.user.id,
+        registrationStatus: result.registration?.registration_status || 'going'
+      }),
+      'Jelentkezesi ertesitesi hiba:'
+    );
+
     return res.status(201).json({
       ok: true,
       ...result
@@ -159,6 +223,37 @@ async function registerForEvent(req, res) {
       'Jelentkezési hiba:',
       'Szerverhiba jelentkezés közben.'
     );
+  }
+}
+
+async function handleEventEmailAction(req, res) {
+  const fallbackBaseUrl = eventEmailActionService.normalizeAppBaseUrl(
+    process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`
+  );
+
+  try {
+    const result = await eventEmailActionService.executeEventEmailActionToken(req.params.token);
+    const redirectUrl = eventEmailActionService.buildEventAppUrl(
+      {
+        teamId: result.teamId,
+        eventId: result.eventId,
+        actionStatus: result.status,
+        actionMessage: result.message
+      },
+      fallbackBaseUrl
+    );
+
+    return res.redirect(302, redirectUrl);
+  } catch (error) {
+    const redirectUrl = eventEmailActionService.buildEventAppUrl(
+      {
+        actionStatus: 'error',
+        actionMessage: error?.message || 'Az emailes művelet most nem sikerült.'
+      },
+      fallbackBaseUrl
+    );
+
+    return res.redirect(302, redirectUrl);
   }
 }
 
@@ -192,6 +287,7 @@ module.exports = {
   updateEvent,
   updateEventStatus,
   registerForEvent,
+  handleEventEmailAction,
   cancelEventRegistration,
   setEventAttendanceStatus,
   getEventById,

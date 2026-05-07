@@ -1,4 +1,6 @@
-﻿const state = {
+const initialUrlParams = new URLSearchParams(window.location.search);
+
+const state = {
   apiBase: localStorage.getItem('foci_api_base') || `${window.location.origin}/api`,
   token: localStorage.getItem('foci_token') || '',
   user: JSON.parse(localStorage.getItem('foci_user') || 'null'),
@@ -32,7 +34,11 @@
   countdownTimer: null,
   googleAuthConfig: null,
   versionInfo: null,
-  pendingInviteToken: new URLSearchParams(window.location.search).get('invite') || '',
+  pendingInviteToken: initialUrlParams.get('invite') || '',
+  pendingLinkedTeamId: initialUrlParams.get('teamId') || '',
+  pendingLinkedEventId: initialUrlParams.get('eventId') || '',
+  pendingEmailActionStatus: initialUrlParams.get('emailActionStatus') || '',
+  pendingEmailActionMessage: initialUrlParams.get('emailActionMessage') || '',
   pendingInvitePreview: null,
   platformSummary: null,
   adminEventFormMode: 'create',
@@ -3034,6 +3040,92 @@ function saveTeamId(teamId) {
   syncTeamSelectors();
 }
 
+function clearPendingLinkedEventParams() {
+  state.pendingLinkedTeamId = '';
+  state.pendingLinkedEventId = '';
+}
+
+function clearPendingEmailActionFeedback() {
+  state.pendingEmailActionStatus = '';
+  state.pendingEmailActionMessage = '';
+}
+
+function syncAppLinkParamsToUrl() {
+  const url = new URL(window.location.href);
+
+  if (state.pendingInviteToken) {
+    url.searchParams.set('invite', state.pendingInviteToken);
+  } else {
+    url.searchParams.delete('invite');
+  }
+
+  if (state.pendingLinkedTeamId) {
+    url.searchParams.set('teamId', state.pendingLinkedTeamId);
+  } else {
+    url.searchParams.delete('teamId');
+  }
+
+  if (state.pendingLinkedEventId) {
+    url.searchParams.set('eventId', state.pendingLinkedEventId);
+  } else {
+    url.searchParams.delete('eventId');
+  }
+
+  if (state.pendingEmailActionStatus) {
+    url.searchParams.set('emailActionStatus', state.pendingEmailActionStatus);
+  } else {
+    url.searchParams.delete('emailActionStatus');
+  }
+
+  if (state.pendingEmailActionMessage) {
+    url.searchParams.set('emailActionMessage', state.pendingEmailActionMessage);
+  } else {
+    url.searchParams.delete('emailActionMessage');
+  }
+
+  window.history.replaceState({}, '', url.toString());
+}
+
+function showPendingEmailActionFeedback() {
+  if (!state.pendingEmailActionMessage) {
+    return;
+  }
+
+  const type = state.pendingEmailActionStatus === 'error' ? 'error' : 'success';
+  showMessage(state.pendingEmailActionMessage, type);
+  clearPendingEmailActionFeedback();
+  syncAppLinkParamsToUrl();
+}
+
+async function tryOpenPendingLinkedEvent() {
+  const eventId = String(state.pendingLinkedEventId || '').trim();
+  if (!state.token || !eventId) {
+    return false;
+  }
+
+  const teamId = String(state.pendingLinkedTeamId || '').trim();
+
+  try {
+    if (teamId) {
+      saveTeamId(teamId);
+      await loadTeam(teamId);
+      if (els.userTeamIdInput) {
+        els.userTeamIdInput.value = teamId;
+      }
+    }
+
+    await loadUserEvents();
+    await openEventForUser(eventId);
+    switchView('userView');
+    clearPendingLinkedEventParams();
+    syncAppLinkParamsToUrl();
+    return true;
+  } catch (error) {
+    showMessage(error.message, 'error');
+    return false;
+  }
+}
+
 function clearCurrentTeamContext({ clearStored = false } = {}) {
   if (clearStored) {
     clearStoredTeamIdForUser(state.user?.id);
@@ -3294,9 +3386,7 @@ async function tryAcceptPendingInviteToken() {
     showMessage(result.message || 'Sikeresen csatlakoztál a meghívott csapathoz.', 'success');
     state.pendingInviteToken = '';
     state.pendingInvitePreview = null;
-    const url = new URL(window.location.href);
-    url.searchParams.delete('invite');
-    window.history.replaceState({}, '', url.toString());
+    syncAppLinkParamsToUrl();
     renderInviteLanding();
   } catch (error) {
     if (error.status !== 409 && error.status !== 403) {
@@ -3395,6 +3485,7 @@ async function handleGoogleCredential(response, mode) {
       await loadTeam(state.currentTeamId);
     }
 
+    const openedPendingEvent = await tryOpenPendingLinkedEvent();
     const targetView = getPostAuthDefaultView();
 
     showMessage(
@@ -3403,11 +3494,13 @@ async function handleGoogleCredential(response, mode) {
         : 'Sikeres Google-belépés.',
       'success'
     );
-    switchView(targetView);
-    if (targetView === 'tournamentView') {
+    if (!openedPendingEvent) {
+      switchView(targetView);
+    }
+    if (!openedPendingEvent && targetView === 'tournamentView') {
       setTournamentWorkspace('home');
     }
-    if (targetView === 'userView') {
+    if (!openedPendingEvent && targetView === 'userView') {
       triggerPendingInvitePulse();
     }
   } catch (error) {
@@ -8250,6 +8343,7 @@ async function bootSession() {
   await loadVersionInfo();
   await loadGoogleAuthConfig();
   await loadInvitePreview();
+  showPendingEmailActionFeedback();
 
   if (state.currentTeamId) {
     els.teamIdInput.value = state.currentTeamId;
@@ -8276,7 +8370,10 @@ async function bootSession() {
       await loadTeam(state.currentTeamId);
     }
 
-    switchView(getPostAuthDefaultView());
+    const openedPendingEvent = await tryOpenPendingLinkedEvent();
+    if (!openedPendingEvent) {
+      switchView(getPostAuthDefaultView());
+    }
   } catch {
     clearAuth();
   }
@@ -8309,19 +8406,22 @@ async function handleLogin(event) {
       await loadTeam(state.currentTeamId);
     }
 
+    const openedPendingEvent = await tryOpenPendingLinkedEvent();
     const targetView = getPostAuthDefaultView();
 
     showMessage('Sikeres bejelentkezés.', 'success');
-    switchView(
-      targetView
-    );
-    if (targetView === 'tournamentView') {
+    if (!openedPendingEvent) {
+      switchView(
+        targetView
+      );
+    }
+    if (!openedPendingEvent && targetView === 'tournamentView') {
       setTournamentWorkspace('home');
     }
-    if (targetView === 'adminView') {
+    if (!openedPendingEvent && targetView === 'adminView') {
       setAdminWorkspace('home');
     }
-    if (targetView === 'userView') {
+    if (!openedPendingEvent && targetView === 'userView') {
       triggerPendingInvitePulse();
     }
   } catch (error) {
@@ -8375,16 +8475,18 @@ async function handleRegister(event) {
     const targetView = getPostAuthDefaultView();
 
     showMessage(result.message || 'Sikeres regisztráció és automatikus belépés.', 'success');
-    switchView(
-      targetView
-    );
-    if (targetView === 'tournamentView') {
+    if (!openedPendingEvent) {
+      switchView(
+        targetView
+      );
+    }
+    if (!openedPendingEvent && targetView === 'tournamentView') {
       setTournamentWorkspace('home');
     }
-    if (targetView === 'adminView') {
+    if (!openedPendingEvent && targetView === 'adminView') {
       setAdminWorkspace('home');
     }
-    if (targetView === 'userView') {
+    if (!openedPendingEvent && targetView === 'userView') {
       triggerPendingInvitePulse();
     }
   } catch (error) {

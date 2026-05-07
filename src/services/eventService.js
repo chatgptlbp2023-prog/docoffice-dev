@@ -678,6 +678,14 @@ async function updateEvent({ eventId, data }) {
       ...eventResult.rows[0],
       ...settingsResult.rows[0]
     };
+    const previousEvent = {
+      id: currentEvent.id,
+      title: currentEvent.title,
+      start_at: currentEvent.start_at,
+      location_name: currentEvent.location_name,
+      location_address: currentEvent.location_address,
+      status: currentEvent.status
+    };
 
     if (
       currentEvent.status === EVENT_STATUS.CANCELLED ||
@@ -986,6 +994,7 @@ async function updateEvent({ eventId, data }) {
     return {
       message: 'Esemény sikeresen frissítve.',
       holidayWarning: buildHolidayWarning(nextStartAtDate),
+      previousEvent,
       event: updatedEventResult.rows[0],
       settings: updatedSettingsResult.rows[0],
       computed: {

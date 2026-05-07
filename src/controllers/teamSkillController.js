@@ -1,4 +1,5 @@
 const teamSkillService = require('../services/teamSkillService');
+const eventNotificationService = require('../services/eventNotificationService');
 
 function handleServiceError(res, error, logLabel, fallbackMessage) {
   if (error && error.statusCode) {
@@ -172,6 +173,15 @@ async function publishEventTeamDraw(req, res) {
     const result = await teamSkillService.publishEventTeamDraw({
       eventId: req.params.eventId
     });
+
+    try {
+      await eventNotificationService.notifyTeamDrawPublished({
+        eventId: req.params.eventId,
+        automated: false
+      });
+    } catch (error) {
+      console.error('Csapatleosztas ertesitesi hiba:', error);
+    }
 
     return res.status(200).json({ ok: true, ...result });
   } catch (error) {

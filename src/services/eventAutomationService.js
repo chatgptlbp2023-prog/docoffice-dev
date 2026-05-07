@@ -1,4 +1,4 @@
-const { pool, withTransaction } = require('./dbService');
+const { pool } = require('./dbService');
 const { updateEventStatus } = require('./eventService');
 const {
   saveEventTeamDraw,
@@ -7,6 +7,7 @@ const {
 const {
   normalizeNotificationPreferences
 } = require('../utils/notificationPreferences');
+const eventNotificationService = require('./eventNotificationService');
 
 async function listDueAutoTeamDrawEvents({ now = new Date() } = {}) {
   const nowIso = now.toISOString();
@@ -42,7 +43,7 @@ async function listDueAutoTeamDrawEvents({ now = new Date() } = {}) {
 
   return result.rows.filter(event => {
     const prefs = normalizeNotificationPreferences(event.notification_preferences);
-    return prefs.enableAutoTeamDrawOneHourBefore === true;
+    return prefs.enableAutoTeamDrawOneHourBefore === true || prefs.notifyWeatherAlerts === true;
   });
 }
 
@@ -64,63 +65,104 @@ async function markAutoPrestartProcessed({
 }
 
 async function processSinglePrestartEvent(event) {
-  if (Number(event.going_count) < Number(event.min_players)) {
-    const cancelResult = await updateEventStatus({
-      eventId: event.id,
-      nextStatus: 'cancelled'
-    });
+  const prefs = normalizeNotificationPreferences(event.notification_preferences);
+  const outcomes = [];
+  const messages = [];
+  let draw = null;
+  let eventRecord = null;
 
-    await markAutoPrestartProcessed({
-      eventId: event.id,
-      outcome: 'cancelled_low_attendance'
-    });
-
-    return {
-      eventId: event.id,
-      title: event.title,
-      outcome: 'cancelled_low_attendance',
-      message: 'Az esemény elmarad, mert nincs meg a minimum létszám.',
-      event: cancelResult.event
-    };
+  if (prefs.notifyWeatherAlerts === true) {
+    try {
+      const weatherResult = await eventNotificationService.notifyWeatherAlert({
+        eventId: event.id
+      });
+      if (weatherResult?.sentCount > 0) {
+        outcomes.push('weather_alert_sent');
+        messages.push('Idojarasi figyelmeztetes kikuldve.');
+      }
+    } catch (error) {
+      console.error('Prestart weather alert hiba:', error);
+      outcomes.push('weather_alert_failed');
+      messages.push('Az idojarasi figyelmeztetes nem sikerult.');
+    }
   }
 
-  try {
-    await saveEventTeamDraw({
-      eventId: event.id,
-      userId: null,
-      draw: null
-    });
+  if (prefs.enableAutoTeamDrawOneHourBefore === true) {
+    if (Number(event.going_count) < Number(event.min_players)) {
+      const cancelResult = await updateEventStatus({
+        eventId: event.id,
+        nextStatus: 'cancelled'
+      });
+      eventRecord = cancelResult.event;
+      outcomes.push('cancelled_low_attendance');
+      messages.push('Az esemeny elmarad, mert nincs meg a minimum letszam.');
 
-    const publishResult = await publishEventTeamDraw({
-      eventId: event.id
-    });
+      try {
+        await eventNotificationService.notifyEventCancelled({
+          eventId: event.id
+        });
+      } catch (error) {
+        console.error('Prestart cancel notification hiba:', error);
+      }
+    } else {
+      try {
+        await saveEventTeamDraw({
+          eventId: event.id,
+          userId: null,
+          draw: null
+        });
 
-    await markAutoPrestartProcessed({
-      eventId: event.id,
-      outcome: 'team_draw_published'
-    });
+        const publishResult = await publishEventTeamDraw({
+          eventId: event.id
+        });
+        draw = publishResult.draw;
+        outcomes.push('team_draw_published');
+        messages.push('A csapatok leosztasra kerultek.');
 
-    return {
-      eventId: event.id,
-      title: event.title,
-      outcome: 'team_draw_published',
-      message: 'A csapatok leosztásra kerültek!',
-      draw: publishResult.draw
-    };
-  } catch (error) {
-    await markAutoPrestartProcessed({
-      eventId: event.id,
-      outcome: 'team_draw_failed'
-    });
+        try {
+          await eventNotificationService.notifyTeamDrawPublished({
+            eventId: event.id,
+            automated: true
+          });
+        } catch (error) {
+          console.error('Prestart draw notification hiba:', error);
+        }
+      } catch (error) {
+        outcomes.push('team_draw_failed');
+        messages.push('Az automatikus csapatleosztas nem sikerult.');
 
-    return {
-      eventId: event.id,
-      title: event.title,
-      outcome: 'team_draw_failed',
-      message: 'Az automatikus csapatleosztás nem sikerült.',
-      error: error.message
-    };
+        await markAutoPrestartProcessed({
+          eventId: event.id,
+          outcome: outcomes.join(',')
+        });
+
+        return {
+          eventId: event.id,
+          title: event.title,
+          outcome: outcomes.join(','),
+          message: messages.join(' '),
+          error: error.message,
+          draw,
+          event: eventRecord
+        };
+      }
+    }
   }
+
+  const finalOutcome = outcomes.length ? outcomes.join(',') : 'noop';
+  await markAutoPrestartProcessed({
+    eventId: event.id,
+    outcome: finalOutcome
+  });
+
+  return {
+    eventId: event.id,
+    title: event.title,
+    outcome: finalOutcome,
+    message: messages.join(' ') || 'Nem volt kuldendo automatikus muvelet.',
+    draw,
+    event: eventRecord
+  };
 }
 
 async function processDueAutoTeamDrawEvents({ now = new Date() } = {}) {
