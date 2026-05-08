@@ -4,6 +4,77 @@ const eventAttendanceService = require('../services/eventAttendanceService');
 const eventNotificationService = require('../services/eventNotificationService');
 const eventEmailActionService = require('../services/eventEmailActionService');
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderEmailActionResultPage({ title, message, tone = 'success' }) {
+  const background = tone === 'error' ? '#fef2f2' : '#f0fdf4';
+  const border = tone === 'error' ? '#fecaca' : '#bbf7d0';
+  const accent = tone === 'error' ? '#b91c1c' : '#166534';
+
+  return `
+    <!DOCTYPE html>
+    <html lang="hu">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>${escapeHtml(title)}</title>
+        <style>
+          body {
+            margin: 0;
+            font-family: Segoe UI, Arial, sans-serif;
+            background: #f8fafc;
+            color: #0f172a;
+            display: grid;
+            place-items: center;
+            min-height: 100vh;
+            padding: 24px;
+          }
+          .card {
+            width: min(100%, 460px);
+            background: ${background};
+            border: 1px solid ${border};
+            border-radius: 18px;
+            padding: 24px;
+            box-shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
+          }
+          h1 {
+            margin: 0 0 12px;
+            font-size: 24px;
+            color: ${accent};
+          }
+          p {
+            margin: 0 0 10px;
+            line-height: 1.5;
+          }
+          .muted {
+            color: #475569;
+            font-size: 14px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(message)}</p>
+          <p class="muted">Ha ez a lap nem záródik be magától, nyugodtan becsukhatod.</p>
+        </div>
+        <script>
+          setTimeout(function () {
+            window.close();
+          }, 120);
+        </script>
+      </body>
+    </html>
+  `;
+}
+
 async function runNotificationSafely(work, label) {
   try {
     await work();
@@ -227,33 +298,29 @@ async function registerForEvent(req, res) {
 }
 
 async function handleEventEmailAction(req, res) {
-  const fallbackBaseUrl = eventEmailActionService.normalizeAppBaseUrl(
-    process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`
-  );
-
   try {
     const result = await eventEmailActionService.executeEventEmailActionToken(req.params.token);
-    const redirectUrl = eventEmailActionService.buildEventAppUrl(
-      {
-        teamId: result.teamId,
-        eventId: result.eventId,
-        actionStatus: result.status,
-        actionMessage: result.message
-      },
-      fallbackBaseUrl
-    );
-
-    return res.redirect(302, redirectUrl);
+    return res
+      .status(200)
+      .type('html')
+      .send(
+        renderEmailActionResultPage({
+          title: result.action === 'skip' ? 'Kihagyás rögzítve' : 'Jelentkezés rögzítve',
+          message: result.message,
+          tone: result.ok === false ? 'error' : 'success'
+        })
+      );
   } catch (error) {
-    const redirectUrl = eventEmailActionService.buildEventAppUrl(
-      {
-        actionStatus: 'error',
-        actionMessage: error?.message || 'Az emailes művelet most nem sikerült.'
-      },
-      fallbackBaseUrl
-    );
-
-    return res.redirect(302, redirectUrl);
+    return res
+      .status(error?.statusCode === 401 ? 401 : 200)
+      .type('html')
+      .send(
+        renderEmailActionResultPage({
+          title: 'A művelet most nem sikerült',
+          message: error?.message || 'Az emailes művelet most nem sikerült.',
+          tone: 'error'
+        })
+      );
   }
 }
 

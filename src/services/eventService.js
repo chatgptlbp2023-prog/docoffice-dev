@@ -1011,6 +1011,7 @@ async function getEventById(eventId, userId = null) {
     select
       e.id,
       e.team_id,
+      t.name as team_name,
       e.created_by_user_id,
       e.title,
       e.description,
@@ -1050,6 +1051,7 @@ async function getEventById(eventId, userId = null) {
       my_reg.promoted_at as my_promoted_at,
       coalesce(my_reg_stats.cancelled_count, 0)::int as my_cancelled_count
     from events e
+    join teams t on t.id = e.team_id
     left join event_team_draws etd on etd.event_id = e.id
     left join event_settings es on es.event_id = e.id
     left join lateral (

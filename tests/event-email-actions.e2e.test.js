@@ -119,10 +119,9 @@ describe('Event email actions E2E', () => {
       .get(`/api/event-email-actions/${encodeURIComponent(token)}`)
       .redirects(0);
 
-    expect(response.status).toBe(302);
-    expect(response.headers.location).toContain(`teamId=${teamId}`);
-    expect(response.headers.location).toContain(`eventId=${eventId}`);
-    expect(response.headers.location).toContain('emailActionStatus=going');
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('Jelentkezés rögzítve');
+    expect(response.text).toContain('Sikeres jelentkezes');
 
     const registrationResult = await pool.query(
       `
@@ -188,8 +187,9 @@ describe('Event email actions E2E', () => {
       .get(`/api/event-email-actions/${encodeURIComponent(token)}`)
       .redirects(0);
 
-    expect(response.status).toBe(302);
-    expect(response.headers.location).toContain('emailActionStatus=recorded_for_rank');
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('Kihagyás rögzítve');
+    expect(response.text).toContain('rangmodul');
 
     const registrationResult = await pool.query(
       `

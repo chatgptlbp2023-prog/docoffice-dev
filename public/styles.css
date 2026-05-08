@@ -379,10 +379,11 @@ h1, h2, h3, h4, p {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  min-height: 680px;
+  container-type: inline-size;
+  min-height: clamp(420px, 46vw, 680px);
   border: 1px solid rgba(220, 232, 249, 0.68);
   border-radius: 28px;
-  padding: 20px 20px 18px;
+  padding: clamp(16px, 1.6vw, 20px) clamp(16px, 1.6vw, 20px) clamp(14px, 1.3vw, 18px);
   background:
     linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)),
     linear-gradient(180deg, rgba(17, 26, 40, 0.12), rgba(9, 16, 26, 0.18));
@@ -482,8 +483,8 @@ h1, h2, h3, h4, p {
 
 .auth-path-visual-tournament::after {
   inset: auto 12px 14px auto;
-  width: 124px;
-  height: 124px;
+  width: clamp(92px, 9vw, 124px);
+  height: clamp(92px, 9vw, 124px);
   border-radius: 50%;
   background:
     radial-gradient(circle at 50% 50%, rgba(255,255,255,0.76) 0 28%, rgba(255,255,255,0.12) 29% 33%, transparent 34%),
@@ -493,8 +494,8 @@ h1, h2, h3, h4, p {
 
 .auth-path-visual-team_sport_organizer::before {
   inset: auto 22px 18px auto;
-  width: 126px;
-  height: 126px;
+  width: clamp(94px, 9.2vw, 126px);
+  height: clamp(94px, 9.2vw, 126px);
   border-radius: 50%;
   background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.85) 0 20%, rgba(59, 130, 246, 0.22) 21% 36%, transparent 37%);
 }
@@ -517,8 +518,8 @@ h1, h2, h3, h4, p {
 
 .auth-path-visual-activity_organizer::after {
   inset: auto 12px 14px auto;
-  width: 120px;
-  height: 120px;
+  width: clamp(92px, 8.8vw, 120px);
+  height: clamp(92px, 8.8vw, 120px);
   border-radius: 50%;
   background:
     radial-gradient(circle at 50% 50%, rgba(255,255,255,0.75) 0 28%, rgba(255,255,255,0.1) 29% 33%, transparent 34%),
@@ -536,8 +537,8 @@ h1, h2, h3, h4, p {
 
 .auth-path-visual-invited_participant::after {
   inset: auto 10px 14px auto;
-  width: 124px;
-  height: 124px;
+  width: clamp(94px, 9vw, 124px);
+  height: clamp(94px, 9vw, 124px);
   border-radius: 50%;
   background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.45) 0 22%, transparent 23%);
 }
@@ -545,9 +546,9 @@ h1, h2, h3, h4, p {
 .auth-path-copy {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: clamp(10px, 1.2vw, 14px);
   margin-top: 0;
-  margin-bottom: 16px;
+  margin-bottom: clamp(12px, 1.2vw, 16px);
   color: #f8fbff;
 }
 
@@ -561,10 +562,10 @@ h1, h2, h3, h4, p {
 .auth-path-eyebrow {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
+  min-height: clamp(24px, 2.1vw, 28px);
   border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 0.72rem;
+  padding: clamp(4px, 0.5vw, 5px) clamp(8px, 0.8vw, 10px);
+  font-size: clamp(0.66rem, 0.72vw, 0.72rem);
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -583,7 +584,7 @@ h1, h2, h3, h4, p {
 
 .auth-path-copy strong {
   max-width: 12ch;
-  font-size: clamp(1.8rem, 2vw, 2.35rem);
+  font-size: clamp(1.7rem, 2.2vw, 2.35rem);
   line-height: 0.95;
   letter-spacing: -0.035em;
   font-weight: 800;
@@ -593,7 +594,7 @@ h1, h2, h3, h4, p {
 .auth-path-lead {
   margin: 0;
   max-width: 32ch;
-  font-size: 0.94rem;
+  font-size: clamp(0.88rem, 0.9vw, 0.96rem);
   color: rgba(240, 248, 255, 0.82);
   line-height: 1.45;
 }
@@ -608,10 +609,10 @@ h1, h2, h3, h4, p {
 .auth-path-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
+  min-height: clamp(30px, 2.5vw, 34px);
   border-radius: 999px;
-  padding: 7px 12px;
-  font-size: 0.86rem;
+  padding: clamp(6px, 0.7vw, 7px) clamp(10px, 0.9vw, 12px);
+  font-size: clamp(0.78rem, 0.84vw, 0.86rem);
   font-weight: 700;
   color: rgba(245, 250, 255, 0.96);
   background: rgba(255, 255, 255, 0.14);
@@ -621,7 +622,7 @@ h1, h2, h3, h4, p {
 
 .auth-path-footer {
   margin: 0;
-  font-size: 0.92rem;
+  font-size: clamp(0.84rem, 0.9vw, 0.92rem);
   font-weight: 600;
   color: rgba(245, 250, 255, 0.92);
 }
@@ -636,7 +637,7 @@ h1, h2, h3, h4, p {
   width: 100%;
   margin-top: auto;
   border-radius: 18px;
-  padding: 14px 18px;
+  padding: clamp(12px, 1vw, 14px) clamp(14px, 1.2vw, 18px);
   background: linear-gradient(180deg, rgba(248, 252, 255, 0.96), rgba(231, 242, 252, 0.94));
   border: 1.5px solid rgba(111, 213, 151, 0.96);
   color: var(--text);
@@ -648,12 +649,12 @@ h1, h2, h3, h4, p {
 
 .auth-path-trigger-title {
   font-weight: 800;
-  font-size: 1.12rem;
+  font-size: clamp(1rem, 1.1vw, 1.12rem);
   letter-spacing: -0.02em;
 }
 
 .auth-path-trigger-description {
-  font-size: 0.9rem;
+  font-size: clamp(0.82rem, 0.9vw, 0.9rem);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -2818,6 +2819,23 @@ hr {
   background: linear-gradient(180deg, rgba(247, 251, 255, 0.95) 0%, rgba(236, 244, 252, 0.9) 100%);
 }
 
+.team-accent-card {
+  border-left: 6px solid var(--team-accent, #60a5fa);
+  background:
+    linear-gradient(180deg, var(--team-accent-soft, rgba(191, 219, 254, 0.18)) 0%, rgba(247, 251, 255, 0.96) 36%, rgba(236, 244, 252, 0.92) 100%);
+}
+
+.team-accent-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--team-accent-badge, rgba(191, 219, 254, 0.22));
+  font-weight: 700;
+  color: var(--text);
+}
+
 .compact-team-card {
   padding: 12px 14px;
 }
@@ -3125,45 +3143,75 @@ hr {
 
   .auth-path-grid {
     display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: min(84vw, 360px);
-    grid-template-columns: none;
+    grid-template-columns: 1fr;
     gap: 14px;
-    width: auto;
-    min-width: auto;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 0 6px 10px;
-    scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-  }
-
-  .auth-path-grid::-webkit-scrollbar {
-    height: 8px;
-  }
-
-  .auth-path-grid::-webkit-scrollbar-thumb {
-    background: rgba(103, 128, 160, 0.45);
-    border-radius: 999px;
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+    padding: 0;
   }
 
   .auth-path-panel {
-    width: min(84vw, 360px);
-    min-height: auto;
-    aspect-ratio: 9 / 16;
-    scroll-snap-align: start;
+    width: 100%;
+    min-height: clamp(360px, 68svh, 560px);
+    aspect-ratio: auto;
+    padding: clamp(14px, 4.2vw, 20px);
+    border-radius: 24px;
   }
 
   .auth-path-copy strong {
-    font-size: clamp(1.95rem, 9vw, 2.7rem);
-    max-width: 8ch;
+    font-size: clamp(1.55rem, 7vw, 2.15rem);
+    max-width: 11ch;
   }
 
   .auth-path-lead,
   .auth-path-bullets,
   .auth-path-footer {
     max-width: 100%;
+  }
+
+  .auth-path-lead {
+    font-size: clamp(0.86rem, 3.6vw, 0.98rem);
+  }
+
+  .auth-path-bullets {
+    gap: 8px;
+  }
+
+  .auth-path-chip {
+    min-height: clamp(28px, 8vw, 34px);
+    padding: clamp(6px, 2vw, 8px) clamp(10px, 3vw, 12px);
+    font-size: clamp(0.76rem, 3vw, 0.88rem);
+  }
+
+  .auth-path-trigger {
+    margin-top: 18px;
+    padding: clamp(12px, 3.4vw, 16px);
+  }
+
+  .auth-path-trigger-title {
+    font-size: clamp(0.96rem, 4vw, 1.1rem);
+  }
+
+  .auth-path-trigger-description {
+    font-size: clamp(0.8rem, 3.3vw, 0.92rem);
+  }
+
+  .auth-path-kicker,
+  .auth-path-eyebrow {
+    font-size: clamp(0.62rem, 2.6vw, 0.72rem);
+  }
+
+  .auth-path-visual-tournament::after,
+  .auth-path-visual-team_sport_organizer::before,
+  .auth-path-visual-activity_organizer::after,
+  .auth-path-visual-invited_participant::after {
+    width: clamp(76px, 22vw, 104px);
+    height: clamp(76px, 22vw, 104px);
+  }
+
+  .auth-register-details {
+    padding: clamp(12px, 3.5vw, 16px);
   }
 
   .auth-card-head,
@@ -3202,7 +3250,86 @@ hr {
   }
 }
 
-@media (max-width: 1180px) {
+@media (min-width: 721px) and (max-width: 960px) {
+  .auth-shell.auth-shell-register-mode {
+    max-width: min(100%, 920px);
+  }
+
+  .auth-shell-register-mode #registerPanel {
+    padding: 0 16px;
+    overflow: visible;
+  }
+
+  .auth-path-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .auth-path-panel {
+    min-width: 0;
+    min-height: clamp(360px, 44vw, 500px);
+    border-radius: 24px;
+    padding: 16px 16px 14px;
+  }
+
+  .auth-path-copy {
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .auth-path-copy strong {
+    max-width: 10ch;
+    font-size: clamp(1.45rem, 2.8vw, 1.9rem);
+  }
+
+  .auth-path-lead {
+    max-width: 30ch;
+    font-size: clamp(0.8rem, 1.15vw, 0.9rem);
+  }
+
+  .auth-path-bullets {
+    max-width: 100%;
+    gap: 8px;
+  }
+
+  .auth-path-chip {
+    min-height: 26px;
+    font-size: 0.72rem;
+    padding: 5px 9px;
+  }
+
+  .auth-path-footer {
+    font-size: 0.78rem;
+  }
+
+  .auth-path-trigger {
+    padding: 11px 13px;
+    border-radius: 16px;
+  }
+
+  .auth-path-trigger-title {
+    font-size: 0.92rem;
+  }
+
+  .auth-path-trigger-description {
+    font-size: 0.78rem;
+  }
+
+  .auth-version-note {
+    width: min(100%, calc(100% - 32px));
+    margin-top: 14px;
+    padding-inline: 16px;
+    text-align: left;
+    font-size: 0.86rem;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1180px) {
   .auth-shell {
     grid-template-columns: 1fr;
     max-width: 920px;
@@ -3216,5 +3343,43 @@ hr {
 
   .auth-path-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 721px) and (max-width: 960px) {
+  .auth-shell.auth-shell-register-mode {
+    max-width: 100%;
+    justify-items: stretch;
+  }
+
+  .auth-shell-register-mode #registerPanel {
+    width: 100%;
+    max-width: 100%;
+    padding: 0 16px;
+    overflow: visible;
+  }
+
+  .auth-path-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 14px;
+    width: 100%;
+    min-width: 0;
+    overflow: visible !important;
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .auth-path-panel {
+    width: 100%;
+    min-width: 0;
+    min-height: clamp(360px, 44vw, 500px);
+  }
+
+  .auth-version-note {
+    width: calc(100% - 32px);
+    max-width: none;
+    padding-inline: 16px;
+    text-align: left;
   }
 }

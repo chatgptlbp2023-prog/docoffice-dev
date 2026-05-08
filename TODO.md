@@ -41,6 +41,7 @@
 ## P2 - UX es frontend
 
 - [ ] Frontend maradek mojibake / hibas magyar szovegek takaritasa a `public` mappaban
+- [ ] Regisztracios 4 csempes valaszto ujratervezese mobil / fold nezetre, mert a mostani desktop-alapu layout kis kijelzon szetesik es a szelso csempek nem erhetoek el megbizhatoan
 - [ ] Production API base kenyelmesebb kezelese, hogy ne kezzel kelljen beirni
 - [ ] Google login frontend flow vegigtesztelese eles domainnel
 

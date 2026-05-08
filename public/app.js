@@ -5210,6 +5210,64 @@ function getUpcomingEvents(events = []) {
   });
 }
 
+const UPCOMING_EVENTS_LIST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function getUpcomingEventsWithinWindow(events = [], windowMs = UPCOMING_EVENTS_LIST_WINDOW_MS, now = Date.now()) {
+  return getUpcomingEvents(events).filter(event => {
+    const ts = new Date(event.start_at).getTime();
+    if (Number.isNaN(ts)) return false;
+    return ts - now <= windowMs;
+  });
+}
+
+function buildTeamAccent(event) {
+  const source = `${event?.team_id || ''}:${event?.team_name || event?.teamName || ''}`;
+  let hash = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash << 5) - hash) + source.charCodeAt(index);
+    hash |= 0;
+  }
+
+  const hue = Math.abs(hash) % 360;
+  return {
+    accent: `hsl(${hue} 72% 46%)`,
+    soft: `hsla(${hue}, 78%, 52%, 0.12)`,
+    badge: `hsla(${hue}, 78%, 52%, 0.18)`
+  };
+}
+
+function findKnownUserEventById(eventId) {
+  const normalizedId = String(eventId || '');
+  if (!normalizedId) return null;
+
+  return [...(state.myEvents || []), ...(state.userTeamEvents || [])]
+    .find(event => String(event?.id) === normalizedId) || null;
+}
+
+function mergeEventWithKnownUserContext(event, detail = null) {
+  if (!event) return event;
+
+  const knownEvent = findKnownUserEventById(event.id) || null;
+  const merged = {
+    ...(knownEvent || {}),
+    ...event
+  };
+
+  if (detail?.registrationWindow && !merged.registration_window) {
+    merged.registration_window = detail.registrationWindow;
+  }
+
+  if (typeof merged.is_registration_open !== 'boolean' && detail?.registrationWindow) {
+    merged.is_registration_open = Boolean(detail.registrationWindow.isOpen);
+  }
+
+  if (!merged.team_name && knownEvent?.team_name) {
+    merged.team_name = knownEvent.team_name;
+  }
+
+  return merged;
+}
+
 const USER_FOCUS_HORIZON_MS = 72 * 60 * 60 * 1000;
 
 function getUserEventFocusRank(event, now = Date.now()) {
@@ -5412,7 +5470,11 @@ function hasReachedEventCancellationLimit(event) {
 
 function canAttemptEventRegistration(event) {
   const status = event?.my_registration_status;
-  const isOpen = Boolean(event?.is_registration_open) && event?.status === 'published';
+  const isOpen = (
+    typeof event?.is_registration_open === 'boolean'
+      ? event.is_registration_open
+      : Boolean(event?.registration_window?.isOpen)
+  ) && event?.status === 'published';
   return (status == null || status === 'cancelled') && isOpen && !hasReachedEventCancellationLimit(event);
 }
 
@@ -5453,7 +5515,7 @@ function renderMyEventActionButtons(event) {
 
   actions.push(renderGoogleCalendarLink(event));
   actions.push(renderIcsExportLink(event));
-  actions.push(`<button class="btn btn-secondary" type="button" data-open-event-id="${event.id}">Részletes nézet</button>`);
+  actions.push(`<button class="btn btn-secondary" type="button" data-open-event-id="${event.id}">Fókuszba teszem</button>`);
   return actions.filter(Boolean).join('');
 }
 
@@ -5516,29 +5578,30 @@ function renderHeroEvent(event) {
     return;
   }
 
-  const chips = buildEventInsightChips(event);
-  const heroDate = formatHeroEventDate(event.start_at);
+  const hydratedEvent = mergeEventWithKnownUserContext(event, state.selectedUserEventDetail);
+  const chips = buildEventInsightChips(hydratedEvent);
+  const heroDate = formatHeroEventDate(hydratedEvent.start_at);
   const heroWeatherWidgetId = 'heroEventWeatherWidget';
 
   els.nextEventHero.innerHTML = `
     <div class="focus-event-card">
       <div class="row between align-center wrap gap">
         <div>
-          <div class="small muted">${escapeHtml(event.team_name || 'Ismeretlen csapat')}</div>
-          <h3 class="focus-event-title">${escapeHtml(event.title)}</h3>
+          <div class="small muted">${escapeHtml(hydratedEvent.team_name || 'Ismeretlen csapat')}</div>
+          <h3 class="focus-event-title">${escapeHtml(hydratedEvent.title)}</h3>
           <div class="focus-event-date-block">
             <div class="focus-event-weekday">${escapeHtml(heroDate.weekday)}</div>
             <div class="focus-event-subtitle">${escapeHtml(heroDate.dateText)} · ${escapeHtml(heroDate.timeText)}</div>
           </div>
         </div>
         <div class="stack hero-status-stack">
-          ${statusBadge(event.status)}
-          ${registrationStatusBadge(event.my_registration_status)}
+          ${statusBadge(hydratedEvent.status)}
+          ${registrationStatusBadge(hydratedEvent.my_registration_status)}
         </div>
       </div>
 
-      ${renderEventReadinessPanel(event, { compact: true })}
-${renderRankRegistrationNotice(event.registration_window, { compact: true, currentStatus: event.my_registration_status })}
+      ${renderEventReadinessPanel(hydratedEvent, { compact: true })}
+${renderRankRegistrationNotice(hydratedEvent.registration_window, { compact: true, currentStatus: hydratedEvent.my_registration_status })}
 
       <div class="hero-metrics top-space">
         ${chips.map(item => `
@@ -5550,27 +5613,27 @@ ${renderRankRegistrationNotice(event.registration_window, { compact: true, curre
       </div>
 
       <div class="top-space">
-        ${renderEventWeatherModule(event, { compact: true, widgetId: heroWeatherWidgetId })}
+        ${renderEventWeatherModule(hydratedEvent, { compact: true, widgetId: heroWeatherWidgetId })}
       </div>
 
-      ${renderEventParticipantPreview(event, { role: 'user', compact: true })}
+      ${renderEventParticipantPreview(hydratedEvent, { role: 'user', compact: true })}
 
       <div class="row between wrap gap top-space align-center">
         <div class="small muted">Helyszín: ${escapeHtml(event.location_name || '-')} · ${escapeHtml(event.location_address || 'nincs pontos cím')}</div>
         <div class="row gap wrap event-actions-inline">
-          ${renderMyEventActionButtons(event)}
-          ${renderMapsLink(event)}
+          ${renderMyEventActionButtons(hydratedEvent)}
+          ${renderMapsLink(hydratedEvent)}
         </div>
       </div>
 
       <details class="event-accordion top-space" open>
         <summary>Részletek lenyitása</summary>
-        ${renderEventAccordionBody(event)}
+        ${renderEventAccordionBody(hydratedEvent)}
       </details>
     </div>
   `;
 
-  hydrateEventWeatherWidget(heroWeatherWidgetId, event, { compact: true });
+  hydrateEventWeatherWidget(heroWeatherWidgetId, hydratedEvent, { compact: true });
 }
 
 function renderUserOverview() {
@@ -5723,7 +5786,7 @@ async function jumpToNewestUnregisteredEvent() {
   state.userNewEventsPulseUntil = 0;
   renderUserOverview();
   await openEventForUser(nextNewEvent.id);
-  els.userEventDetail?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  els.nextEventHero?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
 }
 
 function jumpToPendingInvites() {
@@ -5753,8 +5816,20 @@ function jumpToPendingInvites() {
 function renderUserRankModule() {
   if (!els.userRankModule) return;
 
+  const rankCard = els.userRankModule.closest('.card');
   const currentMember = getCurrentTeamMember();
   const rankModuleEnabled = isCurrentUserRankModuleEnabled();
+
+  if (rankCard) {
+    rankCard.hidden = !rankModuleEnabled;
+    rankCard.classList.toggle('hidden', !rankModuleEnabled);
+  }
+
+  if (!rankModuleEnabled) {
+    els.userRankModule.innerHTML = '';
+    return;
+  }
+
   const currentProfile = getMemberRankProfile(currentMember);
   const rankSnapshot = currentMember?.rank_snapshot || null;
   const participationRatio = rankSnapshot?.stats?.participationRatio != null
@@ -8683,8 +8758,7 @@ function getUserEventsToHydrate(events = []) {
   const nextEvent = getNextEvent(events);
   const remainingEvents = events.filter(event => event.id !== nextEvent?.id);
   const upcoming = getUpcomingEvents(remainingEvents);
-  const fallback = sortEventsByStart(remainingEvents);
-  const list = (upcoming.length ? upcoming : fallback).slice(0, 6);
+  const list = upcoming.slice(0, 6);
   return [nextEvent, ...list].filter(Boolean);
 }
 
@@ -8716,28 +8790,31 @@ function renderMyEvents(events) {
   }
 
   const remainingEvents = events.filter(event => event.id !== nextEvent?.id);
+  const upcoming = getUpcomingEventsWithinWindow(remainingEvents);
 
-  if (!remainingEvents.length) {
+  if (!upcoming.length) {
     els.myEventsList.innerHTML = emptyState(
-      'Nincs több közelgő eseményed.',
-      'A legfontosabb fókusz eseményt felül látod, jelenleg nincs mellette másik esemény a listában.'
+      'Nincs másik közelgő eseményed 1 héten belül.',
+      'Felül a legközelebbi fókusz eseményt látod, mellette most nincs másik, hamarosan esedékes alkalom.'
     );
     return;
   }
 
-  const upcoming = getUpcomingEvents(remainingEvents);
-  const fallback = sortEventsByStart(remainingEvents);
-  const list = (upcoming.length ? upcoming : fallback).slice(0, 6);
+  const list = upcoming.slice(0, 6);
 
   els.myEventsList.innerHTML = list.map(event => {
     const insightChips = buildEventInsightChips(event);
+    const accent = buildTeamAccent(event);
 
     return `
-      <div class="event-card user-event-card">
+      <div
+        class="event-card user-event-card team-accent-card"
+        style="--team-accent:${accent.accent}; --team-accent-soft:${accent.soft}; --team-accent-badge:${accent.badge};"
+      >
         <div class="row between align-center wrap gap">
           <div>
             <strong>${escapeHtml(event.title)}</strong>
-            <div class="small muted">${escapeHtml(event.team_name || '-')}</div>
+            <div class="small muted"><span class="team-accent-badge">${escapeHtml(event.team_name || 'Ismeretlen csapat')}</span></div>
           </div>
           <div class="row gap wrap align-center">
             ${statusBadge(event.status)}
@@ -8758,13 +8835,6 @@ function renderMyEvents(events) {
 
         <div class="small muted top-space">Kezdés: ${escapeHtml(formatDateTime(event.start_at))}</div>
         <div class="small muted">Helyszín: ${escapeHtml(event.location_name || '-')}</div>
-
-        ${renderEventParticipantPreview(event, { role: 'user', compact: true })}
-
-        <details class="event-accordion top-space">
-          <summary>Részletek lenyitása</summary>
-          ${renderEventAccordionBody(event)}
-        </details>
 
         <div class="event-actions top-space">
           ${renderMyEventActionButtons(event)}
@@ -9020,6 +9090,12 @@ function renderTeamDrawPreviewCard() {
 function renderUserTeamDrawPreview() {
   if (!els.userTeamDrawPreview) return;
 
+  const selectedEvent = state.selectedUserEventDetail?.event || state.selectedUserEvent || null;
+  if (canManageAttendanceForEvent(selectedEvent)) {
+    els.userTeamDrawPreview.innerHTML = '';
+    return;
+  }
+
   if (!state.teamDrawPreview) {
     els.userTeamDrawPreview.innerHTML = '';
     return;
@@ -9160,8 +9236,11 @@ function getRenderableSavedUserDraw() {
   const activeEventId = state.selectedUserEventDetail?.event?.id
     || state.selectedUserEvent?.id
     || null;
+  const activeEvent = state.selectedUserEventDetail?.event
+    || state.selectedUserEvent
+    || null;
 
-  if (!state.savedEventDraw || !activeEventId) {
+  if (!state.savedEventDraw || !activeEventId || canManageAttendanceForEvent(activeEvent)) {
     return null;
   }
 
@@ -11391,7 +11470,7 @@ async function loadUserEvents() {
     state.userTeamEvents = result.events || [];
     await hydrateUserEventDetailsCache(state.userTeamEvents);
 
-    const nextUserEvent = pickRelevantUserEvent(state.userTeamEvents, { allowPastFallback: true });
+    const nextUserEvent = pickRelevantUserEvent(state.userTeamEvents);
 
     if (nextUserEvent?.id) {
       await openEventForUser(nextUserEvent.id);
@@ -11421,7 +11500,9 @@ function renderUserEvents(events) {
     renderUserTeamDrawPreview();
   }
 
-  if (!events.length) {
+  const upcomingEvents = getUpcomingEvents(events);
+
+  if (!upcomingEvents.length) {
     els.userEventsList.innerHTML = emptyState('Nincs esemény.', 'Ehhez a csapathoz jelenleg nincs publikus vagy látható esemény.');
     return;
   }
@@ -11564,12 +11645,17 @@ async function openEventForUser(eventId) {
   try {
     const result = await api(`/events/${eventId}`, { method: 'GET' });
     markUserEventAsSeen(eventId);
-    state.selectedUserEvent = result.event;
-    state.selectedUserEventDetail = result;
-    state.userEventDetailsById[String(eventId)] = result;
+    const hydratedEvent = mergeEventWithKnownUserContext(result.event, result);
+    state.selectedUserEvent = hydratedEvent;
+    state.selectedUserEventDetail = {
+      ...result,
+      event: hydratedEvent
+    };
+    state.userEventDetailsById[String(eventId)] = state.selectedUserEventDetail;
     await loadSavedEventDraw(eventId);
-    renderUserEventDetail(result);
+    renderHeroEvent(hydratedEvent);
     renderUserOverview();
+    els.nextEventHero?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   } catch (error) {
     showMessage(error.message, 'error');
   }
