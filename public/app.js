@@ -608,6 +608,11 @@ function ensureAuthOnboardingUi() {
     registerPathBlock.className = 'auth-field-block';
     registerPathBlock.innerHTML = `
       <label class="label auth-choice-label">Így indulok</label>
+      <div class="auth-registration-intro">
+        <span class="auth-registration-kicker">Első lépés</span>
+        <h3>Válaszd ki, hogyan érkeztél a platformra</h3>
+        <p>Előbb kiválasztod az induló utat, utána rögtön megadod az adataidat. A rendszer a megfelelő induló munkatérbe visz tovább.</p>
+      </div>
       <div id="registrationPathChooser" class="auth-path-grid">
         ${REGISTRATION_PATH_OPTIONS.map(option => {
           const presentation = getRegistrationPathPresentation(option.value);
@@ -622,7 +627,7 @@ function ensureAuthOnboardingUi() {
               <strong>${escapeHtml(presentation.title)}</strong>
               <p class="auth-path-lead">${escapeHtml(presentation.lead)}</p>
               <div class="auth-path-bullets">
-                ${presentation.bullets.map(item => `<span class="auth-path-chip">${escapeHtml(item)}</span>`).join('')}
+                ${presentation.bullets.slice(0, 3).map(item => `<span class="auth-path-chip">${escapeHtml(item)}</span>`).join('')}
               </div>
               <p class="auth-path-footer">${escapeHtml(presentation.footer)}</p>
             </div>
@@ -2888,6 +2893,13 @@ function renderUserPaymentSummary(source, { forceVisible = false, financeOvervie
   if (!payment) return '';
   if (!forceVisible && payment.is_visible_to_user !== true) return '';
   const projection = buildUserEventPaymentProjection(payment, financeOverview);
+  const carryLabel =
+    projection.debtCarry > 0
+      ? 'Áthozott tartozás'
+      : projection.creditCarry > 0
+        ? 'Levonható előleg'
+        : 'Áthozott egyenleg';
+  const carryAmount = projection.debtCarry > 0 ? projection.debtCarry : projection.creditCarry;
 
   return `
     <div class="payment-summary-box">
@@ -2904,23 +2916,15 @@ function renderUserPaymentSummary(source, { forceVisible = false, financeOvervie
           <div class="detail-value">${escapeHtml(formatMoney(projection.eventAmount))}</div>
         </div>
         <div class="detail-box ${projection.debtCarry > 0 ? 'finance-carry-box is-debt' : projection.creditCarry > 0 ? 'finance-carry-box is-credit' : 'finance-carry-box'}">
-          <div class="detail-label">${projection.debtCarry > 0 ? 'Áthozott tartozás' : projection.creditCarry > 0 ? 'Levonható előleg' : 'Áthozott egyenleg'}</div>
-          <div class="detail-value">${escapeHtml(formatMoney(projection.debtCarry > 0 ? projection.debtCarry : projection.creditCarry))}</div>
+          <div class="detail-label">${carryLabel}</div>
+          <div class="detail-value">${escapeHtml(formatMoney(carryAmount))}</div>
         </div>
         <div class="detail-box">
-          <div class="detail-label">Ebből most fizetendő</div>
+          <div class="detail-label">Most fizetendő</div>
           <div class="detail-value">${escapeHtml(formatMoney(projection.projectedDue))}</div>
         </div>
       </div>
-      <div class="small muted top-space">
-        ${
-          projection.debtCarry > 0
-            ? `Az esemény díjához hozzáadódik a korábbi ${escapeHtml(formatMoney(projection.debtCarry))} tartozásod.`
-            : projection.creditCarry > 0
-              ? `Az esemény díjából levonjuk a korábbi ${escapeHtml(formatMoney(projection.creditCarry))} előlegedet.`
-              : 'Most nincs áthozott tartozásod vagy előleged, ezért a teljes eseménydíj rendezendő.'
-        }
-      </div>
+      <div class="small muted top-space">Ebből látszik, hogy a jelenlegi eseménydíj és a korábbi egyenleg együtt most mennyi rendezést kér.</div>
     </div>
   `;
 }
@@ -3038,6 +3042,7 @@ function saveTeamId(teamId) {
   if (els.teamIdInput) els.teamIdInput.value = teamId;
   if (els.userTeamIdInput) els.userTeamIdInput.value = teamId;
   syncTeamSelectors();
+  syncMyTeamsHighlight();
 }
 
 function clearPendingLinkedEventParams() {
@@ -4680,6 +4685,7 @@ function renderTeamFinanceBalances() {
               ${filteredMembers.map(member => {
                 const stats = member.finance_stats || {};
                 const entries = (state.teamFinanceEntries || []).filter(entry => entry.user_id === member.user_id);
+                const latestEntry = entries[0] || null;
                 return `
                   <details class="admin-collapse finance-member-collapse">
                     <summary>
@@ -4690,37 +4696,24 @@ function renderTeamFinanceBalances() {
                       </span>
                     </summary>
                     <div class="admin-collapse-body stack">
-                      <div class="grid four-col inner-grid attendance-summary-grid">
+                      <div class="grid three-col inner-grid attendance-summary-grid">
                         <div class="detail-box">
                           <div class="detail-label">Aktuális egyenleg</div>
                           <div class="detail-value">${escapeHtml(formatSignedMoney(stats.current_balance_amount || 0))}</div>
                         </div>
                         <div class="detail-box">
-                          <div class="detail-label">Könyvelt esemény</div>
-                          <div class="detail-value">${escapeHtml(String(stats.entry_count || 0))}</div>
-                        </div>
-                        <div class="detail-box">
-                          <div class="detail-label">Elvárt összesen</div>
-                          <div class="detail-value">${escapeHtml(formatMoney(stats.total_expected_amount || 0))}</div>
-                        </div>
-                        <div class="detail-box">
-                          <div class="detail-label">Befizetett összesen</div>
-                          <div class="detail-value">${escapeHtml(formatMoney(stats.total_actual_paid_amount || 0))}</div>
-                        </div>
-                      </div>
-                      <div class="grid three-col inner-grid top-space attendance-summary-grid">
-                        <div class="detail-box finance-carry-box ${stats.debt_amount ? 'is-debt' : ''}">
                           <div class="detail-label">Nyitott tartozás</div>
                           <div class="detail-value">${escapeHtml(formatMoney(stats.debt_amount || 0))}</div>
                         </div>
-                        <div class="detail-box finance-carry-box ${stats.credit_amount ? 'is-credit' : ''}">
+                        <div class="detail-box">
                           <div class="detail-label">Felhasználható előleg</div>
                           <div class="detail-value">${escapeHtml(formatMoney(stats.credit_amount || 0))}</div>
                         </div>
-                        <div class="detail-box finance-carry-box">
-                          <div class="detail-label">Kézi korrekciók</div>
-                          <div class="detail-value">${escapeHtml(formatMoney(stats.total_adjustment_amount || 0))}</div>
-                        </div>
+                      </div>
+                      <div class="small muted">
+                        ${latestEntry
+                          ? `Legutóbb könyvelve: ${escapeHtml(latestEntry.event_title || 'Névtelen esemény')} · ${escapeHtml(formatDateTime(latestEntry.event_start_at || latestEntry.recorded_at || latestEntry.created_at))}`
+                          : 'Ehhez a játékoshoz még nincs könyvelt pénzügyi sor.'}
                       </div>
                       ${
                         getUserPaymentProfile(member)
@@ -4787,7 +4780,7 @@ function renderTeamFinanceBalances() {
                       </div>
                       ${
                         entries.length
-                          ? entries.map(entry => `
+                          ? entries.slice(0, 3).map(entry => `
                               <div class="attendance-row attendance-ledger-row">
                                 <div class="attendance-row-main">
                                   <div class="row between align-center wrap gap">
@@ -4798,7 +4791,7 @@ function renderTeamFinanceBalances() {
                                   <div class="small muted">${renderFinanceEntryLocationLine(entry)}</div>
                                 </div>
                                 <div class="detail-box">
-                                  <div class="detail-label">${escapeHtml(entry.entry_type === 'adjustment' ? 'Korrekció összege' : 'Rendezendő')}</div>
+                                  <div class="detail-label">${escapeHtml(entry.entry_type === 'adjustment' ? 'Korrekció' : 'Rendezendő')}</div>
                                   <div class="detail-value">${escapeHtml(formatMoney(entry.entry_type === 'adjustment' ? Math.abs(entry.actual_paid_amount || 0) : (entry.settlement_target_amount || 0)))}</div>
                                 </div>
                                 <div class="detail-box">
@@ -4933,7 +4926,7 @@ function renderAdminAttendanceManager() {
                     <div class="attendance-row-finance-meta">
                       <span>Esemény díja: <strong>${escapeHtml(formatMoney(getAttendanceExpectedTotalAmount(player, detail)))}</strong></span>
                       <span>Előző: <strong>${escapeHtml(formatSignedMoney(Number(player.finance_balance_before_event || 0)))}</strong></span>
-                      <span>Utána: <strong class="${escapeHtml(getSignedMoneyClass(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}" data-attendance-projected-after data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}</strong></span>
+                      <span>Új egyenleg: <strong class="${escapeHtml(getSignedMoneyClass(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}" data-attendance-projected-after data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}</strong></span>
                     </div>
                   </div>
                   <div class="attendance-row-target">
@@ -4960,6 +4953,7 @@ function renderAdminAttendanceManager() {
                     <div class="detail-label">Állapot</div>
                     <div class="detail-value">${attendanceStatusBadge(player.attendance_status)}</div>
                     <div class="small muted">Befizetve: <span data-attendance-actual-paid data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatMoney(Number(readAttendancePaymentAmountForUser(player.user_id) ?? getAttendancePaymentInputValue(player, detail) ?? 0)))}</span></div>
+                    <div class="small muted">Eltérés most</div>
                     <div class="detail-value ${escapeHtml(getSignedMoneyClass(getAttendanceProjectedDelta(player, detail)))}" data-attendance-payment-delta data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(getAttendanceProjectedDelta(player, detail)))}</div>
                   </div>
                   <div class="attendance-row-actions">
@@ -5642,9 +5636,9 @@ function renderUserOverview() {
   const pendingInvites = state.myInvites.filter(invite => invite.status === 'pending').length;
   const activeTeams = state.myTeams.filter(team => team.membership_status === 'active').length;
   const nextEvent = getNextEvent(state.myEvents);
-  const isInvitePulseActive = pendingInvites > 0 && state.userInvitePulseUntil > Date.now();
+  const isInvitePulseActive = pendingInvites > 0;
   const newEvents = getUserNewEvents(state.myEvents);
-  const isNewEventsPulseActive = newEvents.length > 0 && state.userNewEventsPulseUntil > Date.now();
+  const isNewEventsPulseActive = newEvents.length > 0;
 
   els.userOverviewCards.innerHTML = [
     { label: 'Következő kezdés', value: nextEvent ? formatDateTime(nextEvent.start_at) : 'nincs' },
@@ -5708,8 +5702,6 @@ function clearPendingInviteJumpHighlight() {
 }
 
 function triggerPendingInvitePulse() {
-  clearPendingInvitePulseTimer();
-
   const pendingInvites = state.myInvites.filter(invite => invite.status === 'pending').length;
   if (!pendingInvites) {
     state.userInvitePulseUntil = 0;
@@ -5717,13 +5709,14 @@ function triggerPendingInvitePulse() {
     return;
   }
 
-  state.userInvitePulseUntil = Date.now() + 5000;
+  clearPendingInvitePulseTimer();
+  state.userInvitePulseUntil = Date.now() + 15000;
   renderUserOverview();
   state.userInvitePulseTimer = setTimeout(() => {
     state.userInvitePulseUntil = 0;
     state.userInvitePulseTimer = null;
     renderUserOverview();
-  }, 5000);
+  }, 15000);
 }
 
 function getUserNewEvents(events = state.myEvents) {
@@ -5735,7 +5728,6 @@ function getUserNewEvents(events = state.myEvents) {
       const startAtMs = new Date(event?.start_at).getTime();
       if (Number.isNaN(startAtMs) || startAtMs < now) return false;
       if (event?.status !== 'published') return false;
-      if (!canAttemptEventRegistration(event)) return false;
       return !seenIds.has(String(event.id));
     })
     .sort((a, b) => {
@@ -5753,8 +5745,6 @@ function markUserEventAsSeen(eventId) {
 }
 
 function triggerUserNewEventsPulse() {
-  clearUserNewEventsPulseTimer();
-
   const newEvents = getUserNewEvents(state.myEvents);
   if (!newEvents.length) {
     state.userNewEventsPulseUntil = 0;
@@ -5762,13 +5752,14 @@ function triggerUserNewEventsPulse() {
     return;
   }
 
-  state.userNewEventsPulseUntil = Date.now() + 5000;
+  clearUserNewEventsPulseTimer();
+  state.userNewEventsPulseUntil = Date.now() + 15000;
   renderUserOverview();
   state.userNewEventsPulseTimer = setTimeout(() => {
     state.userNewEventsPulseUntil = 0;
     state.userNewEventsPulseTimer = null;
     renderUserOverview();
-  }, 5000);
+  }, 15000);
 }
 
 async function jumpToNewestUnregisteredEvent() {
@@ -6093,7 +6084,11 @@ function renderUserFinanceModule() {
     return;
   }
 
-  const visibleEntries = finance.entries.slice(0, 5);
+  const visibleEntries = finance.entries.slice(0, 3);
+  const latestEntry = visibleEntries[0] || finance.entries[0] || null;
+  const eventPaymentLink = getEventPaymentLinkProfile(focusEvent);
+  const captain = getTeamCaptainMember();
+  const captainProfile = getUserPaymentProfile(captain);
 
   els.userFinanceModule.innerHTML = `
     <div class="stack">
@@ -6111,51 +6106,39 @@ function renderUserFinanceModule() {
             <div class="detail-value">${escapeHtml(String(finance.entry_count || 0))}</div>
           </div>
           <div class="detail-box">
-            <div class="detail-label">Elvárt összesen</div>
-            <div class="detail-value">${escapeHtml(formatMoney(finance.total_expected_amount || 0))}</div>
+            <div class="detail-label">Nyitott tartozás</div>
+            <div class="detail-value">${escapeHtml(formatMoney(finance.debt_amount || 0))}</div>
           </div>
           <div class="detail-box">
-            <div class="detail-label">Befizetett összesen</div>
-            <div class="detail-value">${escapeHtml(formatMoney(finance.total_actual_paid_amount || 0))}</div>
+            <div class="detail-label">Felhasználható előleg</div>
+            <div class="detail-value">${escapeHtml(formatMoney(finance.credit_amount || 0))}</div>
           </div>
         </div>
-        <div class="grid two-col inner-grid top-space">
-          ${renderFinanceCarryCard(finance)}
-          <div class="detail-box finance-carry-box">
-            <div class="detail-label">Kézi korrekciók</div>
-            <div class="detail-value">${escapeHtml(formatMoney(finance.total_adjustment_amount || 0))}</div>
-            <div class="small muted">${escapeHtml(String(finance.adjustment_count || 0))} külön pénzügyi korrekció lett eddig rögzítve nálad.</div>
-          </div>
+        <div class="small muted top-space">
+          ${latestEntry
+            ? `Legutóbb könyvelve: ${escapeHtml(latestEntry.event_title || 'Névtelen esemény')} · ${escapeHtml(formatDateTime(latestEntry.event_start_at || latestEntry.recorded_at || latestEntry.created_at))}`
+            : 'Még nincs utolsó könyvelt mozgás.'}
         </div>
       </div>
       ${captainPaymentCard}
       ${visibleEntries.map(entry => `
-        <div class="event-card attendance-ledger-row">
-          <div class="attendance-row-main">
-            <div class="row between align-center wrap gap">
-              <div class="attendance-row-name">${escapeHtml(entry.event_title || 'Névtelen esemény')}</div>
-              ${renderFinanceEntryTypeBadge(entry.entry_type)}
-            </div>
-            <div class="small muted">${escapeHtml(formatDateTime(entry.event_start_at))}</div>
-            <div class="small muted">${renderFinanceEntryLocationLine(entry)}</div>
+        <div class="event-card finance-history-row">
+          <div class="finance-history-main">
+            <strong>${escapeHtml(entry.event_title || 'Névtelen esemény')}</strong>
+            <span class="small muted">${escapeHtml(formatDateTime(entry.event_start_at || entry.recorded_at || entry.created_at))}</span>
           </div>
-          <div class="grid four-col inner-grid top-space attendance-summary-grid">
-            <div class="detail-box">
-              <div class="detail-label">${escapeHtml(renderFinanceEntryExpectedLabel(entry))}</div>
-              <div class="detail-value">${escapeHtml(formatMoney(entry.entry_type === 'adjustment' ? Math.abs(entry.actual_paid_amount || 0) : (entry.expected_total_amount || 0)))}</div>
-            </div>
-            <div class="detail-box">
-              <div class="detail-label">Befizetett</div>
-              <div class="detail-value">${escapeHtml(formatMoney(entry.actual_paid_amount || 0))}</div>
-            </div>
-            <div class="detail-box">
-              <div class="detail-label">Eltérés</div>
-              <div class="detail-value ${Number(entry.event_delta_amount ?? entry.delta_amount ?? 0) > 0 ? 'finance-delta-positive' : Number(entry.event_delta_amount ?? entry.delta_amount ?? 0) < 0 ? 'finance-delta-negative' : 'finance-delta-neutral'}">${escapeHtml(formatSignedMoney(entry.event_delta_amount ?? entry.delta_amount ?? 0))}</div>
-            </div>
-            <div class="detail-box">
-              <div class="detail-label">Új egyenleg</div>
-              <div class="detail-value">${escapeHtml(formatSignedMoney(entry.balance_after_event ?? entry.balance_after_amount ?? 0))}</div>
-            </div>
+          <div class="finance-history-amount">${escapeHtml(formatMoney(entry.actual_paid_amount || 0))}</div>
+          <div class="finance-history-balance ${Number(entry.balance_after_event ?? entry.balance_after_amount ?? 0) > 0 ? 'finance-delta-positive' : Number(entry.balance_after_event ?? entry.balance_after_amount ?? 0) < 0 ? 'finance-delta-negative' : 'finance-delta-neutral'}">${escapeHtml(formatSignedMoney(entry.balance_after_event ?? entry.balance_after_amount ?? 0))}</div>
+          <div class="finance-history-action">
+            ${
+              Number(entry.balance_after_event ?? entry.balance_after_amount ?? 0) < 0
+                ? eventPaymentLink
+                  ? `<a class="btn btn-inline-link" href="${escapeHtml(eventPaymentLink.url)}" target="_blank" rel="noopener noreferrer">Tartozás rendezése · ${escapeHtml(eventPaymentLink.providerLabel)}</a>`
+                  : captainProfile?.qrDataUrl
+                    ? `<button class="btn" type="button" data-payment-qr-user-id="${escapeHtml(captain?.user_id || '')}" data-payment-qr-role="captain">Tartozás rendezése</button>`
+                    : `<button class="btn btn-secondary" type="button" data-open-event-id="${escapeHtml(entry.event_id || '')}">Esemény megtekintése</button>`
+                : `<button class="btn btn-secondary" type="button" data-open-event-id="${escapeHtml(entry.event_id || '')}">Esemény megtekintése</button>`
+            }
           </div>
         </div>
       `).join('')}
@@ -8608,14 +8591,14 @@ function renderMyTeams(teams) {
   els.myTeamsList.innerHTML = sortedTeams.map(team => {
     const isCurrent = team.id === state.currentTeamId;
     return `
-      <div class="event-card compact-team-card ${isCurrent ? 'is-current-card' : ''}">
+      <div class="event-card compact-team-card ${isCurrent ? 'is-current-card' : ''}" data-my-team-card-id="${team.id}">
         <div class="row between align-center wrap gap">
           <div>
             <strong>${escapeHtml(team.name)}</strong>
             <div class="small muted">${escapeHtml(formatTeamRole(team.role))} · azonosító: ${escapeHtml(shortId(team.id))}</div>
           </div>
           <div class="row gap align-center wrap">
-            ${isCurrent ? '<span class="badge badge-draft">fókuszcsapat</span>' : ''}
+            <span class="badge badge-draft ${isCurrent ? '' : 'hidden'}" data-my-team-focus-badge="${team.id}">fókuszcsapat</span>
             <button class="btn btn-secondary" type="button" data-my-team-id="${team.id}">
               Megnyitás
             </button>
@@ -8624,6 +8607,20 @@ function renderMyTeams(teams) {
       </div>
     `;
   }).join('');
+}
+
+function syncMyTeamsHighlight() {
+  if (!els.myTeamsList) return;
+
+  els.myTeamsList.querySelectorAll('[data-my-team-card-id]').forEach(card => {
+    const isCurrent = card.getAttribute('data-my-team-card-id') === String(state.currentTeamId || '');
+    card.classList.toggle('is-current-card', isCurrent);
+  });
+
+  els.myTeamsList.querySelectorAll('[data-my-team-focus-badge]').forEach(badge => {
+    const isCurrent = badge.getAttribute('data-my-team-focus-badge') === String(state.currentTeamId || '');
+    badge.classList.toggle('hidden', !isCurrent);
+  });
 }
 
 function syncTeamSelectors() {
@@ -8889,6 +8886,8 @@ async function loadTeam(teamId) {
   try {
     const result = await api(`/teams/${teamId}`, { method: 'GET' });
     saveTeamId(teamId);
+    renderMyTeams(state.myTeams);
+    syncTeamSelectors();
 
     state.currentTeam = result.team;
     state.currentTeamFinance = result.current_user_finance || null;
@@ -8928,13 +8927,19 @@ async function loadTeam(teamId) {
 
     await Promise.all([
       canAccessAdminView() ? loadAdminEvents() : Promise.resolve(),
-      loadUserEvents(),
       loadMyEvents(),
       loadMyInvites()
     ]);
+
+    // The team-specific user event load must run after the global "my events"
+    // refresh, otherwise the two async renders race and the global focus can
+    // overwrite the selected team's focus event.
+    await loadUserEvents();
     if (state.currentTeam) {
       renderTeamSummary(state.currentTeam);
     }
+    renderMyTeams(state.myTeams);
+    syncTeamSelectors();
     showMessage('Csapat betöltve.', 'success');
   } catch (error) {
     clearCurrentTeamContext({ clearStored: true });
@@ -11963,6 +11968,10 @@ function bindEvents() {
 
   if (els.nextEventHero) {
     els.nextEventHero.addEventListener('click', handleDashboardClicks);
+  }
+
+  if (els.userFinanceModule) {
+    els.userFinanceModule.addEventListener('click', handleDashboardClicks);
   }
 
   if (els.teamMembersAdminList) {

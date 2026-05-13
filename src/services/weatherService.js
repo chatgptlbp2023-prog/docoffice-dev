@@ -30,6 +30,7 @@ const WEATHER_CODE_MAP = Object.freeze({
 });
 
 const SEVERE_WEATHER_CODES = new Set([65, 67, 75, 82, 86, 95, 96, 99]);
+const EVENT_TIMEZONE = 'Europe/Budapest';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -178,7 +179,14 @@ function buildWeatherAlert(weather) {
 }
 
 function buildWeatherAlertEmail({ event, teamName, weatherAlert }) {
-  const whenLabel = new Date(event.start_at).toLocaleString('hu-HU');
+  const whenLabel = new Date(event.start_at).toLocaleString('hu-HU', {
+    timeZone: EVENT_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
   const locationLabel = weatherAlert?.weather?.locationLabel || buildWeatherLocationQuery(event) || '-';
   const subject = `Idojarasi figyelmeztetes: ${event.title}`;
   const text = [

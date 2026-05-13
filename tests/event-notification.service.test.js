@@ -129,9 +129,86 @@ describe('Event notification service', () => {
     expect(payload.html).toContain('Esemeny megnyitasa');
     expect(payload.html).toContain('Milyen palya');
     expect(payload.html).toContain('Mennyi penz');
+    expect(payload.html).toContain('2026. 06. 12. 20:30');
+    expect(payload.text).toContain('2026. 06. 12. 20:30');
     expect(payload.html).toContain('https://app.example.com/?teamId=');
     expect(payload.html).toContain('https://app.example.com/api/event-email-actions/');
     expect(payload.text).toContain('Belepes a feluletre: https://app.example.com/');
     expect(payload.text).toContain('Jelentkezem: https://app.example.com/api/event-email-actions/');
+  });
+
+  test('uj jelentkezo level tartalmazza a mar jelentkezettek nevsorat', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_notify_${runId}@example.com`);
+    const firstMemberId = await createUser('Anna', `anna_notify_${runId}@example.com`);
+    const secondMemberId = await createUser('Bela', `bela_notify_${runId}@example.com`);
+    const registrantId = await createUser('Csaba', `csaba_notify_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Ertesites FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, firstMemberId, 'member');
+    await addMembership(teamId, secondMemberId, 'member');
+    await addMembership(teamId, registrantId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Penteki meccs', 'Jelentkezesi email teszt', '2026-06-19T18:30:00.000Z', 'Teskand palya', '1117 Budapest, Pelda koz 2.', 5, 12, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyAllOnNewRegistration":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, registered_at, created_at, updated_at
+      )
+      values
+        ($1, $4, $5, $6, 'going', now() - interval '10 minutes', now(), now()),
+        ($2, $4, $5, $7, 'waiting_list', now() - interval '8 minutes', now(), now()),
+        ($3, $4, $5, $8, 'going', now() - interval '2 minutes', now(), now())
+      `,
+      [randomUUID(), randomUUID(), randomUUID(), eventId, teamId, firstMemberId, secondMemberId, registrantId]
+    );
+
+    const result = await eventNotificationService.notifyRegistrationActivity({
+      eventId,
+      actorUserId: registrantId,
+      registrationStatus: 'going',
+      includeNewRegistrationNotification: true
+    });
+
+    expect(result.newRegistration.sentCount).toBeGreaterThan(0);
+    const sentPayloads = sendEmail.mock.calls.map(call => call[0]);
+    expect(sentPayloads.some(payload => payload.html.includes('Mar jelentkeztek:'))).toBe(true);
+    expect(sentPayloads.some(payload => payload.html.includes('Anna, Bela, Csaba'))).toBe(true);
+    expect(sentPayloads.some(payload => payload.text.includes('Mar jelentkeztek: Anna, Bela, Csaba'))).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ const {
 
 const ACTIVE_EVENT_REGISTRATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank'];
 const ALL_EVENT_NOTIFICATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank', 'cancelled'];
+const EVENT_TIMEZONE = 'Europe/Budapest';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -51,7 +52,19 @@ function uniqueRecipients(rows = [], { excludeUserIds = [] } = {}) {
 }
 
 function formatEventDateTime(value) {
-  return new Date(value).toLocaleString('hu-HU');
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+
+  return date.toLocaleString('hu-HU', {
+    timeZone: EVENT_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 }
 
 function formatMoney(value) {
@@ -249,6 +262,20 @@ function buildActionButtonsHtml(actions = []) {
   `).join('');
 }
 
+function buildActiveRegistrationNames(context) {
+  const seen = new Set();
+  return (context?.registrations || [])
+    .filter(item => ACTIVE_EVENT_REGISTRATION_STATUSES.includes(item.registration_status))
+    .map(item => String(item?.name || '').trim())
+    .filter(Boolean)
+    .filter(name => {
+      const normalized = name.toLowerCase();
+      if (seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+}
+
 function buildEventCreatedEmail(context, recipient) {
   const copy = buildEventBaseCopy(context);
   const registerToken = buildEventEmailActionToken({
@@ -311,6 +338,10 @@ function buildEventCreatedEmail(context, recipient) {
 
 function buildNewRegistrationEmail(context, registrationUserName, registrationStatus) {
   const copy = buildEventBaseCopy(context);
+  const activeRegistrationNames = buildActiveRegistrationNames(context);
+  const activeRegistrationNamesLabel = activeRegistrationNames.length
+    ? activeRegistrationNames.join(', ')
+    : 'Még nincs más aktív jelentkező.';
   const statusLabel =
     registrationStatus === 'going' ? 'going' :
     registrationStatus === 'waiting_list' ? 'varolista' :
@@ -322,13 +353,15 @@ function buildNewRegistrationEmail(context, registrationUserName, registrationSt
     `${registrationUserName} uj jelentkezest adott le a(z) ${copy.eventTitle} esemenyre.`,
     `Statusz: ${statusLabel}`,
     `Idopont: ${copy.whenLabel}`,
-    `Helyszin: ${copy.locationLabel}`
+    `Helyszin: ${copy.locationLabel}`,
+    `Mar jelentkeztek: ${activeRegistrationNamesLabel}`
   ].join('\n');
   const html = `
     <div style="font-family:Segoe UI,Arial,sans-serif;line-height:1.5;color:#1f2937;">
       <h2>Uj jelentkezo</h2>
       <p><strong>${escapeHtml(registrationUserName)}</strong> uj jelentkezest adott le a(z) <strong>${escapeHtml(copy.eventTitle)}</strong> esemenyre.</p>
       <p><strong>Statusz:</strong> ${escapeHtml(statusLabel)}<br /><strong>Idopont:</strong> ${escapeHtml(copy.whenLabel)}<br /><strong>Helyszin:</strong> ${escapeHtml(copy.locationLabel)}</p>
+      <p><strong>Mar jelentkeztek:</strong> ${escapeHtml(activeRegistrationNamesLabel)}</p>
     </div>
   `;
   return { subject, text, html };
