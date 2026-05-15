@@ -310,6 +310,20 @@
                 </div>
               </div>
 
+              <div class="grid two-col inner-grid">
+                <div>
+                  <label class="label" for="eventLocationAddress">Pontos cim</label>
+                  <input id="eventLocationAddress" type="text" inputmode="search" placeholder="pl. 1046 Budapest, Oceanarok 23" />
+                </div>
+                <div class="stack">
+                  <label class="label" for="eventOpenMapsSearchBtn">Google Maps segito</label>
+                  <div class="row gap wrap align-center">
+                    <button id="eventOpenMapsSearchBtn" class="btn btn-secondary" type="button" data-open-maps-search="event">Google Maps megnyitasa</button>
+                    <div id="eventLocationAssistStatus" class="small muted">A pontos cim segiti az utvonaltervet es az idojaras modult.</div>
+                  </div>
+                </div>
+              </div>
+
               <div class="grid three-col inner-grid">
                 <div>
                   <label class="label" for="eventMinPlayers">Min játékos</label>
@@ -590,6 +604,16 @@
           <div id="userOverviewCards" class="overview-grid compact-overview"></div>
         </div>
 
+        <div class="card top-space hidden" hidden>
+          <div class="row between align-center section-header-wrap">
+            <div>
+              <h2>KĂ¶vetkezĹ‘ 7 nap</h2>
+              <div class="small muted section-note">IdĹ‘rendi nĂ©zet a kĂ¶vetkezĹ‘ 7 napra. A szĂ­nek a csapatokat jelĂ¶lik, egy blokkra kattintva pedig felĂĽl fĂłkuszba kerĂĽl az adott esemĂ©ny.</div>
+            </div>
+          </div>
+          <div id="myEventsListDuplicateBottom" class="stack"></div>
+        </div>
+
         <div class="card hero-card top-space" data-layout-item data-layout-key="user-next-event" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
           <div class="row between align-center hero-headline-row">
             <div>
@@ -599,6 +623,16 @@
           </div>
           <div id="nextEventHero" class="top-space"></div>
           <div id="userTeamDrawPreview"></div>
+        </div>
+
+        <div class="card top-space hidden" hidden>
+          <div class="row between align-center section-header-wrap">
+            <div>
+              <h2>Következő 7 nap</h2>
+              <div class="small muted section-note">Időrendi nézet a következő 7 napra. A színek a csapatokat jelölik, egy blokkra kattintva pedig felül fókuszba kerül az adott esemény.</div>
+            </div>
+          </div>
+          <div id="myEventsListLegacy" class="stack"></div>
         </div>
 
           <div class="grid one-col top-space" data-layout-item data-layout-key="user-rank-weather" data-default-col-span="12" data-default-row-span="1" data-min-col-span="6" data-max-col-span="12">
@@ -651,7 +685,7 @@
           </div>
         </div>
 
-        <div class="card top-space secondary-user-card" data-layout-item data-layout-key="user-team-events" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
+        <div class="card top-space secondary-user-card hidden" hidden>
           <div class="row between align-center section-header-wrap">
             <div>
               <h2>Fókuszcsapat teljes eseménylistája</h2>

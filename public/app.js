@@ -33,6 +33,7 @@ const state = {
   skillSettingsSaving: false,
   countdownTimer: null,
   googleAuthConfig: null,
+  googleMapsConfig: null,
   versionInfo: null,
   pendingInviteToken: initialUrlParams.get('invite') || '',
   pendingLinkedTeamId: initialUrlParams.get('teamId') || '',
@@ -1319,7 +1320,7 @@ function getSurfaceItems(viewId) {
 }
 
 function getDefaultSurfaceLayout(viewId) {
-  return getSurfaceItems(viewId).map((item, index) => ({
+  const defaults = getSurfaceItems(viewId).map((item, index) => ({
     key: item.dataset.layoutKey,
     order: index,
     colSpan: clamp(
@@ -1333,6 +1334,8 @@ function getDefaultSurfaceLayout(viewId) {
       Number(item.dataset.maxRowSpan || SURFACE_LAYOUT_MAX_ROW_SPAN) || SURFACE_LAYOUT_MAX_ROW_SPAN
     )
   }));
+
+  return viewId === 'userView' ? migrateUserViewSurfaceLayout(defaults) : defaults;
 }
 
 function normalizeSurfaceLayout(viewId, layout) {
@@ -1375,11 +1378,43 @@ function normalizeSurfaceLayout(viewId, layout) {
     .map((entry, index) => ({ ...entry, order: index }));
 }
 
+function migrateUserViewSurfaceLayout(layout) {
+  const items = Array.isArray(layout) ? layout.map(entry => ({ ...entry })) : [];
+  if (!items.length) return items;
+
+  const orderByKey = ['user-overview', 'user-my-events', 'user-next-event'];
+  let changed = false;
+  let nextPinnedIndex = 0;
+
+  orderByKey.forEach(key => {
+    const index = items.findIndex(entry => entry.key === key);
+    if (index === -1) return;
+
+    if (index !== nextPinnedIndex) {
+      const [entry] = items.splice(index, 1);
+      items.splice(nextPinnedIndex, 0, entry);
+      changed = true;
+    }
+    nextPinnedIndex += 1;
+  });
+
+  if (!changed) {
+    return items.map((entry, index) => ({ ...entry, order: index }));
+  }
+
+  return items.map((entry, index) => ({ ...entry, order: index }));
+}
+
 function loadSurfaceLayout(viewId) {
   try {
     const raw = localStorage.getItem(`${SURFACE_LAYOUT_STORAGE_PREFIX}${viewId}`);
     if (!raw) return getDefaultSurfaceLayout(viewId);
-    return normalizeSurfaceLayout(viewId, JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    const migrated = viewId === 'userView' ? migrateUserViewSurfaceLayout(parsed) : parsed;
+    if (viewId === 'userView' && JSON.stringify(parsed) !== JSON.stringify(migrated)) {
+      localStorage.setItem(`${SURFACE_LAYOUT_STORAGE_PREFIX}${viewId}`, JSON.stringify(migrated));
+    }
+    return normalizeSurfaceLayout(viewId, migrated);
   } catch {
     return getDefaultSurfaceLayout(viewId);
   }
@@ -2316,6 +2351,24 @@ function ensureUnifiedAdminEventFormUi() {
   syncUnifiedAdminEventFormMode();
 }
 
+function ensureUserDashboardLayout() {
+  const heroCard = els.nextEventHero?.closest('.card');
+  const myEventsCard = els.myEventsList?.closest('.card');
+  if (heroCard && myEventsCard && myEventsCard.nextElementSibling !== heroCard) {
+    heroCard.insertAdjacentElement('beforebegin', myEventsCard);
+  }
+
+  const myEventsHeader = myEventsCard?.querySelector('h2');
+  if (myEventsHeader) {
+    myEventsHeader.textContent = 'Következő 7 nap';
+  }
+
+  const myEventsNote = myEventsCard?.querySelector('.section-note');
+  if (myEventsNote) {
+    myEventsNote.textContent = 'Időrendi nézet a következő 7 napra. A színek a csapatokat jelölik, egy blokkra kattintva pedig felül fókuszba kerül az adott esemény.';
+  }
+}
+
 function getAdminEventFormSectionButtons() {
   return [...document.querySelectorAll('[data-admin-event-form-section]')];
 }
@@ -2560,6 +2613,7 @@ function ensureAdminEventFormSections() {
   moveToPanel(document.getElementById('eventTitle')?.closest('.grid'), 'basics');
   moveToPanel(document.getElementById('eventDescription')?.closest('div'), 'basics');
   moveToPanel(document.getElementById('eventStartAt')?.closest('.grid'), 'basics');
+  moveToPanel(document.getElementById('eventLocationAddress')?.closest('.grid'), 'basics');
 
   moveToPanel(document.getElementById('eventMinPlayers')?.closest('.grid'), 'logistics');
   moveToPanel(document.getElementById('eventSubstitutesEnabled')?.closest('.top-space'), 'logistics');
@@ -2618,6 +2672,10 @@ function resetUnifiedAdminEventForm() {
   document.getElementById('eventMinPlayers').value = 10;
   document.getElementById('eventPlayersOnField').value = 10;
   document.getElementById('eventSubstitutes').value = 0;
+  const locationAddressInput = document.getElementById('eventLocationAddress');
+  if (locationAddressInput) {
+    locationAddressInput.value = '';
+  }
   document.getElementById('eventStatus').value = 'published';
   document.getElementById('eventPricingMode').value = EVENT_PRICING_MODES.FREE;
   document.getElementById('eventPerPlayerFee').value = '0';
@@ -2645,6 +2703,10 @@ function populateUnifiedAdminEventForm(event) {
   document.getElementById('eventDescription').value = event.description || '';
   document.getElementById('eventStartAt').value = toDateTimeLocalInput(event.start_at);
   document.getElementById('eventLocation').value = event.location_name || '';
+  const locationAddressInput = document.getElementById('eventLocationAddress');
+  if (locationAddressInput) {
+    locationAddressInput.value = event.location_address || '';
+  }
   document.getElementById('eventMinPlayers').value = event.min_players ?? '';
   document.getElementById('eventPlayersOnField').value = event.players_on_field_total ?? '';
   document.getElementById('eventRulesText').value = event.rules_text || '';
@@ -3338,6 +3400,123 @@ async function loadGoogleAuthConfig() {
   }
 }
 
+function buildMapsSearchUrlForQuery(query) {
+  const normalized = String(query || '').trim();
+  if (!normalized) return '';
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(normalized)}`;
+}
+
+function setLocationAssistStatus(message, tone = 'muted') {
+  const element = document.getElementById('eventLocationAssistStatus');
+  if (!element) return;
+  element.textContent = message;
+  element.className = `small ${tone === 'success' ? 'success-text' : tone === 'warning' ? 'warning-text' : 'muted'}`;
+}
+
+function getLocationSearchQuery() {
+  const address = document.getElementById('eventLocationAddress')?.value?.trim() || '';
+  const locationName = document.getElementById('eventLocation')?.value?.trim() || '';
+  return address || locationName || '';
+}
+
+function openEventLocationInGoogleMaps() {
+  const url = buildMapsSearchUrlForQuery(getLocationSearchQuery());
+  if (!url) {
+    showMessage('Adj meg helyszint vagy pontos cimet a Google Maps megnyitasahoz.', 'error');
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+async function ensureGoogleMapsPlacesApi() {
+  if (state.googleMapsConfig?.enabled !== true || !state.googleMapsConfig?.apiKey) {
+    return false;
+  }
+
+  if (window.google?.maps?.places?.Autocomplete) {
+    return true;
+  }
+
+  if (googleMapsLoaderPromise) {
+    return googleMapsLoaderPromise;
+  }
+
+  googleMapsLoaderPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(state.googleMapsConfig.apiKey)}&libraries=places&language=hu&region=HU`;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve(Boolean(window.google?.maps?.places?.Autocomplete));
+    script.onerror = () => reject(new Error('A Google Maps betoltese nem sikerult.'));
+    document.head.appendChild(script);
+  }).catch(error => {
+    googleMapsLoaderPromise = null;
+    setLocationAssistStatus(error.message, 'warning');
+    return false;
+  });
+
+  return googleMapsLoaderPromise;
+}
+
+function bindEventLocationAutocomplete() {
+  const addressInput = document.getElementById('eventLocationAddress');
+  const locationInput = document.getElementById('eventLocation');
+  if (!addressInput || !locationInput || addressInput.dataset.mapsAutocompleteBound === 'true') {
+    return;
+  }
+  if (!window.google?.maps?.places?.Autocomplete) {
+    return;
+  }
+
+  const autocomplete = new window.google.maps.places.Autocomplete(addressInput, {
+    fields: ['formatted_address', 'name'],
+    componentRestrictions: { country: 'hu' }
+  });
+
+  autocomplete.addListener('place_changed', () => {
+    const place = autocomplete.getPlace();
+    if (place?.formatted_address) {
+      addressInput.value = place.formatted_address;
+    }
+    if (place?.name && !locationInput.value.trim()) {
+      locationInput.value = place.name;
+    }
+    setLocationAssistStatus('Google cimvalasztas aktiv. Valassz egy talalatot a listabol.', 'success');
+  });
+
+  addressInput.dataset.mapsAutocompleteBound = 'true';
+}
+
+async function initializeGoogleMapsAddressAssist() {
+  if (state.googleMapsConfig?.enabled !== true) {
+    setLocationAssistStatus('Google Places nincs bekotve. Kezi cimbevitel marad, de a Maps gomb hasznalhato.', 'muted');
+    return;
+  }
+
+  setLocationAssistStatus('Google cimjavaslat betoltese...', 'muted');
+  const loaded = await ensureGoogleMapsPlacesApi();
+  if (!loaded) {
+    return;
+  }
+
+  bindEventLocationAutocomplete();
+  setLocationAssistStatus('Google cimjavaslat aktiv. A pontos cim mezoben valassz a talalatok kozul.', 'success');
+}
+
+async function loadGoogleMapsConfig() {
+  try {
+    const result = await api('/auth/maps/config', {
+      method: 'GET',
+      headers: state.token ? undefined : {}
+    });
+    state.googleMapsConfig = result;
+  } catch {
+    state.googleMapsConfig = { enabled: false, apiKey: null };
+  }
+
+  await initializeGoogleMapsAddressAssist();
+}
+
 async function loadVersionInfo() {
   try {
     const result = await api('/version', {
@@ -3634,7 +3813,34 @@ const WEATHER_CODE_MAP = Object.freeze({
 });
 
 const weatherCache = new Map();
-const weatherLocationCache = new Map();
+let googleMapsLoaderPromise = null;
+const USER_HOLIDAY_DATES = new Set([
+  '2026-01-01',
+  '2026-01-02',
+  '2026-03-15',
+  '2026-04-03',
+  '2026-04-06',
+  '2026-05-01',
+  '2026-05-25',
+  '2026-08-20',
+  '2026-08-21',
+  '2026-10-23',
+  '2026-11-01',
+  '2026-12-24',
+  '2026-12-25',
+  '2026-12-26',
+  '2027-01-01',
+  '2027-03-15',
+  '2027-03-26',
+  '2027-03-29',
+  '2027-05-01',
+  '2027-05-17',
+  '2027-08-20',
+  '2027-10-23',
+  '2027-11-01',
+  '2027-12-25',
+  '2027-12-26'
+]);
 
 function statusBadge(status) {
   const map = {
@@ -3801,41 +4007,6 @@ function getWeatherCodeMeta(code) {
   return WEATHER_CODE_MAP[Number(code)] || { label: 'Ismeretlen időjárás', icon: '🌤️' };
 }
 
-async function geocodeWeatherLocation(query) {
-  if (weatherLocationCache.has(query)) {
-    return weatherLocationCache.get(query);
-  }
-
-  const promise = (async () => {
-    const params = new URLSearchParams({
-      name: query,
-      count: '1',
-      language: 'hu',
-      format: 'json'
-    });
-    const response = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error('A helyszín geokódolása most nem sikerült.');
-    }
-
-    const payload = await response.json();
-    const firstResult = payload?.results?.[0];
-    if (!firstResult) {
-      throw new Error('Ehhez a helyszínhez nem találtam időjárási koordinátát.');
-    }
-
-    return {
-      latitude: firstResult.latitude,
-      longitude: firstResult.longitude,
-      name: firstResult.name,
-      country: firstResult.country
-    };
-  })();
-
-  weatherLocationCache.set(query, promise);
-  return promise;
-}
-
 async function fetchEventWeather(event) {
   const cacheKey = getEventWeatherCacheKey(event);
   if (weatherCache.has(cacheKey)) {
@@ -3843,68 +4014,27 @@ async function fetchEventWeather(event) {
   }
 
   const promise = (async () => {
-    const query = getEventWeatherQuery(event);
-    if (!query) {
+    if (!event?.id) {
+      throw new Error('Az eseményhez nincs időjárási azonosító.');
+    }
+
+    if (!getEventWeatherQuery(event)) {
       throw new Error('Az eseményhez nincs megadva használható helyszín.');
     }
 
-    const eventDate = new Date(event.start_at);
-    if (Number.isNaN(eventDate.getTime())) {
-      throw new Error('Az esemény kezdési időpontja nem értelmezhető.');
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const forecastLimit = new Date(today);
-    forecastLimit.setDate(forecastLimit.getDate() + 15);
-    if (eventDate > forecastLimit) {
-      throw new Error('Az előrejelzés ehhez az eseményhez még túl távoli, később lesz elérhető.');
-    }
-
-    const location = await geocodeWeatherLocation(query);
-    const startDate = today.toISOString().slice(0, 10);
-    const endDate = eventDate.toISOString().slice(0, 10);
-    const params = new URLSearchParams({
-      latitude: String(location.latitude),
-      longitude: String(location.longitude),
-      hourly: 'temperature_2m,precipitation_probability,weather_code,wind_speed_10m',
-      timezone: 'auto',
-      start_date: startDate,
-      end_date: endDate
-    });
-    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error('Az időjárási előrejelzés betöltése sikertelen.');
-    }
-
-    const payload = await response.json();
-    const times = payload?.hourly?.time || [];
-    if (!times.length) {
-      throw new Error('Ehhez az eseményhez most nincs elérhető időjárási adat.');
-    }
-
-    let nearestIndex = 0;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-    times.forEach((time, index) => {
-      const distance = Math.abs(new Date(time).getTime() - eventDate.getTime());
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestIndex = index;
-      }
+    const result = await api(`/events/${encodeURIComponent(event.id)}/weather`, {
+      method: 'GET'
     });
 
-    const weatherCode = payload.hourly.weather_code?.[nearestIndex];
-    const weatherMeta = getWeatherCodeMeta(weatherCode);
+    if (!result?.available || !result.weather) {
+      throw new Error(result?.message || 'Ehhez az eseményhez most nincs elérhető időjárási adat.');
+    }
 
+    const weatherMeta = getWeatherCodeMeta(result.weather.weatherCode);
     return {
-      locationLabel: [location.name, location.country].filter(Boolean).join(', '),
-      forecastTime: times[nearestIndex],
-      temperature: payload.hourly.temperature_2m?.[nearestIndex],
-      precipitationProbability: payload.hourly.precipitation_probability?.[nearestIndex],
-      windSpeed: payload.hourly.wind_speed_10m?.[nearestIndex],
-      weatherCode,
-      weatherLabel: weatherMeta.label,
-      weatherIcon: weatherMeta.icon
+      ...result.weather,
+      weatherLabel: result.weather.weatherLabel || weatherMeta.label,
+      weatherIcon: result.weather.weatherIcon || weatherMeta.icon
     };
   })();
 
@@ -5228,6 +5358,136 @@ function buildTeamAccent(event) {
     soft: `hsla(${hue}, 78%, 52%, 0.12)`,
     badge: `hsla(${hue}, 78%, 52%, 0.18)`
   };
+}
+
+function startOfDayTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function formatSevenDayBoardDateLabel(timestamp) {
+  const date = new Date(timestamp);
+  return date.toLocaleDateString('hu-HU', {
+    month: '2-digit',
+    day: '2-digit'
+  });
+}
+
+function formatSevenDayBoardWeekdayLabel(timestamp) {
+  const date = new Date(timestamp);
+  return date.toLocaleDateString('hu-HU', {
+    weekday: 'long'
+  });
+}
+
+function formatBoardDayKey(timestamp) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function isBoardWeekend(timestamp) {
+  const date = new Date(timestamp);
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+function isBoardHoliday(timestamp, items = []) {
+  const dayKey = formatBoardDayKey(timestamp);
+  if (USER_HOLIDAY_DATES.has(dayKey)) {
+    return true;
+  }
+
+  return (items || []).some(item => Boolean(item?.holidayWarning));
+}
+
+function formatSevenDayBoardTimeLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--:--';
+  return date.toLocaleTimeString('hu-HU', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function buildUserSevenDayBoardDays(events = [], options = {}) {
+  const now = options.now instanceof Date ? options.now : new Date();
+  const startTs = startOfDayTimestamp(now);
+  const visibleEvents = getUpcomingEventsWithinWindow(events, UPCOMING_EVENTS_LIST_WINDOW_MS, now.getTime());
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const dayTs = startTs + (index * 24 * 60 * 60 * 1000);
+    const items = visibleEvents.filter(event => startOfDayTimestamp(event.start_at) === dayTs);
+    return {
+      timestamp: dayTs,
+      items,
+      isWeekend: isBoardWeekend(dayTs),
+      isHoliday: isBoardHoliday(dayTs, items)
+    };
+  });
+}
+
+function renderUserSevenDayBoard(events = []) {
+  const days = buildUserSevenDayBoardDays(events);
+  const visibleItemCount = days.reduce((sum, day) => sum + day.items.length, 0);
+  const activeEventId = String(
+    state.selectedUserEventDetail?.event?.id
+    || state.selectedUserEvent?.id
+    || getNextEvent(events)?.id
+    || ''
+  );
+
+  if (!visibleItemCount) {
+    return emptyState(
+      'Nincs kozelgo esemenyed 7 napon belul.',
+      'A legkozelebbi fokusz esemeny felul jelenik meg, de a kovetkezo 7 napban most nincs tovabbi alkalom.'
+    );
+  }
+
+  return `
+    <div class="user-seven-day-board">
+      ${days.map(day => `
+        <section class="user-seven-day-column ${day.isHoliday ? 'is-holiday' : day.isWeekend ? 'is-weekend' : ''}">
+          <div class="user-seven-day-header">
+            <div class="user-seven-day-date">${escapeHtml(formatSevenDayBoardDateLabel(day.timestamp))}</div>
+            <div class="user-seven-day-weekday">${escapeHtml(formatSevenDayBoardWeekdayLabel(day.timestamp))}</div>
+          </div>
+          <div class="user-seven-day-body">
+            ${
+              day.items.length
+                ? day.items.map(event => {
+                    const accent = buildTeamAccent(event);
+                    const isActive = String(event.id) === activeEventId;
+                    const statusText = formatRegistrationStatus(event.my_registration_status);
+                    return `
+                      <button
+                        class="user-seven-day-event ${isActive ? 'is-active' : ''}"
+                        type="button"
+                        data-open-event-id="${escapeHtml(event.id)}"
+                        data-open-event-team-id="${escapeHtml(event.team_id || '')}"
+                        style="--team-accent:${accent.accent}; --team-accent-soft:${accent.soft}; --team-accent-badge:${accent.badge};"
+                      >
+                        <div class="user-seven-day-event-team">
+                          <span class="team-accent-badge">${escapeHtml(event.team_name || 'Ismeretlen csapat')}</span>
+                        </div>
+                        <div class="user-seven-day-event-title">${escapeHtml(event.title || 'Nevtelen esemeny')}</div>
+                        <div class="user-seven-day-event-time">${escapeHtml(formatSevenDayBoardTimeLabel(event.start_at))}</div>
+                        <div class="user-seven-day-event-meta">
+                          <span>${escapeHtml(statusText)}</span>
+                          <span>${escapeHtml(String(event.going_count || 0))} fo</span>
+                        </div>
+                      </button>
+                    `;
+                  }).join('')
+                : '<div class="user-seven-day-empty">Nincs esemeny</div>'
+            }
+          </div>
+        </section>
+      `).join('')}
+    </div>
+  `;
 }
 
 function findKnownUserEventById(eventId) {
@@ -8390,6 +8650,7 @@ async function bootSession() {
   ensureAuthShell();
   ensureAuthOnboardingUi();
   ensureAdminStatisticsUi();
+  ensureUserDashboardLayout();
   setAuthMode(state.pendingInviteToken ? 'register' : 'login');
   syncAuthLayout();
   ensureEventPricingUi();
@@ -8400,6 +8661,7 @@ async function bootSession() {
   }
   await loadVersionInfo();
   await loadGoogleAuthConfig();
+  await loadGoogleMapsConfig();
   await loadInvitePreview();
   showPendingEmailActionFeedback();
 
@@ -8739,7 +9001,7 @@ async function loadMyEvents() {
     const result = await api('/my/events', { method: 'GET' });
     state.myEvents = result.events || [];
     await hydrateUserEventDetailsCache(state.myEvents);
-    renderMyEvents(state.myEvents);
+    renderMyEventsDashboard(state.myEvents);
     renderUserOverview();
     triggerUserNewEventsPulse();
   } catch (error) {
@@ -8841,12 +9103,44 @@ function renderMyEvents(events) {
   }).join('');
 }
 
+function renderMyEventsDashboard(events) {
+  if (!els.myEventsList) return;
+
+  ensureUserDashboardLayout();
+
+  const selectedGlobalFocus = state.selectedUserEventDetail?.event || state.selectedUserEvent || null;
+  const selectedIsStillUpcoming = Boolean(
+    selectedGlobalFocus
+    && events.some(event => String(event.id) === String(selectedGlobalFocus.id))
+    && getEventStartTimestamp(selectedGlobalFocus) >= Date.now()
+    && selectedGlobalFocus.status !== 'cancelled'
+    && selectedGlobalFocus.status !== 'finished'
+  );
+  const nextEvent = selectedIsStillUpcoming ? selectedGlobalFocus : getNextEvent(events);
+
+  renderHeroEvent(nextEvent);
+
+  if (!events.length) {
+    els.myEventsList.innerHTML = emptyState('Még nincs saját eseményed.', 'Ha a csapataidhoz tartozik esemény vagy jelentkezel egyre, itt látod.');
+    return;
+  }
+
+  els.myEventsList.innerHTML = renderUserSevenDayBoard(events);
+}
+
 async function handleDashboardClicks(event) {
-  const teamId = event.target.dataset.myTeamId;
-  const eventId = event.target.dataset.openEventId;
-  const registerEventId = event.target.dataset.registerEventId;
-  const registerLimitEventId = event.target.dataset.registerLimitEventId;
-  const cancelEventId = event.target.dataset.cancelEventId;
+  const teamAction = event.target.closest('[data-my-team-id]');
+  const openEventAction = event.target.closest('[data-open-event-id]');
+  const registerAction = event.target.closest('[data-register-event-id]');
+  const registerLimitAction = event.target.closest('[data-register-limit-event-id]');
+  const cancelAction = event.target.closest('[data-cancel-event-id]');
+
+  const teamId = teamAction?.dataset.myTeamId || '';
+  const eventId = openEventAction?.dataset.openEventId || '';
+  const openEventTeamId = openEventAction?.dataset.openEventTeamId || '';
+  const registerEventId = registerAction?.dataset.registerEventId || '';
+  const registerLimitEventId = registerLimitAction?.dataset.registerLimitEventId || '';
+  const cancelEventId = cancelAction?.dataset.cancelEventId || '';
 
   if (teamId) {
     await loadTeam(teamId);
@@ -8873,6 +9167,15 @@ async function handleDashboardClicks(event) {
   }
 
   if (eventId) {
+    const knownEvent = state.myEvents.find(item => String(item.id) === String(eventId))
+      || state.userTeamEvents.find(item => String(item.id) === String(eventId))
+      || null;
+
+    const targetTeamId = String(openEventTeamId || knownEvent?.team_id || '');
+    if (targetTeamId && targetTeamId !== String(state.currentTeamId || '')) {
+      await loadTeam(targetTeamId);
+    }
+
     await openEventForUser(eventId);
   }
 }
@@ -10887,6 +11190,7 @@ async function handleCreateEvent(event) {
     description: document.getElementById('eventDescription').value.trim() || null,
     startAt: toIsoFromInput(startAtInputValue),
     locationName: document.getElementById('eventLocation').value.trim(),
+    locationAddress: document.getElementById('eventLocationAddress')?.value.trim() || null,
     minPlayers: Number(document.getElementById('eventMinPlayers').value),
     playersOnFieldTotal: Number(document.getElementById('eventPlayersOnField').value),
     substitutesEnabled,
@@ -10938,6 +11242,7 @@ async function handleCreateEvent(event) {
             description: basePayload.description,
             startAt: basePayload.startAt,
             locationName: basePayload.locationName,
+            locationAddress: basePayload.locationAddress,
             rulesText: basePayload.rulesText,
             fixedPricePerPerson: basePayload.fixedPricePerPerson,
             totalEventCost: basePayload.totalEventCost,
@@ -10951,6 +11256,7 @@ async function handleCreateEvent(event) {
             description: basePayload.description,
             startAt: basePayload.startAt,
             locationName: basePayload.locationName,
+            locationAddress: basePayload.locationAddress,
             minPlayers: basePayload.minPlayers,
             playersOnFieldTotal: basePayload.playersOnFieldTotal,
             substitutesEnabled: basePayload.substitutesEnabled,
@@ -11659,6 +11965,7 @@ async function openEventForUser(eventId) {
     state.userEventDetailsById[String(eventId)] = state.selectedUserEventDetail;
     await loadSavedEventDraw(eventId);
     renderHeroEvent(hydratedEvent);
+    renderMyEventsDashboard(state.myEvents || []);
     renderUserOverview();
     els.nextEventHero?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   } catch (error) {
@@ -12072,6 +12379,7 @@ function bindEvents() {
   });
 
   els.createEventForm.addEventListener('submit', handleCreateEvent);
+  document.getElementById('eventOpenMapsSearchBtn')?.addEventListener('click', openEventLocationInGoogleMaps);
   document.getElementById('eventSubstitutesEnabled')?.addEventListener('change', syncCreateSubstitutesUi);
   document.getElementById('adminEventCancelEditBtn')?.addEventListener('click', () => {
     state.selectedAdminEvent = null;

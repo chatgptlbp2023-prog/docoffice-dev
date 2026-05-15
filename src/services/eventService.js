@@ -165,6 +165,29 @@ function computeCapacity({
   };
 }
 
+async function ensureTeamEventSlotAvailable(client, {
+  teamId,
+  startAt,
+  excludeEventId = null
+}) {
+  const result = await client.query(
+    `
+    select id, title
+    from events
+    where team_id = $1
+      and start_at = $2
+      and status <> 'cancelled'
+      and ($3::uuid is null or id <> $3::uuid)
+    limit 1
+    `,
+    [teamId, startAt, excludeEventId]
+  );
+
+  if (result.rows.length > 0) {
+    throw new AppError(409, 'Ennek a csapatnak erre az időpontra már van eseménye.');
+  }
+}
+
 async function createEvent({ teamId, createdByUserId, data }) {
   const {
     title,
@@ -281,6 +304,11 @@ async function createEvent({ teamId, createdByUserId, data }) {
     if (teamCheck.rows.length === 0) {
       throw new AppError(404, 'A csapat nem található.');
     }
+
+    await ensureTeamEventSlotAvailable(client, {
+      teamId,
+      startAt
+    });
 
     const eventInsert = await client.query(
       `
@@ -916,6 +944,12 @@ async function updateEvent({ eventId, data }) {
         `A maxPlayers nem lehet kisebb a már going státuszú jelentkezők számánál (${activeGoingCount}).`
       );
     }
+
+    await ensureTeamEventSlotAvailable(client, {
+      teamId: currentEvent.team_id,
+      startAt: nextEvent.startAt,
+      excludeEventId: eventId
+    });
 
     const updatedEventResult = await client.query(
       `

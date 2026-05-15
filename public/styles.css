@@ -83,6 +83,14 @@ body::after {
   z-index: 0;
 }
 
+.success-text {
+  color: #166534;
+}
+
+.warning-text {
+  color: #b45309;
+}
+
 .app-shell {
   position: relative;
   z-index: 1;
@@ -2882,6 +2890,127 @@ hr {
   opacity: 0.96;
 }
 
+.user-seven-day-board {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(150px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.user-seven-day-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(184, 199, 217, 0.85);
+  border-radius: 18px;
+  background: rgba(247, 251, 255, 0.82);
+  overflow: hidden;
+}
+
+.user-seven-day-column.is-weekend {
+  background: linear-gradient(180deg, rgba(241, 245, 249, 0.92) 0%, rgba(232, 240, 248, 0.9) 100%);
+}
+
+.user-seven-day-column.is-holiday {
+  background: linear-gradient(180deg, rgba(255, 247, 237, 0.95) 0%, rgba(255, 239, 213, 0.9) 100%);
+  border-color: rgba(245, 158, 11, 0.38);
+}
+
+.user-seven-day-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(184, 199, 217, 0.72);
+  background: linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(236,244,252,0.9) 100%);
+}
+
+.user-seven-day-column.is-weekend .user-seven-day-header {
+  background: linear-gradient(180deg, rgba(226, 232, 240, 0.92) 0%, rgba(241, 245, 249, 0.9) 100%);
+}
+
+.user-seven-day-column.is-holiday .user-seven-day-header {
+  background: linear-gradient(180deg, rgba(254, 215, 170, 0.86) 0%, rgba(255, 237, 213, 0.92) 100%);
+}
+
+.user-seven-day-date {
+  font-size: 0.96rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.user-seven-day-weekday {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.user-seven-day-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  min-height: 240px;
+}
+
+.user-seven-day-empty {
+  margin-top: auto;
+  margin-bottom: auto;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.82rem;
+  padding: 12px 8px;
+  border: 1px dashed rgba(184, 199, 217, 0.9);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.52);
+}
+
+.user-seven-day-event {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255,255,255,0.55);
+  border-left: 6px solid var(--team-accent, #60a5fa);
+  border-radius: 16px;
+  padding: 12px;
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--team-accent-soft, rgba(191, 219, 254, 0.16)) 0%, rgba(255,255,255,0.94) 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+
+.user-seven-day-event:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
+}
+
+.user-seven-day-event.is-active {
+  border-color: var(--team-accent, #60a5fa);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--team-accent, #60a5fa) 28%, white), 0 16px 32px rgba(15, 23, 42, 0.12);
+}
+
+.user-seven-day-event-team {
+  margin-bottom: 10px;
+}
+
+.user-seven-day-event-title {
+  font-weight: 800;
+  line-height: 1.25;
+  color: var(--text);
+}
+
+.user-seven-day-event-time {
+  margin-top: 8px;
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.user-seven-day-event-meta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .collapsed-group {
   margin-top: 12px;
 }
@@ -2899,6 +3028,12 @@ hr {
 
   .participant-preview {
     grid-template-columns: 1fr;
+  }
+
+  .user-seven-day-board {
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 4px;
   }
 }
 
@@ -2936,6 +3071,24 @@ hr {
   .finance-history-action .btn-inline-link {
     width: 100%;
     justify-content: center;
+  }
+
+  .user-seven-day-board {
+    display: flex;
+    overflow-x: auto;
+    gap: 10px;
+    padding-bottom: 4px;
+    scroll-snap-type: x proximity;
+  }
+
+  .user-seven-day-column {
+    min-width: min(82vw, 280px);
+    flex: 0 0 min(82vw, 280px);
+    scroll-snap-align: start;
+  }
+
+  .user-seven-day-body {
+    min-height: 180px;
   }
 }
 

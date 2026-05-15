@@ -8,6 +8,7 @@ const {
   cancelEventRegistration,
   setEventAttendanceStatus,
   getEventById,
+  getEventWeather,
   getEventsByTeamId
 } = require('../controllers/eventController');
 
@@ -49,6 +50,13 @@ router.get(
   requireAuth,
   isTeamMember,
   getEventById
+);
+
+router.get(
+  '/events/:eventId/weather',
+  requireAuth,
+  isTeamMember,
+  getEventWeather
 );
 
 router.patch(

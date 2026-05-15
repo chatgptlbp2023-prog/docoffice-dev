@@ -610,6 +610,16 @@ function getGoogleAuthConfig(req, res) {
   });
 }
 
+function getGoogleMapsConfig(req, res) {
+  const apiKey = String(process.env.GOOGLE_MAPS_BROWSER_API_KEY || '').trim();
+
+  return res.status(200).json({
+    ok: true,
+    enabled: Boolean(apiKey),
+    apiKey: apiKey || null
+  });
+}
+
 async function getMe(req, res) {
   return res.status(200).json({
     ok: true,
@@ -670,6 +680,7 @@ module.exports = {
   login,
   googleAuth,
   getGoogleAuthConfig,
+  getGoogleMapsConfig,
   getMe,
   updateMe
 };

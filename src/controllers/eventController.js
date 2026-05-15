@@ -3,6 +3,7 @@ const registrationService = require('../services/registrationService');
 const eventAttendanceService = require('../services/eventAttendanceService');
 const eventNotificationService = require('../services/eventNotificationService');
 const eventEmailActionService = require('../services/eventEmailActionService');
+const { fetchEventWeatherForecast } = require('../services/weatherService');
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -297,6 +298,35 @@ async function registerForEvent(req, res) {
   }
 }
 
+async function getEventWeather(req, res) {
+  try {
+    const result = await eventService.getEventById(req.params.eventId, req.user.id);
+    const event = result?.event || null;
+    const weather = await fetchEventWeatherForecast(event);
+
+    if (!weather) {
+      return res.status(200).json({
+        ok: true,
+        available: false,
+        message: 'Ehhez az esemenyhez most nem erheto el idojarasi adat.'
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      available: true,
+      weather
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Idojarasi lekerdezesi hiba:',
+      'Szerverhiba idojaras lekerdezes kozben.'
+    );
+  }
+}
+
 async function handleEventEmailAction(req, res) {
   try {
     const result = await eventEmailActionService.executeEventEmailActionToken(req.params.token);
@@ -358,5 +388,6 @@ module.exports = {
   cancelEventRegistration,
   setEventAttendanceStatus,
   getEventById,
+  getEventWeather,
   getEventsByTeamId
 };
