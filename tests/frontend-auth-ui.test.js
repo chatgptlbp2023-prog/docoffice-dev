@@ -194,9 +194,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(chooser).toBeTruthy();
     expect(options.map(option => option.dataset.registrationPath)).toEqual([
-      'tournament_organizer',
       'team_sport_organizer',
-      'activity_organizer',
       'invited_participant'
     ]);
     expect(details.hidden).toBe(true);
@@ -238,10 +236,10 @@ describe('Frontend auth UI smoke tests', () => {
           token: 'demo-token',
           user: {
             id: 'user-1',
-            name: 'Tournament User',
-            email: 'tournament@example.com',
+            name: 'Team Sport User',
+            email: 'team-sport@example.com',
             can_create_team: true,
-            registration_path: 'tournament_organizer'
+            registration_path: 'team_sport_organizer'
           }
         }, { status: 201 });
       }
@@ -280,11 +278,11 @@ describe('Frontend auth UI smoke tests', () => {
 
     window.setAuthMode('register');
 
-    document.getElementById('registerName').value = 'Tournament User';
-    document.getElementById('registerEmail').value = 'tournament@example.com';
+    document.getElementById('registerName').value = 'Team Sport User';
+    document.getElementById('registerEmail').value = 'team-sport@example.com';
     document.getElementById('registerPassword').value = 'titok123';
-    const tournamentCard = document.querySelector('.auth-path-panel[data-registration-path="tournament_organizer"] .auth-path-trigger');
-    tournamentCard.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const teamSportCard = document.querySelector('.auth-path-panel[data-registration-path="team_sport_organizer"] .auth-path-trigger');
+    teamSportCard.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
     document.getElementById('registerForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
     await flushMicrotasks();
@@ -292,7 +290,7 @@ describe('Frontend auth UI smoke tests', () => {
     const registerCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/auth/register'));
     expect(registerCall).toBeTruthy();
     const payload = JSON.parse(registerCall[1].body);
-    expect(payload.registrationPath).toBe('tournament_organizer');
+    expect(payload.registrationPath).toBe('team_sport_organizer');
     expect(payload.registerAsOrganizer).toBe(true);
   });
 
@@ -335,6 +333,33 @@ describe('Frontend auth UI smoke tests', () => {
     expect(profilePanel.hidden).toBe(true);
     expect(profilePanel.style.display).toBe('none');
     expect(sidebarToggle.hidden).toBe(true);
+  });
+
+  test('a user naptarblokk a mentett regi layout mellett is a fokuszkartya felett marad', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.localStorage.setItem('foci_surface_layout_userView', JSON.stringify([
+      { key: 'user-overview', order: 0, colSpan: 12, rowSpan: 1 },
+      { key: 'user-next-event', order: 1, colSpan: 12, rowSpan: 2 },
+      { key: 'user-rank-weather', order: 2, colSpan: 12, rowSpan: 1 },
+      { key: 'user-my-events', order: 3, colSpan: 12, rowSpan: 2 },
+      { key: 'user-invites-teams', order: 4, colSpan: 12, rowSpan: 2 },
+      { key: 'user-event-detail-panel', order: 5, colSpan: 12, rowSpan: 2 }
+    ]));
+
+    window.switchView('userView');
+    await flushMicrotasks();
+
+    const overviewCard = document.querySelector('[data-layout-key="user-overview"]');
+    const calendarCard = document.querySelector('[data-layout-key="user-my-events"]');
+    const heroCard = document.querySelector('[data-layout-key="user-next-event"]');
+
+    expect(document.querySelectorAll('#myEventsList')).toHaveLength(1);
+    expect(calendarCard.hidden).toBe(false);
+    expect(overviewCard.style.order).toBe('0');
+    expect(calendarCard.style.order).toBe('1');
+    expect(heroCard.style.order).toBe('2');
+    expect(calendarCard.nextElementSibling).toBe(heroCard);
   });
 
   test('az admin meghívólistában megjelenik az email küldési állapot', async () => {

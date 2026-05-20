@@ -604,14 +604,14 @@
           <div id="userOverviewCards" class="overview-grid compact-overview"></div>
         </div>
 
-        <div class="card top-space hidden" hidden>
+        <div class="card top-space" data-layout-item data-layout-key="user-my-events" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
           <div class="row between align-center section-header-wrap">
             <div>
               <h2>KĂ¶vetkezĹ‘ 7 nap</h2>
               <div class="small muted section-note">IdĹ‘rendi nĂ©zet a kĂ¶vetkezĹ‘ 7 napra. A szĂ­nek a csapatokat jelĂ¶lik, egy blokkra kattintva pedig felĂĽl fĂłkuszba kerĂĽl az adott esemĂ©ny.</div>
             </div>
           </div>
-          <div id="myEventsListDuplicateBottom" class="stack"></div>
+          <div id="myEventsList" class="stack"></div>
         </div>
 
         <div class="card hero-card top-space" data-layout-item data-layout-key="user-next-event" data-default-col-span="12" data-default-row-span="2" data-min-col-span="12" data-max-col-span="12">
@@ -623,16 +623,6 @@
           </div>
           <div id="nextEventHero" class="top-space"></div>
           <div id="userTeamDrawPreview"></div>
-        </div>
-
-        <div class="card top-space hidden" hidden>
-          <div class="row between align-center section-header-wrap">
-            <div>
-              <h2>Következő 7 nap</h2>
-              <div class="small muted section-note">Időrendi nézet a következő 7 napra. A színek a csapatokat jelölik, egy blokkra kattintva pedig felül fókuszba kerül az adott esemény.</div>
-            </div>
-          </div>
-          <div id="myEventsListLegacy" class="stack"></div>
         </div>
 
           <div class="grid one-col top-space" data-layout-item data-layout-key="user-rank-weather" data-default-col-span="12" data-default-row-span="1" data-min-col-span="6" data-max-col-span="12">
@@ -651,16 +641,6 @@
               <div id="userWeatherModule" class="top-space"></div>
             </div>
           </div>
-
-        <div class="card top-space" data-layout-item data-layout-key="user-my-events" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
-          <div class="row between align-center section-header-wrap">
-            <div>
-              <h2>Közelgő eseményeim</h2>
-              <div class="small muted section-note">A saját csapataid következő eseményei. A részletek lenyithatók, így nem terhelik túl a fő nézetet.</div>
-            </div>
-          </div>
-          <div id="myEventsList" class="stack"></div>
-        </div>
 
         <div class="grid two-col top-space" data-layout-item data-layout-key="user-invites-teams" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
           <div class="card">

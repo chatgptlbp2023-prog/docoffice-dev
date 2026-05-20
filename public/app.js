@@ -97,6 +97,11 @@ const REGISTRATION_PATH_OPTIONS = Object.freeze([
   }
 ]);
 
+const ACTIVE_REGISTRATION_PATHS = new Set([
+  'team_sport_organizer',
+  'invited_participant'
+]);
+
 function getTeamStorageKeyForUser(userId) {
   const normalizedUserId = String(userId || '').trim();
   return normalizedUserId ? `foci_team_id_${normalizedUserId}` : null;
@@ -615,7 +620,7 @@ function ensureAuthOnboardingUi() {
         <p>Előbb kiválasztod az induló utat, utána rögtön megadod az adataidat. A rendszer a megfelelő induló munkatérbe visz tovább.</p>
       </div>
       <div id="registrationPathChooser" class="auth-path-grid">
-        ${REGISTRATION_PATH_OPTIONS.map(option => {
+        ${REGISTRATION_PATH_OPTIONS.filter(option => ACTIVE_REGISTRATION_PATHS.has(option.value)).map(option => {
           const presentation = getRegistrationPathPresentation(option.value);
           return `
           <section class="auth-path-panel auth-path-panel-${option.value}" data-registration-path="${option.value}">
