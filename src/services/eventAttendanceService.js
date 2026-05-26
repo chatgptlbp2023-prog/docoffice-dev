@@ -134,6 +134,24 @@ async function setEventAttendanceStatus({
       );
     }
 
+    const existingAttendanceResult = await client.query(
+      `
+      select payment_amount
+      from event_attendance_marks
+      where event_id = $1
+        and user_id = $2
+      for update
+      `,
+      [eventId, targetUserId]
+    );
+    const existingPaymentAmount = Number(existingAttendanceResult.rows[0]?.payment_amount);
+    const effectivePaymentAmount =
+      normalizedStatus === ATTENDANCE_STATUS.NO_SHOW
+        ? 0
+        : normalizedPaymentAmount == null
+          ? (Number.isFinite(existingPaymentAmount) ? existingPaymentAmount : 0)
+          : normalizedPaymentAmount;
+
     const upsertResult = await client.query(
       `
       insert into event_attendance_marks (
@@ -154,8 +172,16 @@ async function setEventAttendanceStatus({
       do update
       set status = excluded.status,
           note = excluded.note,
-          payment_amount = excluded.payment_amount,
-          payment_recorded_at = excluded.payment_recorded_at,
+          payment_amount = case
+            when excluded.status = 'no_show' then null
+            when excluded.payment_amount is null then event_attendance_marks.payment_amount
+            else excluded.payment_amount
+          end,
+          payment_recorded_at = case
+            when excluded.status = 'no_show' then null
+            when excluded.payment_amount is null then event_attendance_marks.payment_recorded_at
+            else excluded.payment_recorded_at
+          end,
           marked_by_user_id = excluded.marked_by_user_id,
           marked_at = now(),
           updated_at = now()
@@ -167,7 +193,7 @@ async function setEventAttendanceStatus({
         targetUserId,
         normalizedStatus,
         note || null,
-        normalizedPaymentAmount ?? 0,
+        normalizedPaymentAmount,
         markedByUserId
       ]
     );
@@ -180,7 +206,7 @@ async function setEventAttendanceStatus({
       },
       targetUserId,
       attendanceStatus: normalizedStatus,
-      actualPaidAmount: normalizedPaymentAmount ?? 0,
+      actualPaidAmount: effectivePaymentAmount,
       recordedByUserId: markedByUserId
     });
 
@@ -199,8 +225,10 @@ async function setEventAttendanceStatus({
     return {
       message:
         normalizedStatus === ATTENDANCE_STATUS.NO_SHOW
-          ? 'No-show sikeresen rogzitve.'
-          : 'Jelenlet es fizetes sikeresen rogzitve.',
+          ? 'Nem jelent meg allapot sikeresen rogzitve.'
+          : normalizedPaymentAmount == null
+            ? 'Jelenlet sikeresen rogzitve.'
+            : 'Befizetes sikeresen rogzitve.',
       attendance: upsertResult.rows[0],
       summary: summaryResult.rows[0]
     };

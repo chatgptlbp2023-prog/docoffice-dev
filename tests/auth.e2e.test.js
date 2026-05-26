@@ -55,7 +55,7 @@ describe('Auth E2E', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.version).toBeTruthy();
-    expect(res.body.version.name).toBe('Foci App');
+    expect(res.body.version.name).toBe('Foci Szervező');
     expect(res.body.version.version).toBeTruthy();
     expect(res.body.version.commit).toBeTruthy();
     expect(res.body.version.environment).toBeTruthy();

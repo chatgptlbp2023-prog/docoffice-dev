@@ -53,11 +53,11 @@ describe('Registration notification service', () => {
 
     const content = buildRegistrationNotificationContent({
       counts,
-      platformName: 'Foci App',
+      platformName: 'Foci Szervező',
       timestampLabel: '2026.05.04 10:07'
     });
 
-    expect(content.subject).toBe('2026.05.04 10:07 új regisztráció történt a Foci App');
+    expect(content.subject).toBe('2026.05.04 10:07 új regisztráció történt a Foci Szervező');
     expect(content.text).toContain('tornaszervező: 0/0');
     expect(content.text).toContain('haveri csapatszervező: 1/2');
     expect(content.text).toContain('emailx@example.com');

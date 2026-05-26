@@ -45,7 +45,7 @@ async function bootFrontend(options = {}) {
     if (target.includes('/version')) {
       return createJsonResponse({
         version: {
-          name: 'Foci App',
+          name: 'Foci Szervező',
           version: '1.0.0',
           commit: 'abc1234',
           environment: 'test',
@@ -153,6 +153,45 @@ describe('Frontend auth UI smoke tests', () => {
     expect(sidebarVersionInfo.textContent).toContain('Környezet: test');
   });
 
+  test('bejelentkezés után elérhető a Help kisokos és a Kapcsolat nézet', async () => {
+    const { window, document } = await bootFrontend();
+
+    const helpNav = document.querySelector('[data-view="helpView"]');
+    const contactNav = document.querySelector('[data-view="contactView"]');
+
+    expect(helpNav).toBeTruthy();
+    expect(contactNav).toBeTruthy();
+    expect(helpNav.style.display).toBe('none');
+    expect(contactNav.style.display).toBe('none');
+
+    window.eval(`
+      state.token = 'token-1';
+      state.user = { id: 'u1', name: 'Ricsi', email: 'ricsi@example.com' };
+      applyRoleAwareUi();
+      switchView('helpView');
+    `);
+
+    const helpView = document.getElementById('helpView');
+    expect(helpNav.style.display).toBe('');
+    expect(contactNav.style.display).toBe('');
+    expect(helpView.classList.contains('active')).toBe(true);
+    expect(helpView.textContent).toContain('Játékos kisokos');
+    expect(helpView.textContent).toContain('Csapatkapitány kisokos');
+    expect(helpView.textContent).toContain('Email értesítések');
+    expect(helpView.textContent).toContain('Rangmodul és fegyelmi modul');
+    expect(helpView.textContent).toContain('Csapatszabályzat elfogadása');
+
+    window.eval(`switchView('contactView');`);
+
+    const contactView = document.getElementById('contactView');
+    const emailLink = contactView.querySelector('a[href^="mailto:hello@docoffice.hu"]');
+    expect(contactView.classList.contains('active')).toBe(true);
+    expect(emailLink).toBeTruthy();
+    expect(contactView.textContent).toContain('Hibajelentés és fejlesztési javaslat');
+    expect(contactView.textContent).toContain('Tulajdonjog és védjegy jelzés');
+    expect(contactView.textContent).toContain('Minden jog fenntartva');
+  });
+
   test('egy kattintással át lehet váltani regisztrációra és vissza', async () => {
     const { window, document } = await bootFrontend();
 
@@ -247,7 +286,7 @@ describe('Frontend auth UI smoke tests', () => {
       if (target.includes('/version')) {
         return createJsonResponse({
           version: {
-            name: 'Foci App',
+            name: 'Foci Szervező',
             version: '1.0.0',
             commit: 'abc1234',
             environment: 'test',
@@ -400,7 +439,7 @@ describe('Frontend auth UI smoke tests', () => {
       if (target.includes('/version')) {
         return createJsonResponse({
           version: {
-            name: 'Foci App',
+            name: 'Foci Szervező',
             version: '1.0.0',
             commit: 'abc1234',
             environment: 'test',
@@ -878,7 +917,7 @@ describe('Frontend auth UI smoke tests', () => {
       if (target.includes('/version')) {
         return createJsonResponse({
           version: {
-            name: 'Foci App',
+            name: 'Foci Szervező',
             version: '1.0.0',
             commit: 'abc1234',
             environment: 'test',
@@ -1043,7 +1082,7 @@ describe('Frontend auth UI smoke tests', () => {
     expect(finishedSectionResolved().innerHTML).toContain('megvalósult');
   });
 
-  test.skip('a múltbeli, meg nem lezárt admin eseménynél megjelenik a no-show előkészítő blokk', async () => {
+  test.skip('a múltbeli, meg nem lezárt admin eseménynél megjelenik a nem jelent meg előkészítő blokk', async () => {
     const { window } = await bootFrontend();
     const pastIso = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -1069,13 +1108,13 @@ describe('Frontend auth UI smoke tests', () => {
       renderAdminAttendanceManager();
     `);
 
-    expect(html).toContain('Jelenlét / no-show összesítő');
-    expect(html).toContain('No-show jelölés');
+    expect(html).toContain('Jelenlét / nem jelent meg összesítő');
+    expect(html).toContain('Jelenlét jelölése');
     expect(html).toContain('Mind megjelent');
     expect(html).toContain('automatikusan lezárja');
   });
 
-  test('a pénzügyi munkatér a selectedAdminEventDetail alapján kirajzolja a no-show blokkot', async () => {
+  test('a pénzügyi munkatér a selectedAdminEventDetail alapján kirajzolja a nem jelent meg blokkot', async () => {
     const { window, document } = await bootFrontend();
     const pastIso = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -1127,7 +1166,7 @@ describe('Frontend auth UI smoke tests', () => {
     const adminAttendanceContent = document.getElementById('adminAttendanceContent');
     expect(adminAttendanceContent.textContent).toContain('Kiválasztott esemény');
     expect(adminAttendanceContent.textContent).toContain('Lezárt meccs');
-    expect(adminAttendanceContent.textContent).toContain('Jelenlét / no-show összesítő');
+    expect(adminAttendanceContent.textContent).toContain('Jelenlét / nem jelent meg összesítő');
     expect(adminAttendanceContent.textContent).toContain('Mind megjelent');
     expect(adminAttendanceContent.textContent).toContain('Befizetés');
     expect(adminAttendanceContent.querySelector('.attendance-finance-card')).toBeTruthy();
@@ -1969,6 +2008,65 @@ describe('Frontend auth UI smoke tests', () => {
     expect(userSelector.value).toBe('team-2');
   });
 
+  test('a játékos nézet egyértelműen jelzi, ha az aktív csapatban csak játékos szerepe van, de máshol admin', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.user = { id: 'ricsi-1', can_create_team: true };
+      state.currentTeamId = 'team-player';
+      state.currentTeam = { id: 'team-player', name: 'Angyalföldi Zsiványok TC' };
+      state.teamRole = 'member';
+      state.myTeams = [
+        { id: 'team-admin', name: 'Keddi focis fiuk', role: 'team_admin', membership_status: 'active' },
+        { id: 'team-player', name: 'Angyalföldi Zsiványok TC', role: 'member', membership_status: 'active' }
+      ];
+      state.myInvites = [];
+      state.myEvents = [];
+      renderUserOverview();
+      renderMyTeams(state.myTeams);
+    `);
+
+    const contextCard = document.querySelector('#userOverviewCards .role-context-card');
+    expect(contextCard).toBeTruthy();
+    expect(contextCard.textContent).toContain('Aktív csapat: Angyalföldi Zsiványok TC');
+    expect(contextCard.textContent).toContain('Szereped ebben a csapatban: tag');
+    expect(contextCard.textContent).toContain('csapatkapitányi funkciók nem jelennek meg');
+    expect(contextCard.textContent).toContain('Csapatkapitányi funkcióid itt vannak: Keddi focis fiuk');
+    expect(contextCard.querySelector('[data-context-team-id="team-admin"]')).toBeTruthy();
+
+    const teamList = document.getElementById('myTeamsList');
+    expect(teamList.textContent).toContain('csapatkapitány');
+    expect(teamList.textContent).toContain('admin funkciók itt');
+    expect(teamList.textContent).toContain('játékos nézet');
+    expect(teamList.textContent).toContain('aktuális fókuszcsapat');
+  });
+
+  test('az admin áttekintő kimondja, ha az aktív csapatban csapatkapitányi jog van', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.user = { id: 'captain-1', can_create_team: true };
+      state.currentTeamId = 'team-admin';
+      state.currentTeam = { id: 'team-admin', name: 'Keddi focis fiuk' };
+      state.teamRole = 'team_admin';
+      state.myTeams = [
+        { id: 'team-admin', name: 'Keddi focis fiuk', role: 'team_admin', membership_status: 'active' }
+      ];
+      state.teamMembers = [
+        { user_id: 'captain-1', membership_status: 'active', role: 'team_admin', name: 'Ricsi' }
+      ];
+      state.teamInvites = [];
+      state.adminEvents = [];
+      renderAdminOverview();
+    `);
+
+    const contextCard = document.querySelector('#adminOverviewCards .role-context-card');
+    expect(contextCard).toBeTruthy();
+    expect(contextCard.textContent).toContain('Aktív csapat: Keddi focis fiuk');
+    expect(contextCard.textContent).toContain('Szereped ebben a csapatban: csapatkapitány');
+    expect(contextCard.textContent).toContain('csapat admin funkciók is látszanak');
+  });
+
   test.skip('a setup checklist továbblép publikált esemény, két kapus és csapatsorsolás után is', async () => {
     const { window, document } = await bootFrontend();
 
@@ -2050,7 +2148,38 @@ describe('Frontend auth UI smoke tests', () => {
     expect(publishedSection.textContent).toContain('J?v?beli publik?lt');
     expect(publishedSection.textContent).not.toContain('Elm?lt publik?lt');
     expect(completedSection.textContent).toContain('Elm?lt publik?lt');
+    expect(completedSection.textContent).toContain('utómunka');
+    expect(completedSection.textContent).toContain('jelentkezés lezárult');
+    expect(completedSection.textContent).not.toContain('jelentkezés nyitva');
     expect(completedSection.textContent).not.toContain('Tenylegesen lezart');
+  });
+
+  test('a megvalósult esemény címkéi nem mutatnak nyitott jelentkezést vagy fókusz jelölést', async () => {
+    const { window } = await bootFrontend();
+    const pastIso = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+
+    const html = window.eval(`
+      renderAdminEventGroup('Megvalósult események', [{
+        id: 'evt-past-published',
+        title: 'Elmúlt publikált',
+        status: 'published',
+        start_at: '${pastIso}',
+        location_name: 'Régi pálya',
+        going_count: 10,
+        waiting_count: 0,
+        event_readiness: 'open'
+      }], {
+        open: true,
+        mode: 'closed',
+        focusEventId: 'evt-past-published'
+      });
+    `);
+
+    expect(html).toContain('megvalósult');
+    expect(html).toContain('utómunka');
+    expect(html).toContain('jelentkezés lezárult');
+    expect(html).not.toContain('jelentkezés nyitva');
+    expect(html).not.toContain('most ez a fókusz');
   });
 
   test('a setup checklist a publikált eseményt új szöveggel is elismeri', async () => {

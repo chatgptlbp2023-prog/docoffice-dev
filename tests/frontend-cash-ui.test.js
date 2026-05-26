@@ -62,7 +62,7 @@ describe('Frontend cash module UI', () => {
     expect(html).toContain('Pálya 1');
   });
 
-  test('az admin attendance panel a beirt befizetest kuldi el, nem a nyers esemenydijat', async () => {
+  test('az admin attendance panel kulon befizetes gombbal a beirt osszeget kuldi el, nem a nyers esemenydijat', async () => {
     const fetchMock = jest.fn(async (url, options = {}) => {
       const target = String(url);
 
@@ -72,8 +72,8 @@ describe('Frontend cash module UI', () => {
 
       if (target.includes('/events/event-1/attendance/player-1')) {
         return createJsonResponse({
-          message: 'Megjelent sikeresen rogzitve.',
-          attendance: { status: 'present' }
+          message: 'Befizetes sikeresen rogzitve.',
+          attendance: { status: 'present', payment_amount: 900 }
         });
       }
 
@@ -92,7 +92,7 @@ describe('Frontend cash module UI', () => {
               name: 'Player One',
               finance_balance_before_event: -400,
               finance_settlement_target_amount: 1700,
-              attendance_status: null,
+              attendance_status: 'present',
               attendance_payment_amount: null
             }]
           },
@@ -149,7 +149,7 @@ describe('Frontend cash module UI', () => {
             name: 'Player One',
             finance_balance_before_event: -400,
             finance_settlement_target_amount: 1700,
-            attendance_status: null,
+            attendance_status: 'present',
             attendance_payment_amount: null
           }]
         },
@@ -172,7 +172,7 @@ describe('Frontend cash module UI', () => {
 
     expect(document.querySelector('[data-attendance-payment]').value).toBe('1700');
     document.querySelector('[data-attendance-payment]').value = '900';
-    document.querySelector('[data-team-summary-action="set-attendance"]').click();
+    document.querySelector('[data-team-summary-action="record-attendance-payment"]').click();
     await flushMicrotasks();
     await flushMicrotasks();
 
@@ -183,6 +183,123 @@ describe('Frontend cash module UI', () => {
         body: JSON.stringify({
           status: 'present',
           paymentAmount: 900
+        })
+      })
+    );
+  });
+
+  test('a megjelent gomb csak jelenletet rogzít, befizetest nem kuld vele', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/events/event-1/attendance/player-1')) {
+        return createJsonResponse({
+          message: 'Jelenlet sikeresen rogzitve.',
+          attendance: { status: 'present', payment_amount: null }
+        });
+      }
+
+      if (target.includes('/events/event-1') && !target.includes('/attendance/')) {
+        return createJsonResponse({
+          event: {
+            id: 'event-1',
+            title: 'Lezart meccs',
+            start_at: '2026-04-15T18:00:00.000Z',
+            location_name: 'Teszt palya',
+            status: 'finished'
+          },
+          registrations: {
+            going: [{
+              user_id: 'player-1',
+              name: 'Player One',
+              finance_balance_before_event: 0,
+              finance_settlement_target_amount: 1400,
+              attendance_status: 'present',
+              attendance_payment_amount: null
+            }]
+          },
+          summary: {
+            attendanceSummary: {
+              presentCount: 1,
+              noShowCount: 0,
+              unmarkedCount: 0,
+              totalPaidAmount: 0
+            },
+            paymentSummary: {
+              final_amount_per_person: 1400,
+              base_amount_per_person: 1300,
+              per_player_fee: 100
+            }
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'test-token';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.selectedAdminEvent = {
+        id: 'event-1',
+        title: 'Lezart meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-1',
+          title: 'Lezart meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [{
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: 0,
+            finance_settlement_target_amount: 1400,
+            attendance_status: null,
+            attendance_payment_amount: null
+          }]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            final_amount_per_person: 1400,
+            base_amount_per_person: 1300,
+            per_player_fee: 100
+          }
+        }
+      };
+      renderAdminFinancePanel();
+    `);
+
+    document.querySelector('[data-attendance-payment]').value = '999';
+    document.querySelector('[data-team-summary-action="set-attendance"]').click();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/events/event-1/attendance/player-1'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'present'
         })
       })
     );
@@ -242,6 +359,64 @@ describe('Frontend cash module UI', () => {
     `);
 
     expect(document.querySelector('[data-attendance-payment][data-attendance-user-id="player-1"]').value).toBe('1700');
+  });
+
+  test('ingyenes esemenynel nincs befizetes mezo es kulon penzugyi kenyszer', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.adminWorkspace = 'finance';
+      state.adminFinanceSection = 'settlement';
+      state.selectedAdminEvent = {
+        id: 'event-free',
+        title: 'Ingyenes meccs',
+        start_at: '2026-04-15T18:00:00.000Z',
+        location_name: 'Teszt palya',
+        status: 'finished'
+      };
+      state.selectedAdminEventDetail = {
+        event: {
+          id: 'event-free',
+          title: 'Ingyenes meccs',
+          start_at: '2026-04-15T18:00:00.000Z',
+          location_name: 'Teszt palya',
+          status: 'finished'
+        },
+        registrations: {
+          going: [{
+            user_id: 'player-1',
+            name: 'Player One',
+            finance_balance_before_event: -400,
+            finance_settlement_target_amount: 0,
+            attendance_status: null,
+            attendance_payment_amount: null
+          }]
+        },
+        summary: {
+          attendanceSummary: {
+            presentCount: 0,
+            noShowCount: 0,
+            unmarkedCount: 1,
+            totalPaidAmount: 0
+          },
+          paymentSummary: {
+            pricing_mode: 'free',
+            final_amount_per_person: 0,
+            base_amount_per_person: 0,
+            per_player_fee: 0
+          }
+        }
+      };
+      renderAdminFinancePanel();
+    `);
+
+    const content = document.getElementById('adminAttendanceContent').textContent;
+    expect(content).toContain('Ingyenes');
+    expect(content).toContain('Nincs befizetend');
+    expect(document.querySelector('[data-attendance-payment]')).toBeNull();
+    expect(document.querySelector('[data-team-summary-action="record-attendance-payment"]')).toBeNull();
   });
 
   test('a kezzel atirt befizetes megmarad a megjelent rogzites utan is', async () => {
@@ -335,7 +510,7 @@ describe('Frontend cash module UI', () => {
             name: 'Player One',
             finance_balance_before_event: -400,
             finance_settlement_target_amount: 1700,
-            attendance_status: null,
+            attendance_status: 'present',
             attendance_payment_amount: null
           })]
         },
@@ -412,7 +587,7 @@ describe('Frontend cash module UI', () => {
             name: 'Player One',
             finance_balance_before_event: 0,
             finance_settlement_target_amount: 1400,
-            attendance_status: null,
+            attendance_status: 'present',
             attendance_payment_amount: null
           })]
         },
@@ -442,7 +617,7 @@ describe('Frontend cash module UI', () => {
     expect(document.querySelector('[data-attendance-payment-delta][data-attendance-user-id="player-1"]').textContent).toContain('-400');
     expect(document.querySelector('[data-attendance-projected-after][data-attendance-user-id="player-1"]').textContent).toContain('-400');
 
-    document.querySelector('[data-team-summary-action="set-attendance"]').click();
+    document.querySelector('[data-team-summary-action="record-attendance-payment"]').click();
     await flushMicrotasks();
     await flushMicrotasks();
 
@@ -510,7 +685,7 @@ describe('Frontend cash module UI', () => {
             name: 'Player One',
             finance_balance_before_event: 0,
             finance_settlement_target_amount: 1400,
-            attendance_status: null,
+            attendance_status: 'present',
             attendance_payment_amount: null
           })]
         },
@@ -538,7 +713,7 @@ describe('Frontend cash module UI', () => {
     expect(document.querySelector('#adminAttendanceContent [data-attendance-actual-paid][data-attendance-user-id="player-1"]').textContent).toContain('999');
     expect(document.querySelector('#adminAttendanceContent [data-attendance-payment-delta][data-attendance-user-id="player-1"]').textContent).toContain('-401');
 
-    document.querySelector('#adminAttendanceContent [data-team-summary-action="set-attendance"]').click();
+    document.querySelector('#adminAttendanceContent [data-team-summary-action="record-attendance-payment"]').click();
     await flushMicrotasks();
     await flushMicrotasks();
 
@@ -613,7 +788,7 @@ describe('Frontend cash module UI', () => {
     expect(document.querySelector('[data-attendance-projected-after][data-attendance-user-id="player-1"]').textContent).toContain('-800');
   });
 
-  test('a penzugyi munkater a kozelgo esemeny helyett a lezarhato esemenyt nyitja meg no-show adminisztraciohoz', async () => {
+  test('a penzugyi munkater a kozelgo esemeny helyett a lezarhato esemenyt nyitja meg nem jelent meg adminisztraciohoz', async () => {
     const fetchMock = jest.fn(async (url) => {
       const target = String(url);
 
@@ -700,7 +875,7 @@ describe('Frontend cash module UI', () => {
       expect.stringContaining('/events/event-finished'),
       expect.any(Object)
     );
-    expect(document.getElementById('adminAttendanceContent').textContent).toContain('No-show');
+    expect(document.getElementById('adminAttendanceContent').textContent).toContain('Nem jelent meg');
     expect(document.getElementById('adminAttendanceContent').textContent).toContain('Lezart meccs');
   });
 
@@ -767,10 +942,10 @@ describe('Frontend cash module UI', () => {
     expect(html).toContain('Csapatkapitány fizetési profilja');
     expect(html).toContain('@kapitany');
     expect(html).toContain('Nyitott tartozás');
-    expect(html).toContain('Kézi korrekciók');
     expect(html).toContain('Kulon penzugyi korrekcio');
-    expect(html).toContain('Befizetett');
-    expect(html).toContain('Új egyenleg');
+    expect(html).toContain('Tartozás rendezése');
+    expect(html).toContain('Esemény megtekintése');
+    expect(window.document.querySelectorAll('#userFinanceModule .finance-history-row')).toHaveLength(3);
   });
 
   test.skip('a user esemeny reszleteiben megjelenik az esemenyszintu fizetesi link', async () => {

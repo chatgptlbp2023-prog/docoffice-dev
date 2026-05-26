@@ -186,12 +186,13 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Registration Flow Event',
         description: 'Waitlist teszt',
-        startAt: '2026-05-12T18:00:00.000Z',
+        startAt: futureIso(10, 18, 0),
         locationName: 'Teszt pálya',
         minPlayers: 1,
         playersOnFieldTotal: 1,
         substitutesEnabled: false,
-        initialStatus: 'published'
+        initialStatus: 'published',
+        confirmHolidayOverride: true
       });
 
     expect(createEventRes.status).toBe(201);
@@ -251,7 +252,7 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Re-register Event',
         description: 'Re-register teszt',
-        startAt: '2026-05-13T18:00:00.000Z',
+        startAt: futureIso(11, 18, 0),
         locationName: 'Teszt pálya',
         minPlayers: 2,
         playersOnFieldTotal: 2,
@@ -308,7 +309,7 @@ describe('Event registration flow E2E', () => {
       .send({
         title: 'Re-register to waitlist Event',
         description: 'Visszajelentkezes varolista teszt',
-        startAt: '2026-05-18T18:00:00.000Z',
+        startAt: futureIso(12, 18, 0),
         locationName: 'Teszt palya',
         minPlayers: 1,
         playersOnFieldTotal: 1,
@@ -596,7 +597,8 @@ describe('Event registration flow E2E', () => {
         playersOnFieldTotal: 4,
         substitutesEnabled: false,
         substitutesCount: 0,
-        initialStatus: 'published'
+        initialStatus: 'published',
+        confirmHolidayOverride: true
       });
 
     expect(createEventRes.status).toBe(201);

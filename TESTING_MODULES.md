@@ -78,3 +78,29 @@ npm run test:modules
 ```
 
 Ez egymás után lefuttatja az összes fő modul külön tesztcsomagját.
+
+## Pilot smoke / regressziós csomag
+
+Parancs:
+
+```bash
+npm run test:pilot
+```
+
+Mikor használd:
+
+- élesítés előtt
+- nagyobb user dashboard, auth, invite, esemény vagy kassza módosítás után
+- production env beállítások előtt utolsó lokális ellenőrzésként
+
+Mit ellenőriz:
+
+- auth és health check alapok
+- regisztrációs belépési utak és login utáni routing
+- csapatmeghívók és meghívó elfogadása
+- eseményre jelentkezés és várólista alapok
+- teljes szervezői flow
+- esemény email értesítések és email action linkek
+- időjárás szolgáltatás alaplogika
+- frontend auth / user dashboard kritikus viselkedések
+- frontend kassza / no-show / befizetés kritikus viselkedések

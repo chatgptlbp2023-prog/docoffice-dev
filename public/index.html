@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Foci App – Pilot dashboard</title>
+  <title>Foci Szervező – Pilot dashboard</title>
   <link rel="stylesheet" href="./styles.css?v=layout-20260505a" />
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -14,7 +14,7 @@
         <span class="sidebar-toggle-label">Profiladatok</span>
       </button>
       <div>
-        <h1>Foci App</h1>
+        <h1>Foci Szervező</h1>
         <p class="muted">Pilot dashboard a működő backend flow-k gyors kezelésére.</p>
       </div>
 
@@ -28,6 +28,8 @@
         <button class="nav-btn active" data-view="authView">Belépés / regisztráció</button>
         <button class="nav-btn" data-view="adminView">Csapat admin</button>
         <button class="nav-btn" data-view="userView">Játékos nézet</button>
+        <button class="nav-btn" data-view="helpView">Help / Kisokos</button>
+        <button class="nav-btn" data-view="contactView">Kapcsolat</button>
       </nav>
 
       <div class="card compact">
@@ -687,6 +689,133 @@
           <div class="card secondary-user-card">
             <h2>Részletes eseménynézet</h2>
             <div id="userEventDetail" class="muted">Ha a fókuszcsapat listájából eseményt nyitsz meg, itt látod a részletes jelenléti listát és az összesített adatokat.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="helpView" class="view">
+        <div class="help-shell">
+          <div class="card help-hero">
+            <div>
+              <div class="small muted">Kisokos</div>
+              <h2>Hogyan működik a Foci Szervező?</h2>
+              <p class="muted">
+                Ez a rész azért van, hogy ne kelljen kitalálni a rendszert. Itt találod a játékos oldali
+                alapműködést, a csapatkapitányi folyamatokat, az értesítéseket és a modulok várható hatását.
+              </p>
+            </div>
+            <div class="help-hero-badge">
+              <span class="badge badge-success">játékos</span>
+              <span class="badge badge-draft">csapatkapitány</span>
+              <span class="badge badge-muted">szabályzat</span>
+            </div>
+          </div>
+
+          <div class="grid two-col top-space">
+            <div class="card help-card">
+              <div class="help-card-head">
+                <span class="badge badge-success">Játékos kisokos</span>
+                <h3>Mit kell tudnod játékosként?</h3>
+              </div>
+              <ol class="help-step-list">
+                <li><strong>Fókusz esemény:</strong> a Játékos nézet tetején mindig a legközelebbi eseményed látszik, csapattól függetlenül.</li>
+                <li><strong>7 napos naptár:</strong> a következő egy hét eseményeit mutatja. A csapatok színezve jelennek meg, kattintásra az adott esemény kerül fókuszba.</li>
+                <li><strong>Jelentkezés:</strong> a Jelentkezem gomb ugyanazt rögzíti, mintha az eseménykártyán választanál. Ha betelt a létszám, várólistára kerülhetsz.</li>
+                <li><strong>Kihagyom:</strong> jelzi a szervezői/rang modulnak, hogy most nem számoljon veled. Ez nem nyitja meg feleslegesen az oldalt.</li>
+                <li><strong>Útvonal és naptár:</strong> az eseményből nyitható útvonalterv, Google Naptár és ICS export segít, hogy ne maradjon ki az időpont.</li>
+                <li><strong>Email értesítések:</strong> új eseményről, időpont- vagy helyszínváltozásról, törlésről, csapatleosztásról és fontos státuszokról kaphatsz levelet, ha az adott értesítés be van kapcsolva.</li>
+                <li><strong>Pénzügy:</strong> ha fizetős esemény volt, a tényleges befizetés számít. Túlfizetés és elmaradás továbbvihető a következő elszámolásokba.</li>
+              </ol>
+
+              <div class="help-mini-panel">
+                <h4>Rangmodul és fegyelmi modul</h4>
+                <p class="muted small">
+                  A rangmodul csak akkor befolyásolja a jelentkezési sorrendet vagy a várólistát, ha a csapatnál be van kapcsolva.
+                  A fegyelmi modul külön bekapcsolható funkció lesz: sárga/piros lap, feltételes jelentkezés és tartozásrendezési figyelmeztetés csak aktív modulnál hat.
+                </p>
+              </div>
+
+              <div class="help-mini-panel">
+                <h4>Csapatszabályzat elfogadása</h4>
+                <p class="muted small">
+                  A csapat saját játékszabályait és viselkedési elvárásait a csapatkapitány állítja be. Ha egy csapat szabályzatot kér,
+                  azt a játékosnak el kell fogadnia, mielőtt teljes értékűen részt vesz a csapat működésében.
+                </p>
+              </div>
+            </div>
+
+            <div class="card help-card">
+              <div class="help-card-head">
+                <span class="badge badge-draft">Csapatkapitány kisokos</span>
+                <h3>Mit kezel a csapatkapitány?</h3>
+              </div>
+              <ol class="help-step-list">
+                <li><strong>Csapat setup:</strong> csapat létrehozása, tagok meghívása, szerepek kezelése, fókuszcsapat kiválasztása.</li>
+                <li><strong>Esemény létrehozása:</strong> időpont, helyszín, pálya, létszám, díj, várólista és haladó értesítési beállítások megadása.</li>
+                <li><strong>Értesítési paletta:</strong> új esemény, kevés szabad hely, betelt esemény, várólistáról bekerülés, időpont/helyszín változás, törlés és csapatleosztás küldése kapcsolható.</li>
+                <li><strong>Jelentkezések követése:</strong> látod, ki jön, ki van várólistán, ki hagyta ki, és szükség esetén kézzel is tudsz korrigálni.</li>
+                <li><strong>Csapatleosztás:</strong> kézi vagy automatikus leosztás használható. Az automatikus kihirdetés csak bekapcsolt beállításnál fut.</li>
+                <li><strong>Pénzügy és lezárás:</strong> esemény után jelenlétet, nem jelent meg státuszt és tényleges befizetést rögzítesz. Ingyenes eseménynél a pénzügyi blokk nem kérhet felesleges összeget.</li>
+                <li><strong>Szabályrendszer:</strong> a csapat saját szabályzatát, rangmodulját és később a fegyelmi modult csapatszinten kell testreszabni.</li>
+              </ol>
+
+              <div class="help-mini-panel">
+                <h4>Ajánlott admin sorrend</h4>
+                <div class="help-pill-list">
+                  <span>1. csapat adatai</span>
+                  <span>2. meghívók</span>
+                  <span>3. szabályzat</span>
+                  <span>4. esemény</span>
+                  <span>5. jelenlét</span>
+                  <span>6. elszámolás</span>
+                </div>
+              </div>
+
+              <div class="help-mini-panel">
+                <h4>Mi számít hibának?</h4>
+                <p class="muted small">
+                  Ha egy gomb nem azt az állapotot rögzíti, amit vársz, ha téves email megy ki, ha rossz időpont látszik,
+                  vagy egy lezárt esemény még aktívnak tűnik, azt érdemes hibaként jelezni a Kapcsolat menüpontban.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="contactView" class="view">
+        <div class="grid two-col">
+          <div class="card contact-card">
+            <div class="small muted">Kapcsolat</div>
+            <h2>Hibajelentés és fejlesztési javaslat</h2>
+            <p class="muted">
+              Ha hibát találsz, valami félreérthető, vagy van egy jobb ötleted a flow-ra, ide küldd el:
+            </p>
+            <a class="btn contact-email-link" href="mailto:hello@docoffice.hu?subject=Foci%20App%20visszajelz%C3%A9s">hello@docoffice.hu</a>
+            <div class="help-mini-panel top-space">
+              <h4>Mit írj bele?</h4>
+              <ul class="help-step-list unordered">
+                <li>Melyik csapatnál és eseménynél történt.</li>
+                <li>Milyen szerepben voltál: játékos, csapatkapitány vagy platform admin.</li>
+                <li>Mit nyomtál meg, mit vártál, és ehelyett mi történt.</li>
+                <li>Ha lehet, csatolj képernyőképet vagy pontos időpontot.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="card legal-notice-card">
+            <div class="small muted">Tulajdonjog és védjegy jelzés</div>
+            <h2>Foci Szervező / DocOffice sportplatform</h2>
+            <p>
+              A Foci Szervező, a DocOffice sportplatform megnevezés, a felületi arculat, a folyamatleírások,
+              az eseményszervezési logika, a képernyő-elrendezések és a kapcsolódó dokumentáció a rendszer tulajdonosi
+              köréhez tartozó szellemi alkotások.
+            </p>
+            <p class="muted">
+              A felület, a szövegek és a működési koncepció engedély nélküli másolása, újrapublikálása vagy saját termékként
+              történő feltüntetése nem megengedett. Minden jog fenntartva. Kapcsolat: hello@docoffice.hu.
+            </p>
+            <div class="legal-signature">© DocOffice / Foci Szervező</div>
           </div>
         </div>
       </section>

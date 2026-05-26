@@ -19,6 +19,7 @@ const {
 const ACTIVE_EVENT_REGISTRATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank'];
 const ALL_EVENT_NOTIFICATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank', 'cancelled'];
 const EVENT_TIMEZONE = 'Europe/Budapest';
+const DEFAULT_NEW_MEMBER_CATCHUP_EVENT_LIMIT = 5;
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -228,7 +229,7 @@ function buildEventBaseCopy(context) {
     .join(' · ');
 
   return {
-    teamName: context.event.team_name || 'Foci App',
+    teamName: context.event.team_name || 'Foci Szervező',
     eventTitle: event.title || 'esemeny',
     whenLabel: formatEventDateTime(event.start_at),
     locationLabel: event.location_address || event.location_name || '-',
@@ -491,6 +492,119 @@ async function notifyEventCreated({ eventId, actorUserId = null }) {
   );
 }
 
+function mergeEmailSummary(target, source, eventId) {
+  if (!source) return;
+
+  target.sentCount += Number(source.sentCount || 0);
+  target.skippedCount += Number(source.skippedCount || 0);
+  target.failedCount += Number(source.failedCount || 0);
+  target.deliveries.push(
+    ...(source.deliveries || []).map(delivery => ({
+      eventId,
+      ...delivery
+    }))
+  );
+}
+
+async function notifyNewMemberUpcomingEvents({
+  teamId,
+  userId,
+  limit = DEFAULT_NEW_MEMBER_CATCHUP_EVENT_LIMIT
+}) {
+  if (!teamId || !userId) return null;
+
+  const normalizedLimit = Math.max(
+    1,
+    Math.min(Number.parseInt(limit, 10) || DEFAULT_NEW_MEMBER_CATCHUP_EVENT_LIMIT, 20)
+  );
+  const summary = {
+    sentCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    eventCount: 0,
+    deliveries: []
+  };
+
+  const userResult = await pool.query(
+    `
+    select u.id as user_id, u.name, lower(u.email) as email
+    from team_members tm
+    join users u on u.id = tm.user_id
+    where tm.team_id = $1
+      and tm.user_id = $2
+      and tm.membership_status = 'active'
+      and u.status = 'active'
+      and nullif(trim(u.email), '') is not null
+    `,
+    [teamId, userId]
+  );
+  const recipient = uniqueRecipients(userResult.rows)[0];
+
+  if (!recipient) {
+    summary.skippedCount += 1;
+    summary.deliveries.push({
+      eventId: null,
+      email: null,
+      status: 'skipped',
+      reason: 'missing_recipient'
+    });
+    return summary;
+  }
+
+  const upcomingEventsResult = await pool.query(
+    `
+    select e.id
+    from events e
+    where e.team_id = $1
+      and e.status = 'published'
+      and e.start_at > now()
+    order by e.start_at asc
+    limit $2
+    `,
+    [teamId, normalizedLimit]
+  );
+
+  summary.eventCount = upcomingEventsResult.rows.length;
+
+  for (const row of upcomingEventsResult.rows) {
+    const context = await getEventNotificationContext(row.id);
+    if (!context || context.notificationPreferences.notifyTeamOnCreate !== true) {
+      summary.skippedCount += 1;
+      summary.deliveries.push({
+        eventId: row.id,
+        email: recipient.email,
+        status: 'skipped',
+        reason: 'notification_disabled'
+      });
+      continue;
+    }
+
+    const alreadyRegistered = context.registrations.some(item => (
+      String(item.user_id) === String(userId) &&
+      ACTIVE_EVENT_REGISTRATION_STATUSES.includes(item.registration_status)
+    ));
+    if (alreadyRegistered) {
+      summary.skippedCount += 1;
+      summary.deliveries.push({
+        eventId: row.id,
+        email: recipient.email,
+        status: 'skipped',
+        reason: 'already_registered'
+      });
+      continue;
+    }
+
+    const delivery = await sendBulkEmails(
+      [recipient],
+      currentRecipient => buildEventCreatedEmail(context, currentRecipient),
+      `new_member_event_catchup:${row.id}:${userId}`
+    );
+    mergeEmailSummary(summary, delivery, row.id);
+  }
+
+  return summary;
+}
+
 async function notifyRegistrationActivity({
   eventId,
   actorUserId = null,
@@ -622,7 +736,7 @@ async function notifyWeatherAlert({ eventId }) {
 
   const emailPayload = buildWeatherAlertEmail({
     event: context.event,
-    teamName: context.event.team_name || 'Foci App',
+    teamName: context.event.team_name || 'Foci Szervező',
     weatherAlert: alert
   });
   return sendBulkEmails(recipients, emailPayload, `weather_alert:${eventId}`);
@@ -631,6 +745,7 @@ async function notifyWeatherAlert({ eventId }) {
 module.exports = {
   getEventNotificationContext,
   notifyEventCreated,
+  notifyNewMemberUpcomingEvents,
   notifyRegistrationActivity,
   notifyEventUpdated,
   notifyEventCancelled,

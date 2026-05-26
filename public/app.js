@@ -1811,7 +1811,7 @@ function renderProfilePanel(draft = null) {
       </div>
       <div class="event-card">
         <div class="row between align-center wrap gap">
-          <strong>No-show mutató</strong>
+          <strong>Nem jelent meg mutató</strong>
           ${attendanceStatusBadge(overallAttendanceStats.no_show_count > 0 ? 'no_show' : (overallAttendanceStats.present_count > 0 ? 'present' : null))}
         </div>
         <div class="grid three-col inner-grid top-space">
@@ -1820,7 +1820,7 @@ function renderProfilePanel(draft = null) {
             <div class="detail-value">${escapeHtml(String(overallAttendanceStats.present_count || 0))}</div>
           </div>
           <div class="detail-box">
-            <div class="detail-label">Összes no-show</div>
+            <div class="detail-label">Összes nem jelent meg</div>
             <div class="detail-value">${escapeHtml(String(overallAttendanceStats.no_show_count || 0))}</div>
           </div>
           <div class="detail-box">
@@ -1833,11 +1833,11 @@ function renderProfilePanel(draft = null) {
               ? `
                 <div class="small muted top-space">
                  Fókuszcsapat: megjelent ${escapeHtml(String(currentTeamAttendanceStats.present_count || 0))} ·
-                 no-show ${escapeHtml(String(currentTeamAttendanceStats.no_show_count || 0))} ·
+                 nem jelent meg ${escapeHtml(String(currentTeamAttendanceStats.no_show_count || 0))} ·
                  jelölt ${escapeHtml(String(currentTeamAttendanceStats.marked_count || 0))}
                 </div>
               `
-              : '<div class="small muted top-space">Ha van betöltött fókuszcsapatod, itt külön a csapaton belüli no-show összesítőt is látod.</div>'
+              : '<div class="small muted top-space">Ha van betöltött fókuszcsapatod, itt külön a csapaton belüli nem jelent meg összesítőt is látod.</div>'
           }
           ${
             currentTeamFinanceStats
@@ -2827,7 +2827,7 @@ function syncUnifiedAdminEventFormMode() {
           <div class="small muted">
             ${escapeHtml(
               isManageablePastEvent
-                ? 'Itt már nem az esemény létrehozása a lényeg, hanem a jelenlét, a no-show és a befizetések rendezése.'
+                ? 'Itt már nem az esemény létrehozása a lényeg, hanem a jelenlét, a nem jelent meg státusz és a befizetések rendezése.'
                 : isDraftEdit
                   ? 'A piszkozat mentése után a következő fontos lépés a publikálás lesz, hogy a jelentkezés megnyíljon.'
                   : eventsWorkspace.nextAction.description
@@ -3901,6 +3901,18 @@ function renderAdminLifecycleBadge(event, now = Date.now()) {
   return statusBadge(event.status);
 }
 
+function shouldShowAdminFocusBadge(event, mode = 'upcoming', now = Date.now()) {
+  if (!event || mode === 'closed') return false;
+  if (['cancelled', 'finished'].includes(event.status)) return false;
+  return !isPastPublishedEvent(event, now);
+}
+
+function renderAdminFocusBadge(event, focusEventId, mode = 'upcoming', now = Date.now()) {
+  if (String(event?.id || '') !== String(focusEventId || '')) return '';
+  if (!shouldShowAdminFocusBadge(event, mode, now)) return '';
+  return '<span class="badge badge-warning">most ez a fókusz</span>';
+}
+
 function inviteStatusBadge(status) {
   const map = {
     pending: 'badge badge-draft',
@@ -4141,7 +4153,7 @@ function registrationStatusBadge(status) {
 function formatAttendanceStatus(status) {
   const map = {
     present: 'megjelent',
-    no_show: 'no-show'
+    no_show: 'nem jelent meg'
   };
 
   return map[status] || 'nincs jelölve';
@@ -4166,11 +4178,12 @@ function findMyAttendanceRegistration(detail) {
 }
 
 function renderAttendanceSummary(summary = {}, options = {}) {
-  const { title = 'Jelenléti összesítő', compact = false } = options;
+  const { title = 'Jelenléti összesítő', compact = false, showPayment = true } = options;
   const presentCount = Number(summary.presentCount ?? summary.present_count ?? 0);
   const noShowCount = Number(summary.noShowCount ?? summary.no_show_count ?? 0);
   const unmarkedCount = Number(summary.unmarkedCount ?? summary.unmarked_count ?? 0);
   const totalPaidAmount = Number(summary.totalPaidAmount ?? summary.total_paid_amount ?? 0);
+  const gridClass = showPayment ? 'four-col' : 'three-col';
 
   return `
     <div class="event-card top-space attendance-summary-card ${compact ? 'compact' : ''}">
@@ -4178,23 +4191,25 @@ function renderAttendanceSummary(summary = {}, options = {}) {
         <strong>${escapeHtml(title)}</strong>
         <span class="badge badge-muted">lezárt esemény</span>
       </div>
-      <div class="grid four-col inner-grid top-space attendance-summary-grid">
+      <div class="grid ${gridClass} inner-grid top-space attendance-summary-grid">
         <div class="detail-box">
           <div class="detail-label">Megjelent</div>
           <div class="detail-value">${escapeHtml(String(presentCount))}</div>
         </div>
         <div class="detail-box">
-          <div class="detail-label">No-show</div>
+          <div class="detail-label">Nem jelent meg</div>
           <div class="detail-value">${escapeHtml(String(noShowCount))}</div>
         </div>
         <div class="detail-box">
           <div class="detail-label">Még nincs jelölve</div>
           <div class="detail-value">${escapeHtml(String(unmarkedCount))}</div>
         </div>
-        <div class="detail-box">
-          <div class="detail-label">Lekönyvelt befizetés</div>
-          <div class="detail-value">${escapeHtml(formatMoney(totalPaidAmount))}</div>
-        </div>
+        ${showPayment ? `
+          <div class="detail-box">
+            <div class="detail-label">Lekönyvelt befizetés</div>
+            <div class="detail-value">${escapeHtml(formatMoney(totalPaidAmount))}</div>
+          </div>
+        ` : ''}
       </div>
     </div>
   `;
@@ -4236,7 +4251,7 @@ function getAdminAttendanceFocusStage(detail) {
     return {
       stage: 'attendance',
       title: 'Most a jelenlét jelölése van soron.',
-      description: 'Előbb minden going játékosnál rögzítsd, hogy megjelent vagy no-show lett.'
+      description: 'Előbb minden going játékosnál rögzítsd, hogy megjelent vagy nem jelent meg.'
     };
   }
 
@@ -4319,6 +4334,26 @@ function getAttendanceDefaultPaymentAmount(detail) {
   return Number.isFinite(amount) && amount >= 0 ? Math.round(amount) : 0;
 }
 
+function isFreeAttendanceEvent(detail) {
+  const paymentSummary = detail?.summary?.paymentSummary || {};
+  const pricingMode = String(paymentSummary.pricing_mode || paymentSummary.pricingMode || '').trim();
+  const finalAmount = Number(paymentSummary.final_amount_per_person || 0);
+  const baseAmount = Number(paymentSummary.base_amount_per_person || 0);
+  const feeAmount = Number(paymentSummary.per_player_fee || 0);
+
+  return (
+    pricingMode === EVENT_PRICING_MODES.FREE ||
+    (
+      Number.isFinite(finalAmount) &&
+      Number.isFinite(baseAmount) &&
+      Number.isFinite(feeAmount) &&
+      finalAmount <= 0 &&
+      baseAmount <= 0 &&
+      feeAmount <= 0
+    )
+  );
+}
+
 function hasStoredAttendanceFinanceValue(player, detail) {
   const defaultAmount = getAttendanceDefaultPaymentAmount(detail);
   const expectedTotal = Number(player?.finance_expected_total_amount);
@@ -4341,6 +4376,10 @@ function hasStoredAttendanceFinanceValue(player, detail) {
 }
 
 function getAttendanceSettlementTargetAmount(player, detail) {
+  if (isFreeAttendanceEvent(detail)) {
+    return 0;
+  }
+
   const explicitTarget = Number(player?.finance_settlement_target_amount);
   if (
     Number.isFinite(explicitTarget)
@@ -4368,12 +4407,14 @@ function getAttendanceExpectedTotalAmount(player, detail) {
 }
 
 function hasRecordedAttendancePayment(player) {
+  const attendancePaymentAmount = Number(player?.attendance_payment_amount);
+  const financeActualPaidAmount = Number(player?.finance_actual_paid_amount);
   return Boolean(
     player
     && (
-      ['present', 'no_show'].includes(player.attendance_status)
-      || player.attendance_marked_at
-      || player.attendance_payment_recorded_at
+      player.attendance_payment_recorded_at
+      || (Number.isFinite(attendancePaymentAmount) && attendancePaymentAmount > 0)
+      || (Number.isFinite(financeActualPaidAmount) && financeActualPaidAmount > 0)
     )
   );
 }
@@ -4512,6 +4553,21 @@ function readFinanceAdjustmentNoteForUser(userId) {
 
 function renderAttendanceFinanceSummary(detail, going = []) {
   const paymentSummary = detail?.summary?.paymentSummary || {};
+  if (isFreeAttendanceEvent(detail)) {
+    return `
+      <div class="event-card top-space attendance-finance-card is-free-event">
+        <div class="row between align-center wrap gap">
+          <strong>Ingyenes esemény</strong>
+          <span class="badge badge-success">nincs befizetendő összeg</span>
+        </div>
+        <div class="small muted top-space">
+          Ennél az eseménynél nem kell befizetést rögzíteni, és nem keletkezik új tartozás vagy túlfizetés.
+          A korábbi csapategyenlegek ettől függetlenül a pénzügyi egyenlegben megmaradnak.
+        </div>
+      </div>
+    `;
+  }
+
   const basePerPerson = Number(paymentSummary.base_amount_per_person || 0);
   const feePerPerson = Number(paymentSummary.per_player_fee || 0);
   const finalPerPerson = Number(paymentSummary.final_amount_per_person || (basePerPerson + feePerPerson) || 0);
@@ -4969,14 +5025,15 @@ function renderAdminAttendanceManager() {
   const isAttendanceStage = focusStage.stage === 'attendance';
   const isPaymentsStage = focusStage.stage === 'payments';
   const isFinishStage = focusStage.stage === 'finish';
+  const isFreeEvent = isFreeAttendanceEvent(detail);
   const focusStageLabel =
     isAttendanceStage ? 'jelenlét' :
-    isPaymentsStage ? 'könyvelés' :
+    isPaymentsStage ? 'befizetés' :
     isFinishStage ? 'lezárás' :
     'ellenőrzés';
   const settlementSummaryLabel =
     isAttendanceStage ? 'Előbb a jelenlétet rögzítsd mindenkinél.' :
-    isPaymentsStage ? 'Most a tényleges befizetéseket ellenőrizd és írd át, ha kell.' :
+    isPaymentsStage ? 'Most a tényleges befizetéseket rögzítsd külön a jelenléti gomboktól.' :
     isFinishStage ? 'A jelenlét és a pénzügy rendben van, most zárhatod az eseményt.' :
     'A lezárt eseménynél itt már csak ellenőrzöd a rögzített állapotot.';
 
@@ -5002,7 +5059,7 @@ function renderAdminAttendanceManager() {
           <div class="detail-value">${escapeHtml(String(Number(summary.presentCount ?? summary.present_count ?? 0)))}</div>
         </div>
         <div class="detail-box">
-          <div class="detail-label">No-show</div>
+          <div class="detail-label">Nem jelent meg</div>
           <div class="detail-value">${escapeHtml(String(Number(summary.noShowCount ?? summary.no_show_count ?? 0)))}</div>
         </div>
         <div class="detail-box">
@@ -5012,14 +5069,14 @@ function renderAdminAttendanceManager() {
       </div>
     </div>
     <div class="finance-task-block${isAttendanceStage ? ' is-current' : ''}">
-      ${renderAttendanceSummary(summary, { title: 'Jelenlét / no-show összesítő' })}
+      ${renderAttendanceSummary(summary, { title: 'Jelenlét / nem jelent meg összesítő', showPayment: !isFreeEvent })}
     </div>
     <div class="finance-task-block${isPaymentsStage ? ' is-current' : ''}">
       ${renderAttendanceFinanceSummary(detail, going)}
     </div>
     <div class="event-card top-space finance-task-block${isAttendanceStage || isFinishStage ? ' is-current' : ''}">
       <div class="row between align-center wrap gap">
-        <strong>No-show jelölés</strong>
+        <strong>Jelenlét jelölése</strong>
         <div class="row gap wrap align-center">
           <span class="badge badge-warning">csak going játékosok</span>
           <button
@@ -5033,8 +5090,12 @@ function renderAdminAttendanceManager() {
       </div>
       <div class="small muted top-space">
         ${isAwaitingFinish
-          ? 'Ez az esemény már megvalósult. Előbb adminisztráld a jelenlétet és a befizetéseket, majd kézzel zárd le az eseményt.'
-          : 'Lezárt eseménynél itt látod a rögzített jelenlétet és a pénzügyi könyvelést.'}
+          ? (isFreeEvent
+            ? 'Ez az esemény már megvalósult és ingyenes. Csak azt jelöld, ki jelent meg és ki nem jelent meg, majd zárd le kézzel.'
+            : 'Ez az esemény már megvalósult. Előbb adminisztráld a jelenlétet, utána külön rögzítsd a befizetéseket, majd kézzel zárd le az eseményt.')
+          : (isFreeEvent
+            ? 'Lezárt ingyenes eseménynél itt csak a rögzített jelenlétet látod.'
+            : 'Lezárt eseménynél itt látod a rögzített jelenlétet és a pénzügyi könyvelést.')}
       </div>
       <div class="stack top-space">
           ${
@@ -5056,40 +5117,54 @@ function renderAdminAttendanceManager() {
                         : ''
                     }
                   </div>
-                  <div class="attendance-row-finance">
-                    <div class="detail-label">Pénzügyi alap</div>
-                    <div class="attendance-row-finance-meta">
-                      <span>Esemény díja: <strong>${escapeHtml(formatMoney(getAttendanceExpectedTotalAmount(player, detail)))}</strong></span>
-                      <span>Előző: <strong>${escapeHtml(formatSignedMoney(Number(player.finance_balance_before_event || 0)))}</strong></span>
-                      <span>Új egyenleg: <strong class="${escapeHtml(getSignedMoneyClass(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}" data-attendance-projected-after data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}</strong></span>
+                  ${isFreeEvent ? `
+                    <div class="attendance-row-finance">
+                      <div class="detail-label">Pénzügy</div>
+                      <div class="attendance-row-finance-meta">
+                        <span><strong>Ingyenes esemény</strong></span>
+                        <span>Nincs befizetendő összeg.</span>
+                      </div>
                     </div>
-                  </div>
-                  <div class="attendance-row-target">
-                    <div class="detail-label">Most rendezendő</div>
-                    <div class="detail-value">${escapeHtml(formatMoney(getAttendanceSettlementTargetAmount(player, detail)))}</div>
-                  </div>
-                  <div class="attendance-row-payment">
-                    <label class="label small" for="attendancePayment_${escapeHtml(player.user_id)}">Befizetés</label>
-                    <input
-                      id="attendancePayment_${escapeHtml(player.user_id)}"
-                      class="attendance-payment-input"
-                      type="number"
-                      min="0"
-                      step="100"
-                      data-attendance-payment
-                      data-attendance-user-id="${escapeHtml(player.user_id)}"
-                      value="${escapeHtml(getAttendancePaymentInputValue(player, detail))}"
-                    />
-                    <div class="small muted" data-attendance-payment-hint data-attendance-user-id="${escapeHtml(player.user_id)}">
-                      Célösszeg most: ${escapeHtml(formatMoney(getAttendanceSettlementTargetAmount(player, detail)))}
+                  ` : `
+                    <div class="attendance-row-finance">
+                      <div class="detail-label">Pénzügyi alap</div>
+                      <div class="attendance-row-finance-meta">
+                        <span>Esemény díja: <strong>${escapeHtml(formatMoney(getAttendanceExpectedTotalAmount(player, detail)))}</strong></span>
+                        <span>Előző: <strong>${escapeHtml(formatSignedMoney(Number(player.finance_balance_before_event || 0)))}</strong></span>
+                        <span>Új egyenleg: <strong class="${escapeHtml(getSignedMoneyClass(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}" data-attendance-projected-after data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(Number.isFinite(Number(player.finance_balance_after_event)) ? Number(player.finance_balance_after_event) : getAttendanceProjectedBalanceAfter(player, detail)))}</strong></span>
+                      </div>
                     </div>
-                  </div>
+                    <div class="attendance-row-target">
+                      <div class="detail-label">Most rendezendő</div>
+                      <div class="detail-value">${escapeHtml(formatMoney(getAttendanceSettlementTargetAmount(player, detail)))}</div>
+                    </div>
+                    <div class="attendance-row-payment">
+                      <label class="label small" for="attendancePayment_${escapeHtml(player.user_id)}">Befizetés</label>
+                      <input
+                        id="attendancePayment_${escapeHtml(player.user_id)}"
+                        class="attendance-payment-input"
+                        type="number"
+                        min="0"
+                        step="100"
+                        data-attendance-payment
+                        data-attendance-user-id="${escapeHtml(player.user_id)}"
+                        value="${escapeHtml(getAttendancePaymentInputValue(player, detail))}"
+                      />
+                      <div class="small muted" data-attendance-payment-hint data-attendance-user-id="${escapeHtml(player.user_id)}">
+                        Célösszeg most: ${escapeHtml(formatMoney(getAttendanceSettlementTargetAmount(player, detail)))}
+                      </div>
+                    </div>
+                  `}
                   <div class="attendance-row-statuscell">
                     <div class="detail-label">Állapot</div>
                     <div class="detail-value">${attendanceStatusBadge(player.attendance_status)}</div>
-                    <div class="small muted">Befizetve: <span data-attendance-actual-paid data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatMoney(Number(readAttendancePaymentAmountForUser(player.user_id) ?? getAttendancePaymentInputValue(player, detail) ?? 0)))}</span></div>
-                    <div class="small muted">Eltérés most</div>
-                    <div class="detail-value ${escapeHtml(getSignedMoneyClass(getAttendanceProjectedDelta(player, detail)))}" data-attendance-payment-delta data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(getAttendanceProjectedDelta(player, detail)))}</div>
+                    ${isFreeEvent ? `
+                      <div class="small muted">Ingyenes alkalom.</div>
+                    ` : `
+                      <div class="small muted">${hasRecordedAttendancePayment(player) ? 'Rögzített befizetés' : 'Mentendő befizetés'}: <span data-attendance-actual-paid data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatMoney(Number(readAttendancePaymentAmountForUser(player.user_id) ?? getAttendancePaymentInputValue(player, detail) ?? 0)))}</span></div>
+                      <div class="small muted">Eltérés most</div>
+                      <div class="detail-value ${escapeHtml(getSignedMoneyClass(getAttendanceProjectedDelta(player, detail)))}" data-attendance-payment-delta data-attendance-user-id="${escapeHtml(player.user_id)}">${escapeHtml(formatSignedMoney(getAttendanceProjectedDelta(player, detail)))}</div>
+                    `}
                   </div>
                   <div class="attendance-row-actions">
                     <button
@@ -5108,8 +5183,19 @@ function renderAdminAttendanceManager() {
                       data-attendance-user-id="${escapeHtml(player.user_id)}"
                       data-attendance-status="no_show"
                     >
-                      No-show
+                      Nem jelent meg
                     </button>
+                    ${isFreeEvent ? '' : `
+                      <button
+                        class="btn btn-ghost"
+                        type="button"
+                        data-team-summary-action="record-attendance-payment"
+                        data-attendance-user-id="${escapeHtml(player.user_id)}"
+                        ${player.attendance_status === 'present' ? '' : 'disabled'}
+                      >
+                        Befizetés rögzítése
+                      </button>
+                    `}
                   </div>
                 </div>
               `).join('')
@@ -5123,7 +5209,7 @@ function renderAdminAttendanceManager() {
               <div class="small muted">
                 ${canFinishNow
                   ? 'Minden going játékos adminisztrálva van. Az esemény most már lezárható.'
-                  : 'Az esemény addig nem zárható le, amíg minden going játékosnál nincs rögzítve a megjelent vagy no-show állapot.'}
+                  : 'Az esemény addig nem zárható le, amíg minden going játékosnál nincs rögzítve a megjelent vagy nem jelent meg állapot.'}
               </div>
               <button
                 class="btn"
@@ -5145,6 +5231,7 @@ function renderAdminAttendanceManager() {
 function formatEventReadiness(readiness) {
   const labels = {
     open: 'jelentkezés nyitva',
+    post_event: 'utómunka',
     draw_published: 'csapatok kihirdetve',
     draw_stale: 'újraleosztás kell',
     below_minimum: 'minimum alatt',
@@ -5152,12 +5239,27 @@ function formatEventReadiness(readiness) {
     finished: 'lezárt'
   };
 
-  return labels[readiness] || 'szervezes alatt';
+  return labels[readiness] || 'szervezés alatt';
 }
 
-function eventReadinessBadge(readiness) {
+function getEffectiveEventReadiness(eventOrReadiness, now = Date.now()) {
+  if (!eventOrReadiness) return '';
+  if (typeof eventOrReadiness !== 'object') return eventOrReadiness;
+
+  if (eventOrReadiness.status === 'finished') return 'finished';
+  if (eventOrReadiness.status === 'cancelled') return 'cancelled';
+  if (isPastPublishedEvent(eventOrReadiness, now)) return 'post_event';
+
+  return eventOrReadiness.event_readiness || eventOrReadiness.eventReadiness || '';
+}
+
+function eventReadinessBadge(eventOrReadiness, now = Date.now()) {
+  const readiness = getEffectiveEventReadiness(eventOrReadiness, now);
+  if (!readiness) return '';
+
   const map = {
     open: 'badge badge-draft',
+    post_event: 'badge badge-warning',
     draw_published: 'badge badge-success',
     draw_stale: 'badge badge-warning',
     below_minimum: 'badge badge-danger',
@@ -5168,15 +5270,16 @@ function eventReadinessBadge(readiness) {
   return `<span class="${map[readiness] || 'badge badge-muted'}">${escapeHtml(formatEventReadiness(readiness))}</span>`;
 }
 
-function getEventReadinessTone(readiness) {
+function getEventReadinessTone(eventOrReadiness, now = Date.now()) {
+  const readiness = getEffectiveEventReadiness(eventOrReadiness, now);
   if (readiness === 'draw_published') return 'is-good';
-  if (readiness === 'draw_stale') return 'is-warning';
+  if (readiness === 'draw_stale' || readiness === 'post_event') return 'is-warning';
   if (readiness === 'below_minimum' || readiness === 'cancelled') return 'is-danger';
   return 'is-neutral';
 }
 
 function buildEventReadinessMessage(event) {
-  const readiness = event?.event_readiness || event?.eventReadiness;
+  const readiness = getEffectiveEventReadiness(event);
 
   if (readiness === 'draw_published') {
     return 'A csapatok jelenleg kihirdetett, stabil állapotban vannak.';
@@ -5194,6 +5297,10 @@ function buildEventReadinessMessage(event) {
     return 'Az esemény elmarad, új jelentkezés már nem várható.';
   }
 
+  if (readiness === 'post_event') {
+    return 'Az esemény már lezajlott, a jelentkezés lezárult. Innen a jelenléti és pénzügyi utómunka következik.';
+  }
+
   if (readiness === 'finished') {
     return 'Az esemény lezárult.';
   }
@@ -5202,7 +5309,7 @@ function buildEventReadinessMessage(event) {
 }
 
 function renderEventReadinessPanel(event, options = {}) {
-  const readiness = event?.event_readiness || event?.eventReadiness;
+  const readiness = getEffectiveEventReadiness(event);
   if (!readiness) return '';
 
   const { compact = false } = options;
@@ -5630,6 +5737,95 @@ function formatTeamRole(role) {
   return map[role] || role || '-';
 }
 
+function isTeamAdminRole(role) {
+  return ['team_admin', 'team_manager'].includes(String(role || ''));
+}
+
+function getTeamRoleBadgeClass(role) {
+  if (role === 'team_admin') return 'badge badge-success';
+  if (role === 'team_manager') return 'badge badge-draft';
+  return 'badge badge-muted';
+}
+
+function getMyTeamById(teamId) {
+  return (state.myTeams || []).find(team => String(team.id) === String(teamId || '')) || null;
+}
+
+function getCurrentTeamRole() {
+  return state.teamRole || getMyTeamById(state.currentTeamId)?.role || null;
+}
+
+function getAdminCapableTeams() {
+  return (state.myTeams || []).filter(team => (
+    isTeamAdminRole(team.role)
+    && (!team.membership_status || team.membership_status === 'active')
+  ));
+}
+
+function renderTeamRoleContextCard(options = {}) {
+  const { surface = 'user' } = options;
+  const currentTeam = state.currentTeam || getMyTeamById(state.currentTeamId);
+  const currentRole = getCurrentTeamRole();
+  const currentRoleLabel = isPlatformOwner()
+    ? 'platform owner'
+    : formatTeamRole(currentRole || 'member');
+  const isAdminHere = isPlatformOwner() || isTeamAdminRole(currentRole);
+  const adminTeams = getAdminCapableTeams();
+  const adminTeamsElsewhere = adminTeams.filter(team => String(team.id) !== String(state.currentTeamId || ''));
+  const contextClass = isAdminHere ? 'is-admin-context' : 'is-player-context';
+  const title = currentTeam
+    ? `Aktív csapat: ${currentTeam.name || 'Névtelen csapat'}`
+    : 'Nincs aktív fókuszcsapat';
+  const roleText = currentTeam
+    ? `Szereped ebben a csapatban: ${currentRoleLabel}`
+    : 'Válassz csapatot, és a jogosultságok ahhoz a csapathoz igazodnak.';
+  const explanation = currentTeam
+    ? (
+        isAdminHere
+          ? 'Ebben a csapatban csapatkapitányi jogosultságod van, ezért a csapat admin funkciók is látszanak.'
+          : 'Ebben a csapatban játékosként vagy bent, ezért a csapatkapitányi funkciók nem jelennek meg.'
+      )
+    : 'A rendszerben a jogosultság nem globális: mindig az aktuális fókuszcsapatban betöltött szereped számít.';
+  const switchTargetTeam = !isAdminHere ? adminTeamsElsewhere[0] : null;
+  const switchHint = switchTargetTeam
+    ? `Csapatkapitányi funkcióid itt vannak: ${switchTargetTeam.name || 'másik csapat'}.`
+    : '';
+  const surfaceLabel = surface === 'admin'
+    ? 'Csapat admin kontextus'
+    : 'Játékos nézet kontextus';
+
+  return `
+    <div class="stat-card role-context-card ${contextClass}">
+      <div class="context-strip">
+        <div>
+          <div class="stat-label">${escapeHtml(surfaceLabel)}</div>
+          <div class="role-context-title">${escapeHtml(title)}</div>
+          <div class="small muted top-space">${escapeHtml(roleText)}</div>
+          <div class="small top-space">${escapeHtml(explanation)}</div>
+          ${switchHint ? `<div class="small muted top-space">${escapeHtml(switchHint)}</div>` : ''}
+        </div>
+        <div class="role-context-actions">
+          <span class="${escapeHtml(getTeamRoleBadgeClass(currentRole))}">${escapeHtml(currentRoleLabel)}</span>
+          ${
+            switchTargetTeam
+              ? `
+                <button
+                  class="btn btn-secondary"
+                  type="button"
+                  data-context-team-id="${escapeHtml(switchTargetTeam.id)}"
+                  data-context-target-view="adminView"
+                >
+                  Admin csapat megnyitása
+                </button>
+              `
+              : ''
+          }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function buildEventInsightChips(event) {
   const maxPlayers = Number(event.max_players || 0);
   const goingCount = Number(event.going_count || 0);
@@ -5691,7 +5887,7 @@ function buildIcsDownloadUrl(event) {
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//Foci App//HU',
+    'PRODID:-//Foci Szervező//HU',
     'BEGIN:VEVENT',
     `UID:${event.id || `event-${start.getTime()}`}@foci-app`,
     `DTSTAMP:${formatIcsDate(new Date())}`,
@@ -5905,7 +6101,7 @@ function renderUserOverview() {
   const newEvents = getUserNewEvents(state.myEvents);
   const isNewEventsPulseActive = newEvents.length > 0;
 
-  els.userOverviewCards.innerHTML = [
+  const overviewCards = [
     { label: 'Következő kezdés', value: nextEvent ? formatDateTime(nextEvent.start_at) : 'nincs' },
     { label: 'Saját státusz', value: nextEvent ? formatRegistrationStatus(nextEvent.my_registration_status) : 'nincs közelgő esemény' },
     {
@@ -5937,6 +6133,8 @@ function renderUserOverview() {
       ${item.helper ? `<div class="stat-helper">${escapeHtml(item.helper)}</div>` : ''}
     </button>
   `).join('');
+
+  els.userOverviewCards.innerHTML = `${renderTeamRoleContextCard({ surface: 'user' })}${overviewCards}`;
 }
 
 function clearPendingInvitePulseTimer() {
@@ -6455,7 +6653,7 @@ function renderAdminOverview() {
       ? formatTeamRole(state.teamRole)
       : (shouldShowCreateTeam() ? 'uj szervezo' : formatTeamRole('member'));
 
-  els.adminOverviewCards.innerHTML = [
+  const overviewCards = [
     { label: 'Saját szerep', value: roleLabel },
     { label: 'Aktív tag', value: activeMembers },
     { label: 'Függő meghívó', value: pendingInvites },
@@ -6466,6 +6664,8 @@ function renderAdminOverview() {
       <div class="stat-value">${escapeHtml(item.value)}</div>
     </div>
   `).join('');
+
+  els.adminOverviewCards.innerHTML = `${renderTeamRoleContextCard({ surface: 'admin' })}${overviewCards}`;
 }
 
 function canManageInvites() {
@@ -6878,7 +7078,7 @@ function buildAdminEventsWorkspaceState(events = state.adminEvents || []) {
     nextAction = {
       mode: 'post-event',
       title: 'Most a megvalósult esemény adminisztrálása a fontos.',
-      description: 'A meccs már lement. Itt már nem szervezel, hanem jelenlétet, no-show-t és befizetéseket rendezel, majd a pénzügyben lezárod a folyamatot.',
+      description: 'A meccs már lement. Itt már nem szervezel, hanem jelenlétet, nem jelent meg státuszt és befizetéseket rendezel, majd a pénzügyben lezárod a folyamatot.',
       badgeClass: 'badge-warning',
       badgeText: 'utómunka',
       targetSection: 'closed'
@@ -7337,7 +7537,7 @@ function renderAdminHomeFocusEventPanel(events = []) {
     <div class="event-card admin-guide-card admin-focus-panel">
       <div class="row between align-center wrap gap">
         <strong>Fókusz esemény</strong>
-        ${eventReadinessBadge(nextEvent.event_readiness || 'open')}
+        ${eventReadinessBadge(nextEvent)}
       </div>
       <div class="admin-guide-title top-space">${escapeHtml(nextEvent.title || 'Névtelen esemény')}</div>
       <div class="small muted">${escapeHtml(formatDateTime(nextEvent.start_at))}</div>
@@ -7718,7 +7918,7 @@ function renderStatisticsOverviewCards(viewModel) {
     { label: 'Tartozok', value: String(viewModel.debtors.length) },
     { label: 'Tobblettel rendelkezok', value: String(viewModel.creditMembers.length) },
     { label: '3+ esemenyre nem reagalok', value: String(viewModel.nonResponders.length) },
-    { label: 'No-show kockazatos', value: String(viewModel.noShowRiskMembers.length) },
+    { label: 'Nem jelent meg kockázatos', value: String(viewModel.noShowRiskMembers.length) },
     { label: 'Teljes csapat tartozas', value: formatMoney(viewModel.totalDebtAmount) },
     { label: 'Teljes csapat tobblet', value: formatMoney(viewModel.totalCreditAmount) },
     { label: 'Osszes befizetett', value: formatMoney(viewModel.totalPaidAmount) }
@@ -7783,7 +7983,7 @@ function renderStatisticsAttentionPanel(viewModel) {
                   flags.push(`${registrationStats.non_response_count} nem reagalas`);
                 }
                 if (Number(attendanceStats.no_show_count || 0) > 0) {
-                  flags.push(`${attendanceStats.no_show_count} no-show`);
+                  flags.push(`${attendanceStats.no_show_count} nem jelent meg`);
                 }
                 if (Number(financeStats.current_balance_amount || 0) < 0) {
                   flags.push(`tartozas: ${formatMoney(Math.abs(financeStats.current_balance_amount || 0))}`);
@@ -7819,7 +8019,7 @@ function renderStatisticsAttendanceTable(viewModel) {
           <div>Jelentkezes</div>
           <div>Megjelent</div>
           <div>Lemondas</div>
-          <div>No-show</div>
+          <div>Nem jelent meg</div>
           <div>Arany</div>
         </div>
         ${viewModel.members.map(member => {
@@ -7910,7 +8110,7 @@ function renderAdminStatisticsPanel() {
         </div>
         <div class="admin-home-primary-title top-space">Ez vezetői rálátás.</div>
         <div class="small muted top-space">
-          Itt gyorsan észreveheted, kikre lehet stabilan számítani, kik kezdenek lemorzsolódni, és hol van pénzügyi vagy no-show kockázat.
+          Itt gyorsan észreveheted, kikre lehet stabilan számítani, kik kezdenek lemorzsolódni, és hol van pénzügyi vagy nem jelent meg kockázat.
         </div>
       </div>
       ${renderStatisticsOverviewCards(viewModel)}
@@ -7965,7 +8165,7 @@ function renderAdminFinancePanel() {
     },
     {
       label: '2. Jelenlét',
-      hint: hasRecordedAttendance ? 'Van rögzített megjelent vagy no-show' : 'Jelöld a megjelenteket',
+      hint: hasRecordedAttendance ? 'Van rögzített megjelent vagy nem jelent meg státusz' : 'Jelöld a megjelenteket',
       state: !selectedDetailEvent ? 'upcoming' : hasRecordedAttendance ? 'done' : 'current',
       workspace: 'finance',
       section: 'settlement'
@@ -7995,7 +8195,7 @@ function renderAdminFinancePanel() {
       </div>
       <div class="admin-home-primary-title top-space">Ez már utómunka, nem szervezés.</div>
       <div class="small muted top-space">
-        Itt a már megvalósult események adminisztrációja történik: jelenlét, no-show, befizetés és végül a kézi lezárás.
+        Itt a már megvalósult események adminisztrációja történik: jelenlét, nem jelent meg státusz, befizetés és végül a kézi lezárás.
       </div>
       <div class="row gap wrap top-space">
         <button class="btn" type="button" data-admin-finance-section="settlement">Elszámolás</button>
@@ -8071,7 +8271,7 @@ function renderAdminFinancePanel() {
       </div>
       <div class="admin-home-primary-title top-space">Elszámolási sorrend</div>
       <div class="small muted top-space">
-        1. Jelöld, ki jelent meg vagy lett no-show. 2. Rögzítsd a befizetéseket. 3. Ha minden kész, csak utána zárd le kézzel az eseményt.
+        1. Jelöld, ki jelent meg vagy nem jelent meg. 2. Rögzítsd a befizetéseket. 3. Ha minden kész, csak utána zárd le kézzel az eseményt.
       </div>
       <details class="admin-home-shelf top-space">
         <summary>Polcra tett elszámolási folyamat</summary>
@@ -8172,13 +8372,19 @@ function applyRoleAwareUi() {
   const adminNav = document.querySelector('[data-view="adminView"]');
   const userNav = document.querySelector('[data-view="userView"]');
   const authNav = document.querySelector('[data-view="authView"]');
+  const helpNav = document.querySelector('[data-view="helpView"]');
+  const contactNav = document.querySelector('[data-view="contactView"]');
   const platformNav = document.querySelector('[data-view="platformView"]');
   const tournamentView = document.getElementById('tournamentView');
   const adminView = document.getElementById('adminView');
+  const helpView = document.getElementById('helpView');
+  const contactView = document.getElementById('contactView');
   const platformView = document.getElementById('platformView');
 
   if (authNav) authNav.style.display = state.token ? 'none' : '';
   if (userNav) userNav.style.display = state.token ? '' : 'none';
+  if (helpNav) helpNav.style.display = state.token ? '' : 'none';
+  if (contactNav) contactNav.style.display = state.token ? '' : 'none';
   if (tournamentNav) tournamentNav.style.display = shouldShowTournamentWorkspace() ? '' : 'none';
   if (adminNav) adminNav.style.display = shouldShowTeamAdminView() ? '' : 'none';
   if (platformNav) platformNav.style.display = isPlatformOwner() ? '' : 'none';
@@ -8189,6 +8395,14 @@ function applyRoleAwareUi() {
 
   if (adminView) {
     adminView.hidden = !shouldShowTeamAdminView();
+  }
+
+  if (helpView) {
+    helpView.hidden = !state.token;
+  }
+
+  if (contactView) {
+    contactView.hidden = !state.token;
   }
 
   if (platformView) {
@@ -8612,6 +8826,10 @@ async function handleTournamentSetupSubmit(event) {
 }
 
 function switchView(viewId) {
+  if ((viewId === 'helpView' || viewId === 'contactView') && !state.token) {
+    viewId = 'authView';
+  }
+
   if (viewId === 'tournamentView' && !shouldShowTournamentWorkspace()) {
     viewId = getPostAuthDefaultView();
   }
@@ -8857,15 +9075,20 @@ function renderMyTeams(teams) {
 
   els.myTeamsList.innerHTML = sortedTeams.map(team => {
     const isCurrent = team.id === state.currentTeamId;
+    const isAdminTeam = isTeamAdminRole(team.role);
     return `
       <div class="event-card compact-team-card ${isCurrent ? 'is-current-card' : ''}" data-my-team-card-id="${team.id}">
         <div class="row between align-center wrap gap">
           <div>
             <strong>${escapeHtml(team.name)}</strong>
-            <div class="small muted">${escapeHtml(formatTeamRole(team.role))} · azonosító: ${escapeHtml(shortId(team.id))}</div>
+            <div class="row gap wrap align-center top-space">
+              <span class="${escapeHtml(getTeamRoleBadgeClass(team.role))}">${escapeHtml(formatTeamRole(team.role))}</span>
+              ${isAdminTeam ? '<span class="badge badge-warning">admin funkciók itt</span>' : '<span class="badge badge-muted">játékos nézet</span>'}
+              <span class="small muted">azonosító: ${escapeHtml(shortId(team.id))}</span>
+            </div>
           </div>
           <div class="row gap align-center wrap">
-            <span class="badge badge-draft ${isCurrent ? '' : 'hidden'}" data-my-team-focus-badge="${team.id}">fókuszcsapat</span>
+            <span class="badge ${isAdminTeam ? 'badge-success' : 'badge-draft'} ${isCurrent ? '' : 'hidden'}" data-my-team-focus-badge="${team.id}">aktuális fókuszcsapat</span>
             <button class="btn btn-secondary" type="button" data-my-team-id="${team.id}">
               Megnyitás
             </button>
@@ -10187,7 +10410,7 @@ function renderTeamMembersAdmin(members) {
         <div class="small muted">Értékelt események: ${escapeHtml(String(member.rank_snapshot?.stats?.evaluatedEvents ?? 0))} · Részvételi arány: ${escapeHtml(member.rank_snapshot?.stats?.participationRatio != null ? `${Math.round(member.rank_snapshot.stats.participationRatio * 100)}%` : 'nincs adat')}</div>
         <div class="row gap wrap top-space">
           <span class="badge badge-success">megjelent: ${escapeHtml(String(member.attendance_stats?.present_count ?? 0))}</span>
-          <span class="badge ${(Number(member.attendance_stats?.no_show_count || 0) > 0) ? 'badge-danger' : 'badge-muted'}">no-show: ${escapeHtml(String(member.attendance_stats?.no_show_count ?? 0))}</span>
+          <span class="badge ${(Number(member.attendance_stats?.no_show_count || 0) > 0) ? 'badge-danger' : 'badge-muted'}">nem jelent meg: ${escapeHtml(String(member.attendance_stats?.no_show_count ?? 0))}</span>
           <span class="badge badge-muted">jelölt: ${escapeHtml(String(member.attendance_stats?.marked_count ?? 0))}</span>
         </div>
         <div class="small muted">
@@ -10582,7 +10805,7 @@ async function handleTeamSummaryAction(event) {
 
         await Promise.all([loadAdminEvents(), loadUserEvents(), loadMyEvents()]);
         await openEventForAdmin(eventId);
-          showMessage(result.message || 'Az esemény lezárva, a no-show jelölés megnyílt.', 'success');
+          showMessage(result.message || 'Az esemény lezárva, a nem jelent meg jelölés megnyílt.', 'success');
           return;
         }
 
@@ -10596,19 +10819,16 @@ async function handleTeamSummaryAction(event) {
           }
 
           for (const player of going) {
-            const paymentAmount = readAttendancePaymentAmountForUser(player.user_id);
-            writeAttendancePaymentDraft(currentEventId, player.user_id, paymentAmount);
             await api(`/events/${currentEventId}/attendance/${player.user_id}`, {
               method: 'POST',
               body: JSON.stringify({
-                status: 'present',
-                paymentAmount
+                status: 'present'
               })
             });
           }
 
           await openEventForAdmin(currentEventId);
-          showMessage('Minden going játékos megjelentként és befizetéssel rögzítve.', 'success');
+          showMessage('Minden going játékos megjelentként rögzítve. A befizetéseket külön tudod menteni.', 'success');
           return;
         }
 
@@ -10616,11 +10836,6 @@ async function handleTeamSummaryAction(event) {
           const targetUserId = event.target.dataset.attendanceUserId;
           const status = event.target.dataset.attendanceStatus;
           const currentEventId = state.selectedAdminEventDetail?.event?.id || state.selectedAdminEvent?.id;
-          const paymentAmount = status === 'present' ? readAttendancePaymentAmountForUser(targetUserId) : null;
-
-      if (status === 'present') {
-        writeAttendancePaymentDraft(currentEventId, targetUserId, paymentAmount);
-      }
 
       if (!currentEventId) {
         showMessage('Előbb válassz ki egy lezárt eseményt.', 'error');
@@ -10630,10 +10845,43 @@ async function handleTeamSummaryAction(event) {
         const result = await api(`/events/${currentEventId}/attendance/${targetUserId}`, {
           method: 'POST',
           body: JSON.stringify({
-            status,
-            paymentAmount
+            status
           })
         });
+
+      await openEventForAdmin(currentEventId);
+      showMessage(result.message, 'success');
+      return;
+    }
+
+    if (action === 'record-attendance-payment') {
+      const targetUserId = event.target.dataset.attendanceUserId;
+      const currentEventId = state.selectedAdminEventDetail?.event?.id || state.selectedAdminEvent?.id;
+
+      if (!currentEventId) {
+        showMessage('Előbb válassz ki egy lezárt eseményt.', 'error');
+        return;
+      }
+
+      if (isFreeAttendanceEvent(state.selectedAdminEventDetail)) {
+        showMessage('Ez az esemény ingyenes, nincs befizetendő összeg.', 'info');
+        return;
+      }
+
+      const paymentAmount = readAttendancePaymentAmountForUser(targetUserId);
+      if (paymentAmount == null) {
+        showMessage('Adj meg egy 0 vagy annál nagyobb befizetési összeget.', 'error');
+        return;
+      }
+
+      writeAttendancePaymentDraft(currentEventId, targetUserId, paymentAmount);
+      const result = await api(`/events/${currentEventId}/attendance/${targetUserId}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'present',
+          paymentAmount
+        })
+      });
 
       await openEventForAdmin(currentEventId);
       showMessage(result.message, 'success');
@@ -11434,9 +11682,9 @@ function renderAdminEventGroup(title, events, options = {}) {
               <div class="row between align-center">
                 <h4>${escapeHtml(event.title)}</h4>
                 <div class="row gap wrap align-center">
-                  ${String(event.id) === String(focusEventId) ? '<span class="badge badge-warning">most ez a fókusz</span>' : ''}
+                  ${renderAdminFocusBadge(event, focusEventId, mode, now)}
                   ${renderAdminLifecycleBadge(event, now)}
-                  ${eventReadinessBadge(event.event_readiness || event.eventReadiness)}
+                  ${eventReadinessBadge(event, now)}
                   ${event.hidden_from_admin_list ? '<span class="badge badge-muted">rejtett</span>' : ''}
                 </div>
               </div>
@@ -11596,7 +11844,7 @@ function renderAdminEvents(events) {
       <div class="small muted top-space">
         ${escapeHtml(
           manageablePastEvents.length
-            ? 'Itt tudod rögzíteni a megjelenteket, a no-show-t és a befizetéseket. A lezárás csak ezek után történjen meg.'
+            ? 'Itt tudod rögzíteni a megjelenteket, a nem jelent meg státuszt és a befizetéseket. A lezárás csak ezek után történjen meg.'
             : finishedEvents.length
               ? 'Nyitott utómunka most nincs. Ha újra lesz megvalósult esemény, itt fog megjelenni adminisztrálásra.'
             : 'Ha egy esemény már lezajlott, de még pénzügyi és jelenléti adminisztrációra vár, itt jelenik meg.'
@@ -11864,8 +12112,8 @@ function renderUserEvents(events) {
       <div class="row between align-center">
         <h4>${escapeHtml(event.title)}</h4>
         <div class="row gap wrap align-center">
-          ${statusBadge(event.status)}
-          ${eventReadinessBadge(event.event_readiness || event.eventReadiness)}
+          ${renderAdminLifecycleBadge(event)}
+          ${eventReadinessBadge(event)}
         </div>
       </div>
       ${renderHolidayWarning(getHolidayWarningFromEvent(event), { compact: true })}
@@ -12026,7 +12274,7 @@ function renderUserEventDetail(result) {
                   myAttendance?.attendance_status
                     ? escapeHtml(
                         myAttendance.attendance_status === 'no_show'
-                          ? 'A lezárt eseménynél no-show jelölést kaptál.'
+                          ? 'A lezárt eseménynél nem jelent meg jelölést kaptál.'
                           : 'A lezárt eseménynél megjelentként lettél jelölve.'
                       )
                     : 'Ehhez a lezárt eseményhez még nincs rögzítve a jelenléti jelölésed.'
@@ -12133,6 +12381,21 @@ function bindEvents() {
       }
       if (userOverviewAction.dataset.userOverviewAction === 'new-events') {
         await jumpToNewestUnregisteredEvent();
+      }
+      return;
+    }
+
+    const contextTeamAction = event.target.closest('[data-context-team-id]');
+    if (contextTeamAction) {
+      const targetTeamId = contextTeamAction.dataset.contextTeamId || '';
+      const targetView = contextTeamAction.dataset.contextTargetView || '';
+      if (targetTeamId) {
+        await loadTeam(targetTeamId);
+        if (targetView === 'adminView' && shouldShowTeamAdminView()) {
+          switchView('adminView');
+        } else if (targetView === 'userView') {
+          switchView('userView');
+        }
       }
       return;
     }

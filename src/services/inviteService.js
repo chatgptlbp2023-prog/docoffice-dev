@@ -1,6 +1,7 @@
 const { randomBytes } = require('crypto');
 const AppError = require('../utils/appError');
 const { withTransaction } = require('./dbService');
+const eventNotificationService = require('./eventNotificationService');
 const {
   normalizeEmail,
   normalizeRole,
@@ -575,10 +576,29 @@ async function consumeInvite(client, invite, user) {
   };
 }
 
+async function notifyUpcomingEventsForAcceptedInvite(member) {
+  if (!member?.team_id || !member?.user_id) {
+    return null;
+  }
+
+  try {
+    return await eventNotificationService.notifyNewMemberUpcomingEvents({
+      teamId: member.team_id,
+      userId: member.user_id
+    });
+  } catch (error) {
+    console.error('Uj csapattag esemenyertesitesi hiba:', error);
+    return {
+      status: 'failed',
+      error: error.message
+    };
+  }
+}
+
 async function acceptInvite({ inviteId, userId, email }) {
   const invitedEmail = assertValidInviteEmail(email, { required: true });
 
-  return withTransaction(async client => {
+  const result = await withTransaction(async client => {
     const invite = await loadInviteById(client, inviteId, { forUpdate: true });
     assertInviteCanBeConsumed(invite, invitedEmail);
 
@@ -604,12 +624,19 @@ async function acceptInvite({ inviteId, userId, email }) {
       member: consumed.member
     };
   });
+
+  const eventCatchupDelivery = await notifyUpcomingEventsForAcceptedInvite(result.member);
+
+  return {
+    ...result,
+    eventCatchupDelivery
+  };
 }
 
 async function acceptInviteToken({ inviteToken, userId, email }) {
   const normalizedEmail = assertValidInviteEmail(email, { required: true });
 
-  return withTransaction(async client => {
+  const result = await withTransaction(async client => {
     const invite = await loadInviteByToken(client, inviteToken, { forUpdate: true });
     assertInviteCanBeConsumed(invite, normalizedEmail);
 
@@ -635,6 +662,13 @@ async function acceptInviteToken({ inviteToken, userId, email }) {
       member: consumed.member
     };
   });
+
+  const eventCatchupDelivery = await notifyUpcomingEventsForAcceptedInvite(result.member);
+
+  return {
+    ...result,
+    eventCatchupDelivery
+  };
 }
 
 async function getInviteByToken({ inviteToken }) {

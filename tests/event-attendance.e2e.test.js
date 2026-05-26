@@ -151,7 +151,7 @@ describe('Event attendance / no-show E2E', () => {
       .send({
         title: 'Attendance Event',
         description: 'No-show teszt',
-        startAt: '2026-05-10T18:00:00.000Z',
+        startAt: '2026-06-10T18:00:00.000Z',
         locationName: 'Teszt palya',
         minPlayers: 2,
         playersOnFieldTotal: 2,
@@ -316,6 +316,68 @@ describe('Event attendance / no-show E2E', () => {
     expect(detailRes.body.registrations.going[0].attendance_payment_amount).toBe(1400);
   });
 
+  test('present attendance without payment keeps payment separate and preserves manual amount later', async () => {
+    const eventId = await createPublishedEvent({
+      pricingMode: 'fixed_per_person',
+      fixedPricePerPerson: 1300,
+      perPlayerFee: 100
+    });
+
+    const regARes = await request(app)
+      .post(`/api/events/${eventId}/register`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+    expect(regARes.status).toBe(201);
+
+    await pool.query(
+      `update events set start_at = now() - interval '2 hour', updated_at = now() where id = $1`,
+      [eventId]
+    );
+
+    const attendanceOnlyRes = await request(app)
+      .post(`/api/events/${eventId}/attendance/${memberAUserId}`)
+      .set('Authorization', `Bearer ${teamManagerToken}`)
+      .send({ status: 'present' });
+
+    expect(attendanceOnlyRes.status).toBe(200);
+    expect(attendanceOnlyRes.body.attendance.status).toBe('present');
+    expect(attendanceOnlyRes.body.attendance.payment_amount).toBeNull();
+    expect(attendanceOnlyRes.body.summary.total_paid_amount).toBe(0);
+
+    const unpaidDetailRes = await request(app)
+      .get(`/api/events/${eventId}`)
+      .set('Authorization', `Bearer ${teamAdminToken}`);
+
+    expect(unpaidDetailRes.status).toBe(200);
+    expect(unpaidDetailRes.body.registrations.going[0].attendance_payment_amount).toBeNull();
+    expect(unpaidDetailRes.body.registrations.going[0].finance_expected_total_amount).toBe(1400);
+    expect(unpaidDetailRes.body.registrations.going[0].finance_actual_paid_amount).toBe(0);
+    expect(unpaidDetailRes.body.registrations.going[0].finance_balance_after_event).toBe(-1400);
+
+    const paymentRes = await request(app)
+      .post(`/api/events/${eventId}/attendance/${memberAUserId}`)
+      .set('Authorization', `Bearer ${teamManagerToken}`)
+      .send({ status: 'present', paymentAmount: 999 });
+
+    expect(paymentRes.status).toBe(200);
+    expect(paymentRes.body.attendance.payment_amount).toBe(999);
+
+    const preservedRes = await request(app)
+      .post(`/api/events/${eventId}/attendance/${memberAUserId}`)
+      .set('Authorization', `Bearer ${teamManagerToken}`)
+      .send({ status: 'present' });
+
+    expect(preservedRes.status).toBe(200);
+    expect(preservedRes.body.attendance.payment_amount).toBe(999);
+
+    const paidDetailRes = await request(app)
+      .get(`/api/events/${eventId}`)
+      .set('Authorization', `Bearer ${teamAdminToken}`);
+
+    expect(paidDetailRes.status).toBe(200);
+    expect(paidDetailRes.body.registrations.going[0].finance_actual_paid_amount).toBe(999);
+    expect(paidDetailRes.body.registrations.going[0].finance_balance_after_event).toBe(-401);
+  });
+
   test('if 1400 Ft is due but only 1000 Ft arrives, the event keeps a -400 Ft debt', async () => {
     const financeEventPayload = {
       pricingMode: 'fixed_per_person',
@@ -452,7 +514,10 @@ describe('Event attendance / no-show E2E', () => {
       perPlayerFee: 100
     };
     const firstEventId = await createPublishedEvent(financeEventPayload);
-    const secondEventId = await createPublishedEvent(financeEventPayload);
+    const secondEventId = await createPublishedEvent({
+      ...financeEventPayload,
+      startAt: '2026-06-17T18:00:00.000Z'
+    });
 
     const regFirstRes = await request(app)
       .post(`/api/events/${firstEventId}/register`)

@@ -191,7 +191,7 @@ async function notifyRegistrationSummary({
 } = {}) {
   const recipientEmail = getRegistrationNotificationRecipient();
   const counts = await getRegistrationCounts();
-  const platformName = getVersionInfo().name || 'Foci App';
+  const platformName = getVersionInfo().name || 'Foci Szervező';
   const timestampLabel = formatBudapestTimestamp();
   const { subject, text, html } = buildRegistrationNotificationContent({
     counts,

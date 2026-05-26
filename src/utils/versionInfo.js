@@ -70,7 +70,7 @@ function getVersionInfo() {
   const releaseName = String(process.env.APP_RELEASE_NAME || '').trim();
 
   return {
-    name: 'Foci App',
+    name: 'Foci Szervező',
     version: readPackageVersion(),
     release: releaseName || null,
     commit: gitMeta.commit,

@@ -33,6 +33,27 @@ Minimum:
 5. A frontendben az API base legyen a backend publikus URL-je.
 6. Ellenőrizd a login, team load, event list, invite, register flow-t.
 
+## Lokális pilot smoke élesítés előtt
+
+Élesítés előtt futtasd:
+
+```bash
+npm run test:pilot
+```
+
+Ez a csomag a pilot szempontból legkritikusabb flow-kat fogja össze:
+
+- auth és health check
+- regisztrációs útvonalak
+- login utáni szerepalapú routing
+- csapatmeghívó és meghívó elfogadása
+- eseményjelentkezés
+- teljes szervezői flow
+- esemény email értesítések és email action linkek
+- AccuWeather előrejelzés alaplogika
+- frontend auth / dashboard regressziók
+- kassza, no-show és befizetés regressziók
+
 ## Pilot előtti minimum checklist
 
 - külön pilot DB
