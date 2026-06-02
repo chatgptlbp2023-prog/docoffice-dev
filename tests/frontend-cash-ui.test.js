@@ -3,6 +3,44 @@
 const { bootFrontend, createJsonResponse, flushMicrotasks } = require('./helpers/frontendHarness');
 
 describe('Frontend cash module UI', () => {
+  test('a penzugyi modul OFF allapotban elrejti a jatekos penzugyi kartyat', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.currentTeamFinance = {
+        entries: [],
+        current_balance_amount: -400,
+        debt_amount: 400,
+        credit_amount: 0
+      };
+      renderUserFinanceModule();
+    `);
+
+    const card = document.getElementById('userFinanceModule').closest('.card');
+    expect(card.hidden).toBe(true);
+    expect(document.getElementById('userFinanceModule').innerHTML).toBe('');
+  });
+
+  test('a penzugyi modul ON allapotban megmutatja a jatekos penzugyi kartyat', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.currentTeamFinance = {
+        entries: [],
+        current_balance_amount: 0,
+        debt_amount: 0,
+        credit_amount: 0
+      };
+      renderUserFinanceModule();
+    `);
+
+    const card = document.getElementById('userFinanceModule').closest('.card');
+    expect(card.hidden).toBe(false);
+    expect(document.getElementById('userFinanceModule').textContent).toContain('Még nincs könyvelt pénzügyi sorod');
+  });
+
   test('a jelenleti panel penzugyi sora kulon mutatja a tervet, a befolytat es az elterest', async () => {
     const { window } = await bootFrontend();
 
@@ -120,7 +158,7 @@ describe('Frontend cash module UI', () => {
     window.eval(`
       state.token = 'test-token';
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminEvents = [{
         id: 'event-1',
         title: 'Lezart meccs',
@@ -246,7 +284,7 @@ describe('Frontend cash module UI', () => {
     window.eval(`
       state.token = 'test-token';
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.selectedAdminEvent = {
         id: 'event-1',
         title: 'Lezart meccs',
@@ -310,7 +348,7 @@ describe('Frontend cash module UI', () => {
 
     window.eval(`
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminWorkspace = 'finance';
       state.adminFinanceSection = 'settlement';
       state.selectedAdminEvent = {
@@ -366,7 +404,7 @@ describe('Frontend cash module UI', () => {
 
     window.eval(`
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminWorkspace = 'finance';
       state.adminFinanceSection = 'settlement';
       state.selectedAdminEvent = {
@@ -481,7 +519,7 @@ describe('Frontend cash module UI', () => {
     window.eval(`
       state.token = 'test-token';
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminEvents = [{
         id: 'event-1',
         title: 'Lezart meccs',
@@ -565,7 +603,7 @@ describe('Frontend cash module UI', () => {
     window.eval(`
       state.token = 'test-token';
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.selectedAdminEvent = {
         id: 'event-1',
         title: 'Lezart meccs',
@@ -663,7 +701,7 @@ describe('Frontend cash module UI', () => {
     window.eval(`
       state.token = 'test-token';
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.selectedAdminEvent = {
         id: 'event-1',
         title: 'Lezart meccs',
@@ -734,7 +772,7 @@ describe('Frontend cash module UI', () => {
 
     window.eval(`
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminWorkspace = 'finance';
       state.adminFinanceSection = 'settlement';
       state.selectedAdminEvent = {
@@ -837,7 +875,7 @@ describe('Frontend cash module UI', () => {
     window.eval(`
       state.token = 'test-token';
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: false };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminEvents = [
         {
           id: 'event-upcoming',
@@ -883,7 +921,7 @@ describe('Frontend cash module UI', () => {
     const { window } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.teamMembers = [{
         user_id: 'captain-1',
         name: 'Kapitany',
@@ -952,7 +990,7 @@ describe('Frontend cash module UI', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.teamMembers = [{
         user_id: 'captain-1',
         name: 'Kapitany',
@@ -1010,6 +1048,7 @@ describe('Frontend cash module UI', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.currentTeamFinance = {
         current_balance_amount: -400,
         entry_count: 1,
@@ -1019,7 +1058,7 @@ describe('Frontend cash module UI', () => {
         total_adjustment_amount: 0,
         entries: []
       };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.teamMembers = [{
         user_id: 'captain-1',
         name: 'Kapitany',
@@ -1079,6 +1118,7 @@ describe('Frontend cash module UI', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.currentTeamFinance = {
         current_balance_amount: -400,
         entry_count: 1,
@@ -1134,6 +1174,7 @@ describe('Frontend cash module UI', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.currentTeamFinance = {
         current_balance_amount: 500,
         entry_count: 1,
@@ -1197,7 +1238,7 @@ describe('Frontend cash module UI', () => {
         total_adjustment_amount: 0,
         entries: []
       };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.teamMembers = [{
         user_id: 'captain-1',
         name: 'Kapitany',
@@ -1465,7 +1506,7 @@ describe('Frontend cash module UI', () => {
         total_adjustment_amount: 0,
         entries: []
       };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.teamMembers = [{
         user_id: 'captain-1',
         name: 'Kapitany',

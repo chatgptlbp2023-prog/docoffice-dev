@@ -230,6 +230,18 @@ beforeAll(() => runSqlWithDeadlockRetry(`
   end $$;
 `));
 
+beforeAll(() => {
+  const teamRulesMigrationPath = path.join(
+    __dirname,
+    '..',
+    'db',
+    'migrations',
+    '2026-05-27_team_rules_module.sql'
+  );
+  const teamRulesMigrationSql = fs.readFileSync(teamRulesMigrationPath, 'utf8');
+  return pool.query(teamRulesMigrationSql);
+});
+
 beforeAll(() => runSqlWithDeadlockRetry(`
   create table if not exists registration_notification_log (
     id uuid primary key default gen_random_uuid(),

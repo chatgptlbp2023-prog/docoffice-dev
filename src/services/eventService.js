@@ -23,6 +23,7 @@ const {
   normalizePaymentLinkUrl,
   validatePaymentLinkConfig
 } = require('../utils/paymentLinks');
+const { buildRulesAcceptanceState } = require('./teamRulesService');
 
 const EVENT_STATUS = Object.freeze({
   DRAFT: 'draft',
@@ -1046,6 +1047,8 @@ async function getEventById(eventId, userId = null) {
       e.id,
       e.team_id,
       t.name as team_name,
+      t.rules_module_enabled,
+      t.rules_version,
       e.created_by_user_id,
       e.title,
       e.description,
@@ -1083,6 +1086,8 @@ async function getEventById(eventId, userId = null) {
       my_reg.registered_at as my_registered_at,
       my_reg.cancelled_at as my_cancelled_at,
       my_reg.promoted_at as my_promoted_at,
+      rules.rules_version as my_rules_accepted_version,
+      rules.accepted_at as my_rules_accepted_at,
       coalesce(my_reg_stats.cancelled_count, 0)::int as my_cancelled_count
     from events e
     join teams t on t.id = e.team_id
@@ -1115,6 +1120,14 @@ async function getEventById(eventId, userId = null) {
         and reg.user_id = $2
         and reg.registration_status = 'cancelled'
     ) my_reg_stats on true
+    left join lateral (
+      select tra.rules_version, tra.accepted_at
+      from team_rule_acceptances tra
+      where tra.team_id = e.team_id
+        and tra.user_id = $2
+      order by tra.accepted_at desc
+      limit 1
+    ) rules on true
     where e.id = $1
     `,
     [eventId, userId]
@@ -1127,7 +1140,14 @@ async function getEventById(eventId, userId = null) {
   const event = {
     ...eventResult.rows[0],
     my_cancelled_count: Number(eventResult.rows[0].my_cancelled_count || 0),
-    registration_limit_reached: Number(eventResult.rows[0].my_cancelled_count || 0) >= 2
+    registration_limit_reached: Number(eventResult.rows[0].my_cancelled_count || 0) >= 2,
+    rules_acceptance: buildRulesAcceptanceState(
+      eventResult.rows[0],
+      {
+        rules_version: eventResult.rows[0].my_rules_accepted_version,
+        accepted_at: eventResult.rows[0].my_rules_accepted_at
+      }
+    )
   };
   await reconcileRankWaitingListForEvent({ eventId, event });
   const holidayWarning = buildHolidayWarning(new Date(event.start_at));
@@ -1297,7 +1317,7 @@ async function getEventById(eventId, userId = null) {
 async function getEventsByTeamId(teamId, userId = null) {
   const teamCheck = await pool.query(
     `
-    select id, name, status
+    select id, name, status, rules_module_enabled, rules_version
     from teams
     where id = $1
     `,
@@ -1313,6 +1333,9 @@ async function getEventsByTeamId(teamId, userId = null) {
     select
       e.id,
       e.team_id,
+      t.name as team_name,
+      t.rules_module_enabled,
+      t.rules_version,
       e.created_by_user_id,
       e.title,
       e.description,
@@ -1350,12 +1373,15 @@ async function getEventsByTeamId(teamId, userId = null) {
       my_reg.registered_at as my_registered_at,
       my_reg.cancelled_at as my_cancelled_at,
       my_reg.promoted_at as my_promoted_at,
+      rules.rules_version as my_rules_accepted_version,
+      rules.accepted_at as my_rules_accepted_at,
       coalesce(my_reg_stats.cancelled_count, 0)::int as my_cancelled_count,
       coalesce(sum(case when er.registration_status = 'going' then 1 else 0 end), 0)::int as going_count,
       coalesce(sum(case when er.registration_status = 'waiting_list' then 1 else 0 end), 0)::int as waiting_count,
       coalesce(sum(case when er.registration_status = 'waiting_list_rank' then 1 else 0 end), 0)::int as rank_waiting_count,
       coalesce(sum(case when er.registration_status = 'cancelled' then 1 else 0 end), 0)::int as cancelled_count
     from events e
+    join teams t on t.id = e.team_id
     left join event_team_draws etd on etd.event_id = e.id
     left join event_settings es on es.event_id = e.id
     left join lateral (
@@ -1385,16 +1411,27 @@ async function getEventsByTeamId(teamId, userId = null) {
         and reg.user_id = $2
         and reg.registration_status = 'cancelled'
     ) my_reg_stats on true
+    left join lateral (
+      select tra.rules_version, tra.accepted_at
+      from team_rule_acceptances tra
+      where tra.team_id = e.team_id
+        and tra.user_id = $2
+      order by tra.accepted_at desc
+      limit 1
+    ) rules on true
     left join event_registrations er on er.event_id = e.id
     where e.team_id = $1
     group by
       e.id,
+      t.id,
       etd.id,
       es.id,
       my_reg.registration_status,
       my_reg.registered_at,
       my_reg.cancelled_at,
       my_reg.promoted_at,
+      rules.rules_version,
+      rules.accepted_at,
       my_reg_stats.cancelled_count
     order by e.start_at asc
     `,
@@ -1530,6 +1567,13 @@ async function getEventsByTeamId(teamId, userId = null) {
       is_registration_open: isRegistrationOpen(item),
       registration_window: registrationWindow,
       payment_summary: paymentSummary,
+      rules_acceptance: buildRulesAcceptanceState(
+        item,
+        {
+          rules_version: item.my_rules_accepted_version,
+          accepted_at: item.my_rules_accepted_at
+        }
+      ),
       attendance_summary: item.attendanceSummary,
       finance_summary: item.financeSummary,
       event_readiness: item.readiness.eventReadiness,

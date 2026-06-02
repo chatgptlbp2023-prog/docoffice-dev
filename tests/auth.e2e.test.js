@@ -10,8 +10,20 @@ describe('Auth E2E', () => {
   const createdTeamIds = [];
   const createdInviteIds = [];
   const password = 'teszt123';
+  const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+
+  function restoreGoogleClientId() {
+    if (originalGoogleClientId === undefined) {
+      delete process.env.GOOGLE_CLIENT_ID;
+      return;
+    }
+
+    process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
+  }
 
   afterEach(async () => {
+    restoreGoogleClientId();
+
     if (createdInviteIds.length > 0) {
       await pool.query(
         `delete from team_invites where id = any($1::uuid[])`,
@@ -60,6 +72,40 @@ describe('Auth E2E', () => {
     expect(res.body.version.commit).toBeTruthy();
     expect(res.body.version.environment).toBeTruthy();
     expect(res.body.version.startedAt).toBeTruthy();
+  });
+
+  test('GET /api/auth/google/config exposes only a valid real Google client id', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'your-google-client-id';
+
+    const placeholderRes = await request(app).get('/api/auth/google/config');
+
+    expect(placeholderRes.status).toBe(200);
+    expect(placeholderRes.body.ok).toBe(true);
+    expect(placeholderRes.body.enabled).toBe(false);
+    expect(placeholderRes.body.clientId).toBeNull();
+    expect(placeholderRes.body.hasInvalidClientIds).toBe(true);
+
+    process.env.GOOGLE_CLIENT_ID = '1234567890-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com';
+
+    const configuredRes = await request(app).get('/api/auth/google/config');
+
+    expect(configuredRes.status).toBe(200);
+    expect(configuredRes.body.ok).toBe(true);
+    expect(configuredRes.body.enabled).toBe(true);
+    expect(configuredRes.body.clientId).toBe('1234567890-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com');
+    expect(configuredRes.body.clientIdCount).toBe(1);
+  });
+
+  test('POST /api/auth/google reports disabled login when GOOGLE_CLIENT_ID is missing', async () => {
+    delete process.env.GOOGLE_CLIENT_ID;
+
+    const res = await request(app)
+      .post('/api/auth/google')
+      .send({ idToken: 'dummy-google-token' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.message).toContain('Google');
   });
 
   test('login + auth/me works with a real active user', async () => {

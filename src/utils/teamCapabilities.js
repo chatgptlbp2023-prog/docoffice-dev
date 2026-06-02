@@ -28,6 +28,36 @@ function buildTeamCapabilities({ platformRole, teamRole }) {
   };
 }
 
+function booleanOrDefault(value, defaultValue = false) {
+  return value == null ? defaultValue : Boolean(value);
+}
+
+function buildTeamModuleSettings(team = {}) {
+  const rulesText = String(team.rules_text || '').trim();
+
+  return {
+    skill: {
+      enabled: booleanOrDefault(team.skill_balancing_enabled, true),
+      tolerance_percent: Number(team.skill_balance_tolerance_percent ?? 15)
+    },
+    rank: {
+      enabled: booleanOrDefault(team.rank_module_enabled, false)
+    },
+    rules: {
+      enabled: booleanOrDefault(team.rules_module_enabled, false),
+      version: Number(team.rules_version || 1),
+      has_text: rulesText.length > 0
+    },
+    finance: {
+      enabled: booleanOrDefault(team.cash_module_enabled, false)
+    },
+    discipline: {
+      enabled: booleanOrDefault(team.discipline_module_enabled, false)
+    }
+  };
+}
+
 module.exports = {
-  buildTeamCapabilities
+  buildTeamCapabilities,
+  buildTeamModuleSettings
 };

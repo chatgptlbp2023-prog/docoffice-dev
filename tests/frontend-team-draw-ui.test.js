@@ -131,6 +131,7 @@ describe('Frontend team draw UI', () => {
         id: 'evt-cancelled',
         title: 'Visszajelentkezos esemeny',
         status: 'published',
+        start_at: new Date(Date.now() + 3600000).toISOString(),
         is_registration_open: true,
         my_registration_status: 'cancelled',
         my_cancelled_count: 1
@@ -138,6 +139,7 @@ describe('Frontend team draw UI', () => {
         id: 'evt-blocked',
         title: 'Limitalt esemeny',
         status: 'published',
+        start_at: new Date(Date.now() + 3600000).toISOString(),
         is_registration_open: true,
         my_registration_status: 'cancelled',
         my_cancelled_count: 2,
@@ -176,6 +178,7 @@ describe('Frontend team draw UI', () => {
         going_count: 2,
         waiting_count: 1,
         rank_waiting_count: 1,
+        rank_module_enabled: true,
         spots_left: 3
       }];
       renderMyEvents(state.myEvents);

@@ -64,7 +64,7 @@ Jelölések:
 - [x] Google Maps / Places címsegítés első verziója beépítve.
 - [ ] Google login élesítése valós `GOOGLE_CLIENT_ID`-val.
 - [ ] Push értesítések technikai megvalósítása.
-- [ ] Automatikus csapatleosztás 1 órával kezdés előtt production ütemezésben ellenőrizendő.
+- [x] Automatikus csapatleosztás 1 órával kezdés előtt production ütemezésben ellenőrizve: dry-run parancs, scheduler dokumentáció és duplafutás elleni lock bekerült.
 - [ ] Fegyelmi modul specifikációja és implementációja külön be/ki kapcsolható csapatmodulként: sárga lap, piros lap, okok, hatások, user értesítések, csapatkapitányi jóváhagyási flow.
 
 ## P1 - User dashboard és játékosélmény
@@ -75,16 +75,16 @@ Jelölések:
 - [x] 7 napos naptár nézet beépítve a játékos oldalra.
 - [x] Csapatváltáskor a fókuszcsapat és kijelölés újrarenderelése javítva.
 - [x] Rangmodulra vonatkozó user blokk nem jelenik meg, ha a rangmodul nincs bekapcsolva.
-- [ ] Játékos oldali `Kisokos` / súgó blokk vagy menü: jelentkezés menete, útvonal, naptárbejegyzés, automata emailek, rangmodul, fegyelmi modul, pénzügy és gyakori kérdések.
-- [ ] Csapat saját szabályzatának játékos oldali megjelenítése és elfogadtatása csapatonként.
+- [x] Játékos oldali `Kisokos` / súgó blokk vagy menü: jelentkezés menete, útvonal, naptárbejegyzés, automata emailek, rangmodul, fegyelmi modul, pénzügy és gyakori kérdések.
+- [x] Csapat saját szabályzatának játékos oldali megjelenítése és elfogadtatása csapatonként.
 - [ ] Részben kész: játékos dashboard további vizuális egyszerűsítése többcsapatos játékosoknak.
 - [ ] Részben kész: 7 napos naptár mobil / keskeny nézetének végleges finomítása.
 
 ## P1 - Csapatkapitány támogatás és szabályrendszer
 
-- [ ] Csapatkapitány oldali bővített `Kisokos`: modulok magyarázata, elvárt működés, tipikus admin lépések és tutorial flow-k.
-- [ ] Csapat létrehozásakor / beállításakor testreszabható szabályrendszer: játék-, fizetési-, rang- és fegyelmi szabályok.
-- [ ] Kapcsolattartási pont: hibajelentés, fejlesztési javaslat és általános visszajelzés beküldése.
+- [x] Csapatkapitány oldali bővített `Kisokos`: modulok magyarázata, elvárt működés, tipikus admin lépések és tutorial flow-k.
+- [ ] Részben kész: csapat létrehozásakor / beállításakor testreszabható szabályrendszer. A csapatszabályzat modul elkészült; a játék-, fizetési-, rang- és fegyelmi szabályok teljes testreszabása még nyitott.
+- [x] Kapcsolattartási pont: hibajelentés, fejlesztési javaslat és általános visszajelzés beküldése.
 
 ## P1 - Biztonság és üzemeltetés
 

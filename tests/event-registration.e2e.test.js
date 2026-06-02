@@ -302,6 +302,72 @@ describe('Event registration flow E2E', () => {
     expect(detailRes.body.summary.cancelledCount).toBe(1);
   });
 
+  test('active team rules module blocks event registration until the member accepts the current rules version', async () => {
+    const createEventRes = await request(app)
+      .post(`/api/teams/${teamId}/events`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        title: 'Rules Guard Event',
+        description: 'Szabályzat őr teszt',
+        startAt: futureIso(12, 18, 0),
+        locationName: 'Teszt pálya',
+        minPlayers: 2,
+        playersOnFieldTotal: 2,
+        substitutesEnabled: false,
+        initialStatus: 'published',
+        confirmHolidayOverride: true
+      });
+
+    expect(createEventRes.status).toBe(201);
+    const eventId = createEventRes.body.event.id;
+    created.events.push(eventId);
+
+    const rulesRes = await request(app)
+      .patch(`/api/teams/${teamId}/rules`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        rulesModuleEnabled: true,
+        rulesText: 'A csapat szabályzatát el kell fogadni jelentkezés előtt.'
+      });
+
+    expect(rulesRes.status).toBe(200);
+    expect(rulesRes.body.team.rules_module_enabled).toBe(true);
+    expect(Number(rulesRes.body.team.rules_version)).toBe(2);
+
+    const blockedRes = await request(app)
+      .post(`/api/events/${eventId}/register`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+
+    expect(blockedRes.status).toBe(403);
+    expect(blockedRes.body.rulesAcceptanceRequired).toBe(true);
+    expect(blockedRes.body.rulesVersion).toBe(2);
+    expect(blockedRes.body.message).toContain('Szabályzat');
+
+    const teamBeforeAcceptRes = await request(app)
+      .get(`/api/teams/${teamId}`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(teamBeforeAcceptRes.status).toBe(200);
+    const memberBeforeAccept = teamBeforeAcceptRes.body.members.find(member => member.user_id === memberAUserId);
+    expect(memberBeforeAccept.rules_acceptance.required).toBe(true);
+    expect(memberBeforeAccept.rules_acceptance.accepted).toBe(false);
+
+    const acceptRes = await request(app)
+      .post(`/api/teams/${teamId}/rules/accept`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+
+    expect(acceptRes.status).toBe(200);
+    expect(acceptRes.body.rules_acceptance.accepted).toBe(true);
+    expect(acceptRes.body.rules_acceptance.current_version).toBe(2);
+
+    const allowedRes = await request(app)
+      .post(`/api/events/${eventId}/register`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+
+    expect(allowedRes.status).toBe(201);
+    expect(allowedRes.body.registration.registration_status).toBe('going');
+  });
+
   test('re-register after cancel goes to waiting list if the spot has already been taken', async () => {
     const createEventRes = await request(app)
       .post(`/api/teams/${teamId}/events`)

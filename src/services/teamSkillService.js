@@ -12,6 +12,7 @@ const DRAW_STATUS = Object.freeze({
 });
 
 const REQUIRED_GOALKEEPERS = 2;
+const NEUTRAL_SKILL_SCORE = 5;
 
 function toBoolean(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -25,8 +26,8 @@ function parseScore(value, fieldLabel) {
   if (!Number.isInteger(num)) {
     throw new AppError(400, `${fieldLabel} egész szám kell legyen.`);
   }
-  if (num < 0 || num > 100) {
-    throw new AppError(400, `${fieldLabel} csak 0 és 100 közötti érték lehet.`);
+  if (num < 0 || num > 10) {
+    throw new AppError(400, `${fieldLabel} csak 0 és 10 közötti érték lehet.`);
   }
   return num;
 }
@@ -96,10 +97,10 @@ function buildNeutralDrawMember(member) {
   return {
     ...base,
     skills_enabled: true,
-    goalkeeper_score: 50,
-    defense_score: 50,
-    attack_score: 50,
-    overall_skill: 150
+    goalkeeper_score: NEUTRAL_SKILL_SCORE,
+    defense_score: NEUTRAL_SKILL_SCORE,
+    attack_score: NEUTRAL_SKILL_SCORE,
+    overall_skill: NEUTRAL_SKILL_SCORE * 3
   };
 }
 
@@ -526,8 +527,8 @@ async function updateMemberSkills({ teamId, memberId, skillsEnabled, goalkeeperS
 
   const nextSkillsEnabled = toBoolean(skillsEnabled, true);
   const nextGoalkeeper = parseScore(goalkeeperSkill ?? 0, 'A kapus skill');
-  const nextDefense = parseScore(defenseSkill ?? 50, 'A védő skill');
-  const nextAttack = parseScore(attackSkill ?? 50, 'A támadó skill');
+  const nextDefense = parseScore(defenseSkill ?? NEUTRAL_SKILL_SCORE, 'A védő skill');
+  const nextAttack = parseScore(attackSkill ?? NEUTRAL_SKILL_SCORE, 'A támadó skill');
 
   const updateResult = await pool.query(
     `
@@ -730,7 +731,7 @@ async function previewBalancedTeams({ teamId }) {
   return {
     message: drawMode === 'skill'
       ? 'Csapatsorsolás preview elkészült.'
-      : 'Random csapatsorsolás preview elkészült. A skill modul ki van kapcsolva, minden játékos 50-50-50 alapállapotból kerül sorsolásra.',
+      : 'Random csapatsorsolás preview elkészült. A skill modul ki van kapcsolva, minden játékos 5-5-5 alapállapotból kerül sorsolásra.',
     draw: {
       team_id: team.id,
       team_name: team.name,
@@ -785,7 +786,7 @@ async function previewEventBalancedTeams({ eventId }) {
   return {
     message: drawMode === 'skill'
       ? 'Esemény alapú csapatsorsolás preview elkészült.'
-      : 'Random esemény csapatsorsolás preview elkészült. A skill modul ki van kapcsolva, minden játékos 50-50-50 alapállapotból kerül sorsolásra.',
+      : 'Random esemény csapatsorsolás preview elkészült. A skill modul ki van kapcsolva, minden játékos 5-5-5 alapállapotból kerül sorsolásra.',
     draw: {
       event_id: event.id,
       event_title: event.title,

@@ -2,12 +2,18 @@ const AppError = require('../utils/appError');
 const { pool, withTransaction } = require('./dbService');
 const { getMemberRankSnapshot } = require('./rankService');
 const { normalizeTeamRole, isTeamAdminRole } = require('../utils/teamRoles');
-const { buildTeamCapabilities } = require('../utils/teamCapabilities');
+const {
+  buildTeamCapabilities,
+  buildTeamModuleSettings
+} = require('../utils/teamCapabilities');
 const {
   getTeamFinanceBalances,
   getUserFinanceOverview,
   recordManualFinanceAdjustment
 } = require('./financeLedgerService');
+const {
+  buildRulesAcceptanceState
+} = require('./teamRulesService');
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -191,8 +197,15 @@ async function getTeamById(teamId, currentUser = null) {
       t.id,
       t.name,
       t.created_by_user_id,
+      t.skill_balancing_enabled,
+      t.skill_balance_tolerance_percent,
       t.rank_module_enabled,
       t.cash_module_enabled,
+      t.discipline_module_enabled,
+      t.rules_module_enabled,
+      t.rules_text,
+      t.rules_version,
+      t.rules_updated_at,
       t.status,
       t.created_at,
       t.updated_at
@@ -226,9 +239,19 @@ async function getTeamById(teamId, currentUser = null) {
       tm.goalkeeper_score,
       tm.rank_value,
       tm.rank_status,
-      tm.joined_at
+      tm.joined_at,
+      rules.rules_version as rules_accepted_version,
+      rules.accepted_at as rules_accepted_at
     from team_members tm
     join users u on u.id = tm.user_id
+    left join lateral (
+      select tra.rules_version, tra.accepted_at
+      from team_rule_acceptances tra
+      where tra.team_id = tm.team_id
+        and tra.user_id = tm.user_id
+      order by tra.accepted_at desc
+      limit 1
+    ) rules on true
     where tm.team_id = $1
       and tm.membership_status = 'active'
     order by
@@ -360,6 +383,25 @@ async function getTeamById(teamId, currentUser = null) {
     ])
   );
   const financeStatsByUserId = await getTeamFinanceBalances(pool, teamId);
+  const team = teamResult.rows[0];
+  const teamRulesVersion = Number(team.rules_version || 1);
+  let currentUserRulesAcceptance = null;
+
+  if (currentUser?.id) {
+    const currentUserRulesAcceptanceResult = await pool.query(
+      `
+      select rules_version, accepted_at
+      from team_rule_acceptances
+      where team_id = $1
+        and user_id = $2
+      order by accepted_at desc
+      limit 1
+      `,
+      [teamId, currentUser.id]
+    );
+    currentUserRulesAcceptance = currentUserRulesAcceptanceResult.rows[0] || null;
+  }
+
   const financeEntriesResult = await pool.query(
     `
     select
@@ -458,7 +500,17 @@ async function getTeamById(teamId, currentUser = null) {
           total_expected_amount: 0,
           total_actual_paid_amount: 0,
           last_recorded_at: null
-        }
+        },
+        rules_acceptance: buildRulesAcceptanceState(
+          {
+            rules_module_enabled: team.rules_module_enabled,
+            rules_version: teamRulesVersion
+          },
+          {
+            rules_version: member.rules_accepted_version,
+            accepted_at: member.rules_accepted_at
+          }
+        )
       };
     })
   );
@@ -473,11 +525,17 @@ async function getTeamById(teamId, currentUser = null) {
 
   return {
     team: {
-      ...teamResult.rows[0],
+      ...team,
+      rules_version: teamRulesVersion,
+      current_user_rules_acceptance: buildRulesAcceptanceState(
+        team,
+        currentUserRulesAcceptance
+      ),
       capabilities: buildTeamCapabilities({
         platformRole: currentUser?.platform_role,
         teamRole: members.find(member => member.user_id === currentUser?.id)?.role || null
-      })
+      }),
+      module_settings: buildTeamModuleSettings(team)
     },
     members,
     current_user_finance: currentUserFinance,
@@ -888,6 +946,63 @@ async function addFinanceAdjustment({
   });
 }
 
+async function updateTeamModuleSettings({
+  teamId,
+  cashModuleEnabled = null,
+  disciplineModuleEnabled = null
+}) {
+  const hasCashModuleUpdate = typeof cashModuleEnabled === 'boolean';
+  const hasDisciplineModuleUpdate = typeof disciplineModuleEnabled === 'boolean';
+
+  if (!hasCashModuleUpdate && !hasDisciplineModuleUpdate) {
+    throw new AppError(400, 'Nincs módosítandó modulbeállítás.');
+  }
+
+  const updateResult = await pool.query(
+    `
+    update teams
+    set cash_module_enabled = coalesce($2::boolean, cash_module_enabled),
+        discipline_module_enabled = coalesce($3::boolean, discipline_module_enabled),
+        updated_at = now()
+    where id = $1
+    returning
+      id,
+      name,
+      created_by_user_id,
+      skill_balancing_enabled,
+      skill_balance_tolerance_percent,
+      rank_module_enabled,
+      cash_module_enabled,
+      discipline_module_enabled,
+      rules_module_enabled,
+      rules_text,
+      rules_version,
+      rules_updated_at,
+      status,
+      created_at,
+      updated_at
+    `,
+    [
+      teamId,
+      hasCashModuleUpdate ? cashModuleEnabled : null,
+      hasDisciplineModuleUpdate ? disciplineModuleEnabled : null
+    ]
+  );
+
+  if (updateResult.rows.length === 0) {
+    throw new AppError(404, 'A csapat nem található.');
+  }
+
+  const team = updateResult.rows[0];
+  return {
+    message: 'Csapat modulbeállítások mentve.',
+    team: {
+      ...team,
+      module_settings: buildTeamModuleSettings(team)
+    }
+  };
+}
+
 module.exports = {
   normalizeEmail,
   normalizeRole,
@@ -899,5 +1014,6 @@ module.exports = {
   addTeamMember,
   updateTeamMember,
   removeTeamMember,
-  addFinanceAdjustment
+  addFinanceAdjustment,
+  updateTeamModuleSettings
 };

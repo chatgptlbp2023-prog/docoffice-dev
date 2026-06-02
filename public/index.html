@@ -28,6 +28,8 @@
         <button class="nav-btn active" data-view="authView">Belépés / regisztráció</button>
         <button class="nav-btn" data-view="adminView">Csapat admin</button>
         <button class="nav-btn" data-view="userView">Játékos nézet</button>
+        <button class="nav-btn" data-view="rankView">Rang modul</button>
+        <button class="nav-btn" data-view="rulesView">Szabályzat</button>
         <button class="nav-btn" data-view="helpView">Help / Kisokos</button>
         <button class="nav-btn" data-view="contactView">Kapcsolat</button>
       </nav>
@@ -126,6 +128,7 @@
           <div class="admin-subnav">
             <button class="subnav-btn active" type="button" data-admin-workspace="home">Kezdőlap</button>
             <button class="subnav-btn" type="button" data-admin-workspace="team">Csapat</button>
+            <button class="subnav-btn" type="button" data-admin-workspace="customization">Csapat testreszabása</button>
             <button class="subnav-btn" type="button" data-admin-workspace="events">Események</button>
             <button class="subnav-btn" type="button" data-admin-workspace="finance">Pénzügy</button>
           </div>
@@ -181,6 +184,7 @@
               <div class="admin-subnav">
                 <button class="subnav-btn active" type="button" data-admin-team-section="invites">Meghívások</button>
                 <button class="subnav-btn" type="button" data-admin-team-section="members">Tagok</button>
+                <button class="subnav-btn" type="button" data-admin-team-section="rules">Szabályzat</button>
                 <button class="subnav-btn" type="button" data-admin-team-section="draw">CsapatsorsolĂˇs</button>
                 <button class="subnav-btn" type="button" data-admin-team-section="advanced">Haladó beállítások</button>
               </div>
@@ -267,15 +271,32 @@
             </details>
             </section>
 
+            <section class="top-space hidden" hidden data-admin-team-panel="rules">
+              <div class="event-card admin-workspace-guide">
+                <strong>A szabályzat átkerült a Csapat testreszabása menübe.</strong>
+                <div class="small muted top-space">A szabályzat csapatszintű modul, ezért a többi modulkapcsolóval egy helyen kezelhető.</div>
+                <button class="btn top-space" type="button" data-admin-workspace-jump="customization" data-admin-focus-target="team-rules">Csapat testreszabása megnyitása</button>
+              </div>
+            </section>
+
             <section class="top-space hidden" hidden data-admin-team-panel="draw">
               <div class="small muted section-note">Itt csak a kivĂˇlasztott esemĂ©nyhez kapcsolĂłdĂł csapatgenerĂˇlĂˇs Ă©s csapatsorsolĂˇs jelenik meg.</div>
               <div id="teamDrawContent" class="stack top-space"></div>
             </section>
 
             <section class="top-space hidden" hidden data-admin-team-panel="advanced">
-              <div class="small muted section-note">Itt jelennek meg a rangmodul, a skill modul és a csapatleosztási előnézet haladó beállításai.</div>
+              <div class="small muted section-note">A modulkapcsolók átkerültek a Csapat testreszabása menübe. A csapatleosztás a Csapatsorsolás fülön kezelhető.</div>
               <div id="teamAdvancedContent" class="stack top-space"></div>
             </section>
+          </div>
+
+          <div class="card hidden" hidden data-admin-workspace-panel="customization">
+            <h2>Csapat testreszabása</h2>
+            <div class="small muted section-note">Itt vannak egy helyen a csapat szintű modulok. Ezek nem egyetlen eseményhez, hanem a teljes csapat működéséhez tartoznak.</div>
+            <div id="teamCustomizationContent" class="stack top-space">
+              <div id="teamModuleSettingsContent" class="stack"></div>
+              <div id="teamRulesAdminContent" class="stack"></div>
+            </div>
           </div>
 
           <div id="adminEventEditorCard" class="card">
@@ -629,11 +650,6 @@
 
           <div class="grid one-col top-space" data-layout-item data-layout-key="user-rank-weather" data-default-col-span="12" data-default-row-span="1" data-min-col-span="6" data-max-col-span="12">
             <div class="card secondary-user-card">
-              <h2>Rangmodul</h2>
-              <div id="userRankModule" class="top-space"></div>
-            </div>
-
-            <div class="card secondary-user-card">
               <h2>Pénzügyeim</h2>
               <div id="userFinanceModule" class="top-space"></div>
             </div>
@@ -690,6 +706,32 @@
             <h2>Részletes eseménynézet</h2>
             <div id="userEventDetail" class="muted">Ha a fókuszcsapat listájából eseményt nyitsz meg, itt látod a részletes jelenléti listát és az összesített adatokat.</div>
           </div>
+        </div>
+      </section>
+
+      <section id="rankView" class="view">
+        <div class="card">
+          <div class="row between align-center wrap gap">
+            <div>
+              <h2>Rang modul</h2>
+              <div class="small muted section-note">Az aktív csapat rangmodulja külön menübe került, hogy a játékos fő dashboard csak a következő eseményre fókuszáljon.</div>
+            </div>
+            <span class="badge badge-muted">csapatszintű</span>
+          </div>
+          <div id="userRankModule" class="top-space"></div>
+        </div>
+      </section>
+
+      <section id="rulesView" class="view">
+        <div class="card">
+          <div class="row between align-center wrap gap">
+            <div>
+              <h2>Csapatszabályzat</h2>
+              <div class="small muted section-note">Ha az aktív csapatnál be van kapcsolva a szabályzat modul, itt tudod elolvasni és elfogadni a szabályokat.</div>
+            </div>
+            <span class="badge badge-muted">csapatszintű</span>
+          </div>
+          <div id="userRulesContent" class="stack top-space"></div>
         </div>
       </section>
 

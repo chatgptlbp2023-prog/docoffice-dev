@@ -3,6 +3,84 @@
 const { bootFrontend } = require('./helpers/frontendHarness');
 
 describe('Frontend rank module UI', () => {
+  test('a rangmodul nem a jatekos dashboardon, hanem kulon menupontban jelenik meg', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.token = 'token';
+      state.teamSkillSettings = { rank_module_enabled: true };
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Teszt FC',
+        rank_module_enabled: true,
+        module_settings: { rank: { enabled: true } }
+      };
+      state.user = { id: 'user-1', name: 'Attila' };
+      state.teamMembers = [{
+        user_id: 'user-1',
+        name: 'Attila',
+        membership_status: 'active',
+        rank_status: 'ranked',
+        rank_value: 6,
+        rank_snapshot: {
+          rankModuleEnabled: true,
+          effectiveRankValue: 6,
+          stats: { evaluatedEvents: 1, attendedEvents: 1, participationRatio: 1 }
+        }
+      }];
+      renderUserRankModule();
+      applyRoleAwareUi();
+    `);
+
+    const rankModule = document.getElementById('userRankModule');
+    const rankNav = document.querySelector('[data-view="rankView"]');
+
+    expect(document.getElementById('userView').querySelector('#userRankModule')).toBeNull();
+    expect(document.getElementById('rankView').querySelector('#userRankModule')).toBe(rankModule);
+    expect(rankNav.style.display).toBe('');
+    expect(rankModule.textContent).toContain('RANG MODUL ON');
+
+    window.eval(`
+      state.teamSkillSettings = { rank_module_enabled: false };
+      state.currentTeam.rank_module_enabled = false;
+      state.currentTeam.module_settings = { rank: { enabled: false } };
+      applyRoleAwareUi();
+      renderUserRankModule();
+    `);
+
+    expect(rankNav.style.display).toBe('none');
+    expect(document.getElementById('rankView').hidden).toBe(true);
+  });
+
+  test('a user rangkartya rejtve marad, ha a rangmodul OFF az aktualis csapatban', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.teamSkillSettings = { rank_module_enabled: false };
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Teszt FC',
+        rank_module_enabled: false,
+        module_settings: { rank: { enabled: false } }
+      };
+      state.user = { id: 'user-1', name: 'Attila' };
+      state.teamMembers = [{
+        user_id: 'user-1',
+        name: 'Attila',
+        membership_status: 'active',
+        rank_snapshot: { rankModuleEnabled: true },
+        rank_status: 'ranked',
+        rank_value: 6
+      }];
+      renderUserRankModule();
+    `);
+
+    const rankModule = document.getElementById('userRankModule');
+    const card = rankModule.closest('.card');
+    expect(card.hidden).toBe(true);
+    expect(rankModule.innerHTML).toBe('');
+  });
+
   test('rank korlatozasnal a hero kartyan megjelenik az ok es a visszaszamlalas', async () => {
     const { window, document } = await bootFrontend();
 

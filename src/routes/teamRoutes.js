@@ -6,7 +6,10 @@ const {
   updateTeamMember,
   removeTeamMember,
   transferCaptainRole,
-  addFinanceAdjustment
+  addFinanceAdjustment,
+  updateTeamRules,
+  updateTeamModuleSettings,
+  acceptTeamRules
 } = require('../controllers/teamController');
 
 const requireAuth = require('../middleware/requireAuth');
@@ -21,12 +24,37 @@ const {
   validateUpdateTeamMember,
   validateCaptainTransfer,
   validateTeamFinanceAdjustment,
+  validateUpdateTeamRules,
+  validateUpdateTeamModuleSettings,
 } = require('../middleware/requestValidation');
 
 const router = express.Router();
 
 router.post('/teams', requireAuth, validateCreateTeam, createTeam);
 router.get('/teams/:teamId', requireAuth, isTeamMember, getTeamById);
+
+router.patch(
+  '/teams/:teamId/rules',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  validateUpdateTeamRules,
+  updateTeamRules
+);
+
+router.patch(
+  '/teams/:teamId/module-settings',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  validateUpdateTeamModuleSettings,
+  updateTeamModuleSettings
+);
+
+router.post(
+  '/teams/:teamId/rules/accept',
+  requireAuth,
+  isTeamMember,
+  acceptTeamRules
+);
 
 router.post(
   '/teams/:teamId/captain-transfer',

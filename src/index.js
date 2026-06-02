@@ -57,6 +57,10 @@ pool.query(`
 
 pool.query(`
   alter table users
+    add column if not exists platform_role text not null default 'user',
+    add column if not exists auth_provider text not null default 'local',
+    add column if not exists google_sub text null,
+    add column if not exists phone text null,
     add column if not exists can_create_team boolean not null default false,
     add column if not exists registration_path text null,
     add column if not exists organizer_activity_type text null,
@@ -70,6 +74,36 @@ pool.query(`
     else 'invited_participant'
   end
   where registration_path is null;
+
+  do $$
+  begin
+    if not exists (
+      select 1
+      from pg_constraint
+      where conname = 'users_platform_role_check'
+    ) then
+      alter table users
+        add constraint users_platform_role_check
+        check (platform_role in ('platform_owner', 'user'));
+    end if;
+  end $$;
+
+  do $$
+  begin
+    if not exists (
+      select 1
+      from pg_constraint
+      where conname = 'users_auth_provider_check'
+    ) then
+      alter table users
+        add constraint users_auth_provider_check
+        check (auth_provider in ('local', 'google'));
+    end if;
+  end $$;
+
+  create unique index if not exists users_google_sub_unique_idx
+    on users(google_sub)
+    where google_sub is not null;
 
   do $$
   begin
@@ -138,8 +172,38 @@ pool.query(`
 
 pool.query(`
   alter table event_settings
+    add column if not exists notification_preferences jsonb not null default '{
+      "notifyTeamOnCreate": true,
+      "notifyAllOnNewRegistration": false,
+      "notifyAllWhenTwoSpotsLeft": true,
+      "notifyAllWhenFull": true,
+      "notifyWaitlistPromotion": true,
+      "notifyTeamDrawPublished": true,
+      "enableAutoTeamDrawOneHourBefore": true,
+      "notifyParticipantsOnEventUpdate": true,
+      "notifyParticipantsOnEventCancel": true,
+      "notifyWeatherAlerts": false
+    }'::jsonb,
+    add column if not exists auto_prestart_processed_at timestamptz null,
+    add column if not exists auto_prestart_outcome text null,
     add column if not exists payment_link_provider text null,
     add column if not exists payment_link_url text null;
+
+  update event_settings
+  set notification_preferences =
+    coalesce(notification_preferences, '{}'::jsonb)
+    || jsonb_build_object(
+      'notifyTeamOnCreate', coalesce((notification_preferences ->> 'notifyTeamOnCreate')::boolean, true),
+      'notifyAllOnNewRegistration', coalesce((notification_preferences ->> 'notifyAllOnNewRegistration')::boolean, false),
+      'notifyAllWhenTwoSpotsLeft', coalesce((notification_preferences ->> 'notifyAllWhenTwoSpotsLeft')::boolean, true),
+      'notifyAllWhenFull', coalesce((notification_preferences ->> 'notifyAllWhenFull')::boolean, true),
+      'notifyWaitlistPromotion', coalesce((notification_preferences ->> 'notifyWaitlistPromotion')::boolean, true),
+      'notifyTeamDrawPublished', coalesce((notification_preferences ->> 'notifyTeamDrawPublished')::boolean, true),
+      'enableAutoTeamDrawOneHourBefore', coalesce((notification_preferences ->> 'enableAutoTeamDrawOneHourBefore')::boolean, true),
+      'notifyParticipantsOnEventUpdate', coalesce((notification_preferences ->> 'notifyParticipantsOnEventUpdate')::boolean, true),
+      'notifyParticipantsOnEventCancel', coalesce((notification_preferences ->> 'notifyParticipantsOnEventCancel')::boolean, true),
+      'notifyWeatherAlerts', coalesce((notification_preferences ->> 'notifyWeatherAlerts')::boolean, false)
+    );
 
   do $$
   begin
@@ -174,6 +238,65 @@ pool.query(`
           payment_link_provider is null
           or payment_link_provider in ('revolut', 'wise')
         );
+    end if;
+  end $$;
+`).catch(error => {
+  console.error('Schema ensure hiba:', error);
+});
+
+pool.query(`
+  alter table teams
+    add column if not exists skill_balancing_enabled boolean not null default true,
+    add column if not exists skill_balance_tolerance_percent integer not null default 15,
+    add column if not exists rank_module_enabled boolean not null default false,
+    add column if not exists cash_module_enabled boolean not null default false,
+    add column if not exists discipline_module_enabled boolean not null default false;
+
+  alter table teams
+    add column if not exists rules_module_enabled boolean not null default false,
+    add column if not exists rules_text text null,
+    add column if not exists rules_version integer not null default 1,
+    add column if not exists rules_updated_at timestamptz null,
+    add column if not exists rules_updated_by_user_id uuid null references users(id) on delete set null;
+
+  do $$
+  begin
+    if not exists (
+      select 1
+      from pg_constraint
+      where conname = 'teams_rules_version_check'
+    ) then
+      alter table teams
+        add constraint teams_rules_version_check
+        check (rules_version >= 1);
+    end if;
+  end $$;
+
+  create table if not exists team_rule_acceptances (
+    id uuid primary key default gen_random_uuid(),
+    team_id uuid not null references teams(id) on delete cascade,
+    user_id uuid not null references users(id) on delete cascade,
+    rules_version integer not null,
+    accepted_at timestamptz not null default now(),
+    created_at timestamptz not null default now()
+  );
+
+  create unique index if not exists team_rule_acceptances_team_user_version_idx
+    on team_rule_acceptances(team_id, user_id, rules_version);
+
+  create index if not exists team_rule_acceptances_team_user_idx
+    on team_rule_acceptances(team_id, user_id, accepted_at desc);
+
+  do $$
+  begin
+    if not exists (
+      select 1
+      from pg_constraint
+      where conname = 'team_rule_acceptances_rules_version_check'
+    ) then
+      alter table team_rule_acceptances
+        add constraint team_rule_acceptances_rules_version_check
+        check (rules_version >= 1);
     end if;
   end $$;
 `).catch(error => {

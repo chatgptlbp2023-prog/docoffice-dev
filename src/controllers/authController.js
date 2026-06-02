@@ -5,6 +5,10 @@ const { randomUUID } = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const inviteService = require('../services/inviteService');
 const registrationNotificationService = require('../services/registrationNotificationService');
+const {
+  getGoogleAuthPublicConfig,
+  getGoogleClientIds
+} = require('../utils/googleAuthConfig');
 const REGISTRATION_PATHS = Object.freeze({
   TOURNAMENT_ORGANIZER: 'tournament_organizer',
   TEAM_SPORT_ORGANIZER: 'team_sport_organizer',
@@ -107,6 +111,29 @@ function resolveRegistrationContext({ registrationPath, registerAsOrganizer, inv
   );
 }
 
+function hasGoogleRegistrationContext({ registrationPath, registerAsOrganizer, inviteToken }) {
+  return Boolean(
+    normalizeRegistrationPath(registrationPath) ||
+    normalizeInviteToken(inviteToken) ||
+    registerAsOrganizer === true
+  );
+}
+
+function resolveGoogleRegistrationContext({ registrationPath, registerAsOrganizer, inviteToken }) {
+  if (!hasGoogleRegistrationContext({ registrationPath, registerAsOrganizer, inviteToken })) {
+    return {
+      registrationPath: null,
+      canCreateTeam: false
+    };
+  }
+
+  return resolveRegistrationContext({
+    registrationPath,
+    registerAsOrganizer,
+    inviteToken
+  });
+}
+
 function getRegistrationSuccessMessage(registrationPath) {
   switch (registrationPath) {
     case REGISTRATION_PATHS.TOURNAMENT_ORGANIZER:
@@ -130,8 +157,9 @@ function getGoogleRegistrationSuccessMessage(registrationPath) {
     case REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER:
       return 'Sikeres Google-belépés. Most már létrehozhatod a saját csapatodat.';
     case REGISTRATION_PATHS.INVITED_PARTICIPANT:
-    default:
       return 'Sikeres Google-belépés és csatlakozás a csapathoz.';
+    default:
+      return 'Sikeres Google-belépés.';
   }
 }
 
@@ -207,13 +235,6 @@ async function createLocalUser({
   return insertResult.rows[0];
 }
 
-function getGoogleClientIds() {
-  return String(process.env.GOOGLE_CLIENT_ID || '')
-    .split(',')
-    .map(value => value.trim())
-    .filter(Boolean);
-}
-
 async function verifyGoogleIdToken(idToken) {
   const clientIds = getGoogleClientIds();
 
@@ -236,15 +257,14 @@ async function upsertGoogleUser({
   payload,
   phone,
   canCreateTeam = false,
-  registrationPath = REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER,
+  registrationPath = null,
   organizerActivityType = null
 }) {
   const googleSub = String(payload.sub || '').trim();
   const email = normalizeEmail(payload.email);
   const name = String(payload.name || payload.email || '').trim();
   const normalizedPhone = normalizePhone(phone);
-  const normalizedRegistrationPath = normalizeRegistrationPath(registrationPath)
-    || REGISTRATION_PATHS.TEAM_SPORT_ORGANIZER;
+  const normalizedRegistrationPath = normalizeRegistrationPath(registrationPath);
   const normalizedOrganizerActivityType = normalizeOrganizerActivityType(organizerActivityType);
 
   if (!googleSub || !email || !name) {
@@ -282,7 +302,7 @@ async function upsertGoogleUser({
         name,
         email,
         normalizedPhone,
-        canCreateTeam,
+        canCreateTeam === true,
         normalizedRegistrationPath,
         normalizedOrganizerActivityType
       ]
@@ -323,7 +343,7 @@ async function upsertGoogleUser({
         googleSub,
         name,
         normalizedPhone,
-        canCreateTeam,
+        canCreateTeam === true,
         normalizedRegistrationPath,
         normalizedOrganizerActivityType
       ]
@@ -333,6 +353,13 @@ async function upsertGoogleUser({
       user: linkedResult.rows[0],
       wasCreated: false
     };
+  }
+
+  if (!normalizedRegistrationPath) {
+    throw Object.assign(
+      new Error('Ezzel a Google-fiókkal még nincs regisztráció. Válaszd a regisztrációt, vagy használj meghívólinket.'),
+      { statusCode: 409 }
+    );
   }
 
   const insertResult = await pool.query(
@@ -360,7 +387,7 @@ async function upsertGoogleUser({
       name,
       email,
       normalizedPhone,
-      canCreateTeam,
+      canCreateTeam === true,
       normalizedRegistrationPath,
       normalizedOrganizerActivityType,
       googleSub
@@ -547,7 +574,7 @@ async function googleAuth(req, res) {
     const inviteToken = normalizeInviteToken(req.body.inviteToken);
     const registerAsOrganizer = bool(req.body.registerAsOrganizer);
     const phone = normalizePhone(req.body.phone);
-    const { registrationPath, canCreateTeam } = resolveRegistrationContext({
+    const { registrationPath, canCreateTeam } = resolveGoogleRegistrationContext({
       registrationPath: req.body.registrationPath,
       registerAsOrganizer,
       inviteToken
@@ -601,13 +628,7 @@ async function googleAuth(req, res) {
 }
 
 function getGoogleAuthConfig(req, res) {
-  const clientIds = getGoogleClientIds();
-
-  return res.status(200).json({
-    ok: true,
-    enabled: clientIds.length > 0,
-    clientId: clientIds[0] || null
-  });
+  return res.status(200).json(getGoogleAuthPublicConfig());
 }
 
 function getGoogleMapsConfig(req, res) {

@@ -116,9 +116,9 @@ describe('Organizer full journey E2E', () => {
       `
       update team_members
       set is_goalkeeper = true,
-          goalkeeper_score = 25,
-          defense_score = 65,
-          attack_score = 60,
+          goalkeeper_score = 3,
+          defense_score = 7,
+          attack_score = 6,
           updated_at = now()
       where team_id = $1
         and user_id in ($2, $3, $4)

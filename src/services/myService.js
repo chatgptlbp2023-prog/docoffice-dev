@@ -9,6 +9,7 @@ const {
 } = require('./rankService');
 const { normalizeTeamRole } = require('../utils/teamRoles');
 const { buildEventPaymentSummary } = require('../utils/eventPricing');
+const { buildRulesAcceptanceState } = require('./teamRulesService');
 
 async function getMyTeams(userId) {
   const result = await pool.query(
@@ -17,13 +18,25 @@ async function getMyTeams(userId) {
       t.id,
       t.name,
       t.status,
+      t.rules_module_enabled,
+      t.rules_version,
       t.created_at,
       t.updated_at,
       tm.role,
       tm.membership_status,
-      tm.joined_at
+      tm.joined_at,
+      rules.rules_version as rules_accepted_version,
+      rules.accepted_at as rules_accepted_at
     from team_members tm
     join teams t on t.id = tm.team_id
+    left join lateral (
+      select tra.rules_version, tra.accepted_at
+      from team_rule_acceptances tra
+      where tra.team_id = tm.team_id
+        and tra.user_id = tm.user_id
+      order by tra.accepted_at desc
+      limit 1
+    ) rules on true
     where tm.user_id = $1
       and tm.membership_status = 'active'
     order by
@@ -41,7 +54,14 @@ async function getMyTeams(userId) {
     count: result.rows.length,
     teams: result.rows.map(team => ({
       ...team,
-      role: normalizeTeamRole(team.role)
+      role: normalizeTeamRole(team.role),
+      rules_acceptance: buildRulesAcceptanceState(
+        team,
+        {
+          rules_version: team.rules_accepted_version,
+          accepted_at: team.rules_accepted_at
+        }
+      )
     }))
   };
 }
@@ -89,6 +109,10 @@ async function getMyEvents(userId) {
       tm.rank_value as my_rank_value,
       tm.rank_status as my_rank_status,
       t.rank_module_enabled,
+      t.rules_module_enabled,
+      t.rules_version,
+      rules.rules_version as my_rules_accepted_version,
+      rules.accepted_at as my_rules_accepted_at,
       coalesce(stats.going_count, 0)::int as going_count,
       coalesce(stats.waiting_count, 0)::int as waiting_count,
       coalesce(stats.rank_waiting_count, 0)::int as rank_waiting_count,
@@ -100,6 +124,14 @@ async function getMyEvents(userId) {
       coalesce(my_reg_stats.cancelled_count, 0)::int as my_cancelled_count
     from team_members tm
     join teams t on t.id = tm.team_id
+    left join lateral (
+      select tra.rules_version, tra.accepted_at
+      from team_rule_acceptances tra
+      where tra.team_id = tm.team_id
+        and tra.user_id = tm.user_id
+      order by tra.accepted_at desc
+      limit 1
+    ) rules on true
     join events e on e.team_id = tm.team_id
     left join event_team_draws etd on etd.event_id = e.id
     left join event_settings es on es.event_id = e.id
@@ -198,6 +230,13 @@ async function getMyEvents(userId) {
       is_registration_open: isRegistrationOpen(event),
       registration_window: registrationWindow,
       payment_summary: paymentSummary,
+      rules_acceptance: buildRulesAcceptanceState(
+        event,
+        {
+          rules_version: event.my_rules_accepted_version,
+          accepted_at: event.my_rules_accepted_at
+        }
+      ),
       rank_snapshot: rankSnapshot,
       event_readiness: readiness.eventReadiness,
       requires_republish: readiness.requiresRepublish

@@ -7,6 +7,7 @@ const {
   getEventRegistrationContext,
   reconcileRankWaitingListForEvent
 } = require('./rankService');
+const { assertTeamRulesAccepted } = require('./teamRulesService');
 
 const ACTIVE_REGISTRATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank'];
 
@@ -52,6 +53,11 @@ async function registerForEvent({ eventId, userId }) {
           'Erre az esemenyre jelenleg nem lehet jelentkezni. Csak jovobeli published esemenyre lehet jelentkezni.'
         );
       }
+
+      await assertTeamRulesAccepted(client, {
+        teamId: event.team_id,
+        userId
+      });
 
       const rankReconciliation = await reconcileRankWaitingListForEvent({
         eventId,

@@ -39,7 +39,7 @@ async function bootFrontend(options = {}) {
   });
 
   const { window } = dom;
-  const fetchMock = jest.fn(async (url) => {
+  const defaultFetchMock = jest.fn(async (url) => {
     const target = String(url);
 
     if (target.includes('/version')) {
@@ -65,6 +65,7 @@ async function bootFrontend(options = {}) {
 
     return createJsonResponse({});
   });
+  const fetchMock = options.fetchMock || defaultFetchMock;
 
   Object.assign(window, {
     fetch: fetchMock,
@@ -118,8 +119,9 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(authView).toBeTruthy();
     expect(authView.style.display).toBe('flex');
-    expect(authView.style.justifyContent).toBe('center');
-    expect(authView.style.alignItems).toBe('flex-start');
+    expect(authView.style.flexDirection).toBe('column');
+    expect(authView.style.justifyContent).toBe('flex-start');
+    expect(authView.style.alignItems).toBe('center');
     expect(sidebar.style.display).toBe('none');
 
     expect(document.getElementById('profileDrawer')).toBeNull();
@@ -192,6 +194,181 @@ describe('Frontend auth UI smoke tests', () => {
     expect(contactView.textContent).toContain('Minden jog fenntartva');
   });
 
+  test('a szabályzat menü jelzi az elfogadási kényszert és jelentkezés előtt blokkol', async () => {
+    const { window, document, fetchMock } = await bootFrontend();
+
+    window.eval(`
+      state.token = 'token-1';
+      state.user = { id: 'member-1', name: 'Anna', email: 'anna@example.com' };
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Szabályos FC',
+        rules_module_enabled: true,
+        rules_text: 'A csapat szabályait el kell fogadni.',
+        rules_version: 3,
+        current_user_rules_acceptance: {
+          required: true,
+          accepted: false,
+          needs_acceptance: true,
+          current_version: 3,
+          accepted_version: null,
+          accepted_at: null
+        }
+      };
+      state.teamMembers = [{
+        member_id: 'member-row-1',
+        user_id: 'member-1',
+        name: 'Anna',
+        email: 'anna@example.com',
+        role: 'member',
+        membership_status: 'active',
+        rank_status: 'guest',
+        attendance_stats: { present_count: 0, no_show_count: 0, marked_count: 0 },
+        rules_acceptance: state.currentTeam.current_user_rules_acceptance
+      }];
+      state.myEvents = [{
+        id: 'event-1',
+        team_id: 'team-1',
+        team_name: 'Szabályos FC',
+        title: 'Szabályos meccs',
+        status: 'published',
+        start_at: new Date(Date.now() + 86400000).toISOString(),
+        max_players: 10,
+        going_count: 0,
+        waiting_count: 0,
+        rank_waiting_count: 0,
+        my_registration_status: null,
+        is_registration_open: true,
+        rules_acceptance: state.currentTeam.current_user_rules_acceptance
+      }];
+      applyRoleAwareUi();
+      renderUserRulesView();
+      renderTeamRulesAdmin(state.currentTeam);
+      renderTeamMembersAdmin(state.teamMembers);
+      switchView('rulesView');
+    `);
+
+    expect(document.querySelector('[data-view="rulesView"]').style.display).toBe('');
+    expect(document.getElementById('rulesView').classList.contains('active')).toBe(true);
+    expect(document.getElementById('userRulesContent').textContent).toContain('Szabályos FC');
+    expect(document.getElementById('userRulesContent').textContent).toContain('szabályzat elfogadás szükséges');
+    expect(document.getElementById('teamRulesAdminContent').textContent).toContain('SZABÁLYZAT MODUL ON');
+    expect(document.getElementById('teamMembersAdminList').textContent).toContain('szabályzat elfogadás szükséges');
+
+    await window.registerForEvent('event-1');
+    await flushMicrotasks();
+
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Szabályzat menüpontban'));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/events/event-1/register'))).toBe(false);
+  });
+
+  test('szabályzat elfogadás után a játékos dashboard nem jelez további elfogadási kényszert', async () => {
+    const acceptedRules = {
+      required: true,
+      accepted: true,
+      needs_acceptance: false,
+      current_version: 4,
+      accepted_version: 4,
+      accepted_at: '2026-05-29T10:00:00.000Z'
+    };
+    const fetchMock = jest.fn(async url => {
+      const target = String(url);
+
+      if (target.includes('/teams/team-1/rules/accept')) {
+        return createJsonResponse({
+          message: 'Szabályzat elfogadva.',
+          rules_acceptance: acceptedRules
+        });
+      }
+
+      if (target.endsWith('/teams/team-1')) {
+        return createJsonResponse({
+          team: {
+            id: 'team-1',
+            name: 'Szabályos FC',
+            rules_module_enabled: true,
+            rules_text: 'A csapat szabályait el kell fogadni.',
+            rules_version: 4,
+            current_user_rules_acceptance: acceptedRules
+          },
+          members: [{
+            user_id: 'member-1',
+            name: 'Anna',
+            role: 'member',
+            membership_status: 'active',
+            rules_acceptance: acceptedRules
+          }]
+        });
+      }
+
+      if (target.includes('/my/events')) {
+        return createJsonResponse({ events: [] });
+      }
+
+      if (target.includes('/my/invites')) {
+        return createJsonResponse({ invites: [] });
+      }
+
+      if (target.includes('/teams/team-1/events')) {
+        return createJsonResponse({ events: [] });
+      }
+
+      return createJsonResponse({});
+    });
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      const pendingRules = {
+        required: true,
+        accepted: false,
+        needs_acceptance: true,
+        current_version: 4,
+        accepted_version: null
+      };
+      state.currentTeamId = 'team-1';
+      state.token = 'token-1';
+      state.user = { id: 'member-1', name: 'Anna', email: 'anna@example.com' };
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Szabályos FC',
+        rules_module_enabled: true,
+        rules_text: 'A csapat szabályait el kell fogadni.',
+        rules_version: 4,
+        current_user_rules_acceptance: pendingRules
+      };
+      state.myTeams = [{
+        id: 'team-1',
+        name: 'Szabályos FC',
+        membership_status: 'active',
+        role: 'member',
+        rules_acceptance: pendingRules
+      }];
+      state.teamMembers = [{
+        user_id: 'member-1',
+        name: 'Anna',
+        role: 'member',
+        membership_status: 'active',
+        rules_acceptance: pendingRules
+      }];
+      renderUserOverview();
+      renderUserRulesView();
+    `);
+
+    expect(document.querySelector('[data-user-overview-action="rules"]')).toBeTruthy();
+
+    document.querySelector('[data-user-rules-accept-check]').checked = true;
+    await window.acceptCurrentTeamRules();
+    await flushMicrotasks();
+
+    expect(document.querySelector('[data-user-overview-action="rules"]')).toBeNull();
+    expect(document.getElementById('userOverviewCards').textContent).toContain('Szabályzat');
+    expect(document.getElementById('userOverviewCards').textContent).toContain('0');
+    expect(document.getElementById('userRulesContent').textContent).toContain('szabályzat elfogadva');
+    expect(document.getElementById('myTeamsList').textContent).toContain('szabályzat elfogadva');
+  });
+
   test('egy kattintással át lehet váltani regisztrációra és vissza', async () => {
     const { window, document } = await bootFrontend();
 
@@ -220,6 +397,123 @@ describe('Frontend auth UI smoke tests', () => {
     expect(registerPanel.style.display).toBe('none');
     expect(loginPanel.querySelector('.auth-card-head')).toBeTruthy();
     expect(document.getElementById('authCardTitle')?.textContent).toBe('Bejelentkezés');
+  });
+
+  test('Google belepes nem kuld regisztracios utvonalat', async () => {
+    const googleRequests = [];
+    const fetchMock = jest.fn(async (url, init = {}) => {
+      const target = String(url);
+
+      if (target.includes('/version')) {
+        return createJsonResponse({ version: { name: 'Foci Szervező', version: '1.0.0' } });
+      }
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({
+          ok: true,
+          enabled: true,
+          clientId: '1234567890-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com'
+        });
+      }
+
+      if (target.includes('/auth/google')) {
+        googleRequests.push(JSON.parse(init.body));
+        return createJsonResponse({
+          ok: true,
+          token: 'google-token',
+          message: 'Sikeres Google-belépés.',
+          user: {
+            id: 'google-user',
+            name: 'Google User',
+            email: 'google@example.com',
+            platform_role: 'user',
+            registration_path: 'invited_participant'
+          }
+        });
+      }
+
+      if (target.includes('/my/teams')) return createJsonResponse({ ok: true, teams: [], count: 0 });
+      if (target.includes('/my/events')) return createJsonResponse({ ok: true, events: [], count: 0 });
+      if (target.includes('/my/invites')) return createJsonResponse({ ok: true, invites: [], count: 0 });
+      if (target.includes('/my/platform-summary')) return createJsonResponse({ ok: true, counts: {}, recent_teams: [], recent_events: [] });
+
+      return createJsonResponse({});
+    });
+
+    const { window } = await bootFrontend({ fetchMock });
+    const initializeCall = window.google.accounts.id.initialize.mock.calls.at(-1);
+
+    expect(initializeCall?.[0]?.client_id).toBe('1234567890-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com');
+
+    await initializeCall[0].callback({ credential: 'google-id-token' });
+    await flushMicrotasks();
+
+    expect(googleRequests).toHaveLength(1);
+    expect(googleRequests[0]).toEqual({ idToken: 'google-id-token' });
+  });
+
+  test('Google regisztracio kuldi a valasztott regisztracios kontextust', async () => {
+    const googleRequests = [];
+    const fetchMock = jest.fn(async (url, init = {}) => {
+      const target = String(url);
+
+      if (target.includes('/version')) {
+        return createJsonResponse({ version: { name: 'Foci Szervező', version: '1.0.0' } });
+      }
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({
+          ok: true,
+          enabled: true,
+          clientId: '1234567890-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com'
+        });
+      }
+
+      if (target.includes('/auth/google')) {
+        googleRequests.push(JSON.parse(init.body));
+        return createJsonResponse({
+          ok: true,
+          token: 'google-token',
+          message: 'Sikeres Google-regisztráció.',
+          user: {
+            id: 'google-user',
+            name: 'Google User',
+            email: 'google@example.com',
+            platform_role: 'user',
+            registration_path: 'team_sport_organizer',
+            can_create_team: true
+          }
+        });
+      }
+
+      if (target.includes('/my/teams')) return createJsonResponse({ ok: true, teams: [], count: 0 });
+      if (target.includes('/my/events')) return createJsonResponse({ ok: true, events: [], count: 0 });
+      if (target.includes('/my/invites')) return createJsonResponse({ ok: true, invites: [], count: 0 });
+      if (target.includes('/my/platform-summary')) return createJsonResponse({ ok: true, counts: {}, recent_teams: [], recent_events: [] });
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      setAuthMode('register');
+      setSelectedRegistrationPath('team_sport_organizer');
+      syncRegistrationPathUi();
+    `);
+    document.getElementById('registerPhone').value = '+36301234567';
+
+    const initializeCall = window.google.accounts.id.initialize.mock.calls.at(-1);
+    await initializeCall[0].callback({ credential: 'google-id-token' });
+    await flushMicrotasks();
+
+    expect(googleRequests).toHaveLength(1);
+    expect(googleRequests[0]).toMatchObject({
+      idToken: 'google-id-token',
+      registrationPath: 'team_sport_organizer',
+      registerAsOrganizer: true,
+      phone: '+36301234567'
+    });
   });
 
   test('a regisztrációs nézetben megjelenik az új belépési útvonal választó', async () => {
@@ -645,7 +939,7 @@ describe('Frontend auth UI smoke tests', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.teamMembers = [{
         user_id: 'admin-1',
         name: 'Captain',
@@ -1123,7 +1417,7 @@ describe('Frontend auth UI smoke tests', () => {
         id: 'team-1',
         name: 'Teszt FC',
         capabilities: {},
-        cash_module_enabled: false
+        cash_module_enabled: true
       };
       state.teamMembers = [];
       state.teamSkillSettings = null;
@@ -1182,7 +1476,7 @@ describe('Frontend auth UI smoke tests', () => {
         id: 'team-1',
         name: 'Teszt FC',
         capabilities: {},
-        cash_module_enabled: false
+        cash_module_enabled: true
       };
       state.selectedAdminEventDetail = {
         event: {
@@ -1236,7 +1530,7 @@ describe('Frontend auth UI smoke tests', () => {
         id: 'team-1',
         name: 'Teszt FC',
         capabilities: {},
-        cash_module_enabled: false
+        cash_module_enabled: true
       };
       state.selectedAdminEventDetail = {
         event: {
@@ -1291,7 +1585,7 @@ describe('Frontend auth UI smoke tests', () => {
         id: 'team-1',
         name: 'Teszt FC',
         capabilities: { canViewCashLedger: true },
-        cash_module_enabled: false
+        cash_module_enabled: true
       };
       state.teamMembers = [];
       state.teamSkillSettings = null;
@@ -1414,6 +1708,10 @@ describe('Frontend auth UI smoke tests', () => {
       can_create_team: true
     });
     window.switchView('adminView');
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.teamRole = 'team_admin';
+    `);
 
     const homePanel = document.querySelector('[data-admin-workspace-panel="home"]');
     const teamPanel = document.querySelector('[data-admin-workspace-panel="team"]');
@@ -1436,6 +1734,87 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(teamPanel.hidden).toBe(false);
     expect(financePanel.hidden).toBe(true);
+  });
+
+  test('a csapat testreszabása munkatér egy helyen mutatja a modulokat és a szabályzatot', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Teszt FC',
+        skill_balancing_enabled: true,
+        skill_balance_tolerance_percent: 15,
+        rank_module_enabled: true,
+        cash_module_enabled: false,
+        discipline_module_enabled: false,
+        rules_module_enabled: true,
+        rules_text: 'Házirend szöveg',
+        rules_version: 2,
+        module_settings: {
+          skill: { enabled: true, tolerance_percent: 15 },
+          rank: { enabled: true },
+          rules: { enabled: true, version: 2, has_text: true },
+          finance: { enabled: false },
+          discipline: { enabled: false }
+        }
+      };
+      state.teamSkillSettings = {
+        skill_balancing_enabled: true,
+        skill_balance_tolerance_percent: 15,
+        rank_module_enabled: true
+      };
+      renderTeamSummary(state.currentTeam);
+      setAdminWorkspace('customization');
+    `);
+
+    const customizationPanel = document.querySelector('[data-admin-workspace-panel="customization"]');
+    expect(customizationPanel.hidden).toBe(false);
+    expect(customizationPanel.textContent).toContain('Modulok áttekintése');
+    expect(customizationPanel.textContent).toContain('Skill modul');
+    expect(customizationPanel.textContent).toContain('Rangmodul');
+    expect(customizationPanel.textContent).toContain('SZABÁLYZAT MODUL ON');
+    expect(document.getElementById('teamAdvancedContent').textContent).toContain('A modulkapcsolók átkerültek');
+  });
+
+  test('a szabályzat mentés indításakor a frissen beírt szöveg és kapcsolóállapot nem ugrik vissza', async () => {
+    const fetchMock = jest.fn(async (url) => {
+      if (String(url).includes('/teams/team-1/rules')) {
+        return new Promise(() => {});
+      }
+      return createJsonResponse({});
+    });
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Teszt FC',
+        rules_module_enabled: false,
+        rules_text: '',
+        rules_version: 1
+      };
+      state.teamSkillSettings = {
+        skill_balancing_enabled: true,
+        skill_balance_tolerance_percent: 15,
+        rank_module_enabled: false
+      };
+      renderTeamSummary(state.currentTeam);
+      setAdminWorkspace('customization');
+    `);
+
+    document.querySelector('[data-team-rules-enabled]').checked = true;
+    document.querySelector('[data-team-rules-text]').value = 'Új szabályzat szöveg';
+    document.querySelector('[data-team-summary-action="save-team-rules"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+    await flushMicrotasks();
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/teams/team-1/rules'))).toBe(true);
+    expect(document.querySelector('[data-team-rules-enabled]').checked).toBe(true);
+    expect(document.querySelector('[data-team-rules-text]').value).toBe('Új szabályzat szöveg');
   });
 
   test('a kezdolap onboarding szemelyre szabott, es a csapat nezett alnezetekre bonthato', async () => {
@@ -1539,7 +1918,7 @@ describe('Frontend auth UI smoke tests', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true, rank_module_enabled: true };
       state.teamMembers = [
         { user_id: 'admin-1', name: 'Captain', membership_status: 'active', is_goalkeeper: true }
       ];
@@ -1808,7 +2187,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     window.eval(`
       state.user = { id: 'captain-1', can_create_team: true };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.currentTeamId = 'team-1';
       state.teamRole = 'team_admin';
       state.adminEvents = [{
@@ -1852,7 +2231,7 @@ describe('Frontend auth UI smoke tests', () => {
         event_readiness: 'finished'
       };
       state.user = { id: 'captain-1', can_create_team: true };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.currentTeamId = 'team-1';
       state.teamRole = 'team_admin';
       state.adminEvents = [event];
@@ -1877,7 +2256,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     window.eval(`
       state.user = { id: 'captain-1', can_create_team: true };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true, rank_module_enabled: true };
       state.currentTeamId = 'team-1';
       state.teamRole = 'team_admin';
       state.teamMembers = [
@@ -1968,7 +2347,7 @@ describe('Frontend auth UI smoke tests', () => {
     window.eval(`
       state.user = { id: 'captain-1', can_create_team: true };
       state.teamRole = 'team_admin';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.teamMembers = [
         { user_id: 'captain-1', membership_status: 'active', role: 'team_admin', name: 'Kapitány', email: 'captain@example.com', is_goalkeeper: true },
         { user_id: 'member-2', membership_status: 'active', role: 'member', name: 'Tag 2', email: 'tag2@example.com', is_goalkeeper: false }
@@ -2437,7 +2816,7 @@ describe('Frontend auth UI smoke tests', () => {
     window.eval(`
       state.token = 'test-token';
       state.currentTeamId = 'team-1';
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminWorkspace = 'events';
       state.adminEvents = [{
         id: 'evt-past',
@@ -2476,6 +2855,7 @@ describe('Frontend auth UI smoke tests', () => {
         registrations: { going: [] },
         summary: { paymentSummary: {}, financeSummary: {} }
       };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.adminEventFormMode = 'edit';
       syncUnifiedAdminEventFormMode();
     `);
@@ -2687,7 +3067,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     window.eval(`
       state.user = { id: 'captain-1', can_create_team: true };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', capabilities: {}, cash_module_enabled: false };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', capabilities: {}, cash_module_enabled: true };
       state.currentTeamId = 'team-1';
       state.teamInvites = [];
       state.teamMembers = [
@@ -2737,7 +3117,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     window.eval(`
       state.user = { id: 'captain-1', can_create_team: true };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.currentTeamId = 'team-1';
       state.teamInvites = [];
       state.teamMembers = [
@@ -2795,7 +3175,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     window.eval(`
       state.user = { id: 'captain-1', can_create_team: true };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
       state.currentTeamId = 'team-1';
       state.teamRole = 'team_admin';
       state.teamInvites = [];

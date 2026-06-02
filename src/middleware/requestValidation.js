@@ -896,6 +896,73 @@ function validateUpdateEvent(req, res, next) {
   return next();
 }
 
+function validateUpdateTeamRules(req, res, next) {
+  if (!ensureBodyObject(req, res)) {
+    return;
+  }
+
+  const allowedFields = ['rulesModuleEnabled', 'rulesText'];
+  const keys = Object.keys(req.body);
+  if (keys.length === 0) {
+    return badRequest(res, 'Nincs módosítandó szabályzat mező.');
+  }
+
+  const unknownFields = rejectUnknownFields(req.body, allowedFields);
+  if (unknownFields.length > 0) {
+    return badRequest(res, `Ismeretlen szabályzat mezők: ${unknownFields.join(', ')}`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'rulesModuleEnabled')) {
+    const enabled = validateBoolean(req.body.rulesModuleEnabled, 'A rulesModuleEnabled', { required: true });
+    if (enabled.error) return badRequest(res, enabled.error);
+  } else {
+    return badRequest(res, 'A rulesModuleEnabled kötelező.');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'rulesText')) {
+    const result = validateOptionalString(req.body.rulesText, 'A rulesText', {
+      maxLength: 12000,
+      allowNull: true
+    });
+    if (result.error) return badRequest(res, result.error);
+    req.body.rulesText = result.value ?? null;
+  } else {
+    req.body.rulesText = null;
+  }
+
+  return next();
+}
+
+function validateUpdateTeamModuleSettings(req, res, next) {
+  if (!ensureBodyObject(req, res)) {
+    return;
+  }
+
+  const allowedFields = ['cashModuleEnabled', 'disciplineModuleEnabled'];
+  const keys = Object.keys(req.body);
+  if (keys.length === 0) {
+    return badRequest(res, 'Nincs módosítandó modulbeállítás mező.');
+  }
+
+  const unknownFields = rejectUnknownFields(req.body, allowedFields);
+  if (unknownFields.length > 0) {
+    return badRequest(res, `Ismeretlen modulbeállítás mezők: ${unknownFields.join(', ')}`);
+  }
+
+  for (const field of allowedFields) {
+    if (!Object.prototype.hasOwnProperty.call(req.body, field)) {
+      continue;
+    }
+
+    const result = validateBoolean(req.body[field], `A ${field}`, { required: true });
+    if (result.error) {
+      return badRequest(res, result.error);
+    }
+  }
+
+  return next();
+}
+
 function validateUpdateEventStatus(req, res, next) {
   if (!ensureBodyObject(req, res)) {
     return;
@@ -922,6 +989,8 @@ module.exports = {
   validateUpdateTeamMember,
   validateCaptainTransfer,
   validateTeamFinanceAdjustment,
+  validateUpdateTeamRules,
+  validateUpdateTeamModuleSettings,
   validateCreateInvite,
   validateCreateJoinLink,
   validateGoogleAuth,

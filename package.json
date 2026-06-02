@@ -7,6 +7,7 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "process:prestart": "node src/tools/processPrestartEventAutomation.js",
+    "check:prestart": "node src/tools/processPrestartEventAutomation.js --dry-run",
     "test": "jest --runInBand --detectOpenHandles",
     "test:frontend": "jest tests/frontend-auth-ui.test.js --runInBand",
     "test:module:rank": "jest tests/event-registration.e2e.test.js tests/frontend-rank-ui.test.js --runInBand --detectOpenHandles",
@@ -14,7 +15,7 @@
     "test:module:cash": "jest tests/event-attendance.e2e.test.js tests/frontend-cash-ui.test.js --runInBand --detectOpenHandles",
     "test:flow:organizer": "jest tests/organizer-full-flow.e2e.test.js --runInBand --detectOpenHandles",
     "test:modules": "npm run test:module:rank && npm run test:module:skill && npm run test:module:cash && npm run test:flow:organizer",
-    "test:pilot": "jest tests/auth.e2e.test.js tests/team-invites.e2e.test.js tests/event-registration.e2e.test.js tests/organizer-full-flow.e2e.test.js tests/event-notification.service.test.js tests/weather.service.test.js tests/frontend-auth-ui.test.js tests/frontend-cash-ui.test.js --runInBand --detectOpenHandles",
+    "test:pilot": "jest tests/auth.e2e.test.js tests/team-invites.e2e.test.js tests/event-registration.e2e.test.js tests/organizer-full-flow.e2e.test.js tests/event-notification.service.test.js tests/event-automation.service.test.js tests/weather.service.test.js tests/frontend-auth-ui.test.js tests/frontend-cash-ui.test.js --runInBand --detectOpenHandles",
     "test:watch": "jest --watch"
   },
   "keywords": [],

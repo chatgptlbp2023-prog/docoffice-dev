@@ -137,6 +137,91 @@ describe('Event email actions E2E', () => {
     expect(registrationResult.rows[0].registration_status).toBe('going');
   });
 
+  test('Jelentkezem email action sem keruli meg az aktiv csapatszabalyzat elfogadasat', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser({ name: 'Rules Email Admin', email: `rules_email_admin_${runId}@example.com` });
+    const memberId = await createUser({ name: 'Rules Email Member', email: `rules_email_member_${runId}@example.com` });
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (
+        id, name, created_by_user_id, status, rank_module_enabled,
+        rules_module_enabled, rules_text, rules_version,
+        created_at, updated_at
+      )
+      values ($1, $2, $3, 'active', false, true, $4, 2, now(), now())
+      `,
+      [teamId, 'Email Szabaly FC', adminId, 'Emailbol sem lehet megkerulni a csapatszabalyzatot.']
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, memberId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Email szabaly esemĂ©ny', 'Email rules action teszt', '2026-06-12T18:00:00.000Z', 'Teszt pĂˇlya', 5, 10, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (id, event_id, notification_preferences)
+      values ($1, $2, '{"notifyTeamOnCreate":true}'::jsonb)
+      `,
+      [randomUUID(), eventId]
+    );
+
+    const token = buildEventEmailActionToken({
+      eventId,
+      userId: memberId,
+      action: EVENT_EMAIL_ACTIONS.REGISTER
+    });
+
+    const response = await request(app)
+      .get(`/api/event-email-actions/${encodeURIComponent(token)}`)
+      .redirects(0);
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('Szabályzat');
+
+    const registrationResult = await pool.query(
+      `
+      select count(*)::int as count
+      from event_registrations
+      where event_id = $1
+        and user_id = $2
+      `,
+      [eventId, memberId]
+    );
+    expect(registrationResult.rows[0].count).toBe(0);
+
+    const logResult = await pool.query(
+      `
+      select action, status, message
+      from event_email_action_log
+      where event_id = $1
+        and user_id = $2
+      order by created_at desc
+      limit 1
+      `,
+      [eventId, memberId]
+    );
+
+    expect(logResult.rows[0].action).toBe('register');
+    expect(logResult.rows[0].status).toBe('error');
+    expect(logResult.rows[0].message).toContain('Szabályzat');
+  });
+
   test('Kihagyom email action csak naploz, es nem hoz letre jelentkezest', async () => {
     const runId = randomUUID();
     const adminId = await createUser({ name: 'Skip Admin', email: `skip_admin_${runId}@example.com` });

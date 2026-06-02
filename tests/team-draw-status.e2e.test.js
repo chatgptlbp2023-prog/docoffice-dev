@@ -133,11 +133,11 @@ describe('Event team draw status machine E2E', () => {
         skills_enabled, is_goalkeeper, goalkeeper_score, defense_score, attack_score
       )
       values
-      ($1, $6, $7, 'team_admin', 'active', now(), now(), now(), true, true, 35, 68, 74),
-      ($2, $6, $8, 'member', 'active', now(), now(), now(), true, true, 0, 72, 63),
-      ($3, $6, $9, 'member', 'active', now(), now(), now(), true, false, 0, 58, 81),
-      ($4, $6, $10, 'member', 'active', now(), now(), now(), true, false, 10, 61, 60),
-      ($5, $6, $11, 'member', 'active', now(), now(), now(), true, false, 0, 66, 57)
+      ($1, $6, $7, 'team_admin', 'active', now(), now(), now(), true, true, 4, 7, 7),
+      ($2, $6, $8, 'member', 'active', now(), now(), now(), true, true, 0, 7, 6),
+      ($3, $6, $9, 'member', 'active', now(), now(), now(), true, false, 0, 6, 8),
+      ($4, $6, $10, 'member', 'active', now(), now(), now(), true, false, 1, 6, 6),
+      ($5, $6, $11, 'member', 'active', now(), now(), now(), true, false, 0, 7, 6)
       `,
       [
         randomUUID(),

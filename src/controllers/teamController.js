@@ -1,4 +1,5 @@
 const teamService = require('../services/teamService');
+const teamRulesService = require('../services/teamRulesService');
 
 function handleServiceError(res, error, logLabel, fallbackMessage) {
   if (error && error.statusCode) {
@@ -169,6 +170,72 @@ async function addFinanceAdjustment(req, res) {
   }
 }
 
+async function updateTeamRules(req, res) {
+  try {
+    const result = await teamRulesService.updateTeamRules({
+      teamId: req.params.teamId,
+      updatedByUserId: req.user.id,
+      rulesModuleEnabled: req.body.rulesModuleEnabled,
+      rulesText: req.body.rulesText
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Csapatszabalyzat frissitesi hiba:',
+      'Szerverhiba csapatszabalyzat frissitese kozben.'
+    );
+  }
+}
+
+async function updateTeamModuleSettings(req, res) {
+  try {
+    const result = await teamService.updateTeamModuleSettings({
+      teamId: req.params.teamId,
+      cashModuleEnabled: req.body.cashModuleEnabled,
+      disciplineModuleEnabled: req.body.disciplineModuleEnabled
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Csapat modulbeallitas frissitesi hiba:',
+      'Szerverhiba csapat modulbeallitas frissitese kozben.'
+    );
+  }
+}
+
+async function acceptTeamRules(req, res) {
+  try {
+    const result = await teamRulesService.acceptTeamRules({
+      teamId: req.params.teamId,
+      userId: req.user.id
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Csapatszabalyzat elfogadasi hiba:',
+      'Szerverhiba csapatszabalyzat elfogadasa kozben.'
+    );
+  }
+}
+
 module.exports = {
   createTeam,
   getTeamById,
@@ -176,5 +243,8 @@ module.exports = {
   addTeamMember,
   updateTeamMember,
   removeTeamMember,
-  addFinanceAdjustment
+  addFinanceAdjustment,
+  updateTeamRules,
+  updateTeamModuleSettings,
+  acceptTeamRules
 };
