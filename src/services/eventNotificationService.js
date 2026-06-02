@@ -277,6 +277,15 @@ function buildActiveRegistrationNames(context) {
     });
 }
 
+function getRecipientActiveRegistrationStatus(context, recipient) {
+  if (!recipient?.userId) return null;
+  const registration = (context?.registrations || []).find(item => (
+    String(item?.user_id || '') === String(recipient.userId) &&
+    ACTIVE_EVENT_REGISTRATION_STATUSES.includes(item.registration_status)
+  ));
+  return registration?.registration_status || null;
+}
+
 function buildEventCreatedEmail(context, recipient) {
   const copy = buildEventBaseCopy(context);
   const registerToken = buildEventEmailActionToken({
@@ -368,8 +377,20 @@ function buildNewRegistrationEmail(context, registrationUserName, registrationSt
   return { subject, text, html };
 }
 
-function buildCapacityEmail(context, type, spotsLeft) {
+function buildCapacityEmail(context, type, spotsLeft, recipient = null) {
   const copy = buildEventBaseCopy(context);
+  const recipientRegistrationStatus = getRecipientActiveRegistrationStatus(context, recipient);
+  const waitlistEncouragement = 'Az esemény most betelt, de ne maradj le! Jelentkezz várólistára, és ha felszabadul egy hely, elsők között értesítünk — így még simán pályára léphetsz.';
+  const waitlistActionUrl = type === 'full' && recipient?.userId && !recipientRegistrationStatus
+    ? buildEventEmailActionUrl(
+        buildEventEmailActionToken({
+          eventId: context.event.id,
+          userId: recipient.userId,
+          action: EVENT_EMAIL_ACTIONS.REGISTER
+        }),
+        copy.appBaseUrl
+      )
+    : '';
   const subject = type === 'two_spots_left'
     ? `Mar csak 2 hely maradt: ${copy.eventTitle}`
     : `Betelt az esemeny: ${copy.eventTitle}`;
@@ -380,14 +401,24 @@ function buildCapacityEmail(context, type, spotsLeft) {
     'Szia!',
     '',
     summary,
+    type === 'full' ? waitlistEncouragement : '',
     `Idopont: ${copy.whenLabel}`,
-    `Helyszin: ${copy.locationLabel}`
-  ].join('\n');
+    `Helyszin: ${copy.locationLabel}`,
+    waitlistActionUrl ? `Varolistara jelentkezem: ${waitlistActionUrl}` : ''
+  ].filter(Boolean).join('\n');
   const html = `
     <div style="font-family:Segoe UI,Arial,sans-serif;line-height:1.5;color:#1f2937;">
       <h2>${escapeHtml(type === 'two_spots_left' ? 'Mar csak 2 hely maradt' : 'Betelt az esemeny')}</h2>
       <p>${escapeHtml(summary)}</p>
+      ${type === 'full' ? `<p>${escapeHtml(waitlistEncouragement)}</p>` : ''}
       <p><strong>Idopont:</strong> ${escapeHtml(copy.whenLabel)}<br /><strong>Helyszin:</strong> ${escapeHtml(copy.locationLabel)}</p>
+      ${waitlistActionUrl ? `
+        <div style="margin:20px 0 12px;">
+          ${buildActionButtonsHtml([
+            { label: 'Várólistára jelentkezem', href: waitlistActionUrl, background: '#f59e0b' }
+          ])}
+        </div>
+      ` : ''}
     </div>
   `;
   return { subject, text, html };
@@ -655,11 +686,11 @@ async function notifyRegistrationActivity({
     includeCapacityNotifications === true &&
     context.notificationPreferences.notifyAllWhenFull === true &&
     spotsLeft === 0 &&
-    activeRecipients.length
+    teamRecipients.length
   ) {
     summary.full = await sendBulkEmails(
-      activeRecipients,
-      buildCapacityEmail(context, 'full', spotsLeft),
+      teamRecipients,
+      recipient => buildCapacityEmail(context, 'full', spotsLeft, recipient),
       `capacity_full:${eventId}`
     );
   }

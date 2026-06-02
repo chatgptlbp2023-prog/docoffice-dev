@@ -179,7 +179,7 @@ async function registerForEvent({ eventId, userId }) {
             ? 'Sikeres jelentkezes.'
             : registrationStatus === 'waiting_list_rank'
               ? 'Elojelentkezes rogzitve. Rangvarolistara kerultel, es a savod nyitasakor automatikusan atsorol a rendszer.'
-              : 'Az esemeny betelt, a user varolistara kerult.',
+              : 'Az esemeny betelt, varolistara kerultel.',
         registration: insertResult.rows[0],
         cancellationCount,
         rankSnapshot,

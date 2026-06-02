@@ -345,4 +345,85 @@ describe('Event notification service', () => {
     expect(sentPayloads.some(payload => payload.html.includes('Anna, Bela, Csaba'))).toBe(true);
     expect(sentPayloads.some(payload => payload.text.includes('Mar jelentkeztek: Anna, Bela, Csaba'))).toBe(true);
   });
+
+  test('betelt esemeny email a nem jelentkezett csapattagot varolistara osztonzi', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_full_${runId}@example.com`);
+    const firstMemberId = await createUser('Anna', `anna_full_${runId}@example.com`);
+    const registrantId = await createUser('Csaba', `csaba_full_${runId}@example.com`);
+    const notRegisteredId = await createUser('Dani', `dani_full_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Betelt FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, firstMemberId, 'member');
+    await addMembership(teamId, registrantId, 'member');
+    await addMembership(teamId, notRegisteredId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Tengo', 'Betelt email teszt', '2026-06-03T09:00:00.000Z', 'Teszt palya', '1046 budapest Oceanarok 23', 2, 2, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyAllWhenFull":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, registered_at, created_at, updated_at
+      )
+      values
+        ($1, $3, $4, $5, 'going', now() - interval '10 minutes', now(), now()),
+        ($2, $3, $4, $6, 'going', now() - interval '2 minutes', now(), now())
+      `,
+      [randomUUID(), randomUUID(), eventId, teamId, firstMemberId, registrantId]
+    );
+
+    const result = await eventNotificationService.notifyRegistrationActivity({
+      eventId,
+      actorUserId: registrantId,
+      registrationStatus: 'going',
+      includeNewRegistrationNotification: false
+    });
+
+    expect(result.full.sentCount).toBe(3);
+    const sentPayloads = sendEmail.mock.calls.map(call => call[0]);
+    const waitlistPayload = sentPayloads.find(payload => payload.to === `dani_full_${runId}@example.com`);
+    const alreadyGoingPayload = sentPayloads.find(payload => payload.to === `anna_full_${runId}@example.com`);
+
+    expect(waitlistPayload).toBeTruthy();
+    expect(waitlistPayload.subject).toContain('Betelt az esemeny: Tengo');
+    expect(waitlistPayload.text).toContain('Az esemény most betelt, de ne maradj le!');
+    expect(waitlistPayload.html).toContain('Várólistára jelentkezem');
+    expect(waitlistPayload.html).toContain('https://app.example.com/api/event-email-actions/');
+    expect(alreadyGoingPayload).toBeTruthy();
+    expect(alreadyGoingPayload.html).not.toContain('Várólistára jelentkezem');
+  });
 });

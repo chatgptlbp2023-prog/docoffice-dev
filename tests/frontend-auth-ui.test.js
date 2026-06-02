@@ -538,11 +538,54 @@ describe('Frontend auth UI smoke tests', () => {
   });
 
   test('meghívólinkkel érkezve a regisztrációs nézet nyílik meg, és a meghívós csempe kap fókuszt', async () => {
-    const { document } = await bootFrontend({ url: 'http://localhost:3000/?invite=token-123' });
+    const fetchMock = jest.fn(async (url) => {
+      const target = String(url);
+
+      if (target.includes('/invite-links/token-123')) {
+        return createJsonResponse({
+          invite: {
+            id: 'invite-1',
+            team_name: 'Keddi focis fiuk',
+            role: 'member',
+            status: 'pending',
+            invited_email: 'meghivott@example.com',
+            expires_at: '2026-06-05T10:00:00.000Z'
+          }
+        });
+      }
+
+      if (target.includes('/version')) {
+        return createJsonResponse({
+          version: {
+            name: 'Foci Szervező',
+            version: '1.0.0',
+            commit: 'abc1234',
+            environment: 'test',
+            builtAt: '2026-05-01T20:40:00.000Z',
+            startedAt: '2026-05-01T20:45:00.000Z'
+          }
+        });
+      }
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/auth/me')) {
+        return createJsonResponse({ user: null }, { status: 401, ok: false });
+      }
+
+      return createJsonResponse({});
+    });
+    const { document } = await bootFrontend({
+      url: 'http://localhost:3000/?invite=token-123',
+      fetchMock
+    });
 
     const loginPanel = document.getElementById('loginPanel');
     const registerPanel = document.getElementById('registerPanel');
     const inviteCard = document.querySelector('.auth-path-panel[data-registration-path="invited_participant"]');
+    const registerEmail = document.getElementById('registerEmail');
     const inviteTokenInput = document.getElementById('registerInviteToken');
     const inviteLandingCard = document.getElementById('inviteLandingCard');
 
@@ -552,7 +595,10 @@ describe('Frontend auth UI smoke tests', () => {
     expect(registerPanel.style.display).toBe('flex');
     expect(inviteCard.classList.contains('is-active')).toBe(true);
     expect(inviteCard.classList.contains('is-invite-landing-highlight')).toBe(true);
+    expect(registerEmail.value).toBe('meghivott@example.com');
+    expect(registerEmail.readOnly).toBe(true);
     expect(inviteTokenInput.value).toBe('token-123');
+    expect(inviteTokenInput.readOnly).toBe(true);
     expect(inviteLandingCard.hidden).toBe(true);
   });
 
@@ -693,6 +739,64 @@ describe('Frontend auth UI smoke tests', () => {
     expect(calendarCard.style.order).toBe('1');
     expect(heroCard.style.order).toBe('2');
     expect(calendarCard.nextElementSibling).toBe(heroCard);
+  });
+
+  test('a 7 napos naptar a legkozelebbi 7 napon beluli esemeny napjarol indul', async () => {
+    const { window } = await bootFrontend();
+
+    const result = window.eval(`
+      (() => {
+        const days = buildUserSevenDayBoardDays([
+          {
+            id: 'later-event',
+            title: 'Kesobbi foci',
+            status: 'published',
+            start_at: new Date(2026, 5, 16, 18, 0, 0).toISOString()
+          },
+          {
+            id: 'nearest-event',
+            title: 'Legkozelebbi foci',
+            status: 'published',
+            start_at: new Date(2026, 5, 13, 15, 0, 0).toISOString()
+          }
+        ], { now: new Date(2026, 5, 10, 9, 0, 0) });
+        const firstDate = new Date(days[0].timestamp);
+        return {
+          firstDate: [firstDate.getFullYear(), firstDate.getMonth() + 1, firstDate.getDate()],
+          firstItemIds: days[0].items.map(item => item.id),
+          visibleItemCount: days.reduce((sum, day) => sum + day.items.length, 0)
+        };
+      })()
+    `);
+
+    expect(result.firstDate).toEqual([2026, 6, 13]);
+    expect(result.firstItemIds).toEqual(['nearest-event']);
+    expect(result.visibleItemCount).toBe(2);
+  });
+
+  test('a 7 napos naptar esemeny nelkul a mai nappal indul', async () => {
+    const { window } = await bootFrontend();
+
+    const result = window.eval(`
+      (() => {
+        const days = buildUserSevenDayBoardDays([
+          {
+            id: 'too-far-event',
+            title: 'Tavoli foci',
+            status: 'published',
+            start_at: new Date(2026, 5, 18, 18, 0, 0).toISOString()
+          }
+        ], { now: new Date(2026, 5, 10, 9, 0, 0) });
+        const firstDate = new Date(days[0].timestamp);
+        return {
+          firstDate: [firstDate.getFullYear(), firstDate.getMonth() + 1, firstDate.getDate()],
+          visibleItemCount: days.reduce((sum, day) => sum + day.items.length, 0)
+        };
+      })()
+    `);
+
+    expect(result.firstDate).toEqual([2026, 6, 10]);
+    expect(result.visibleItemCount).toBe(0);
   });
 
   test('az admin meghívólistában megjelenik az email küldési állapot', async () => {

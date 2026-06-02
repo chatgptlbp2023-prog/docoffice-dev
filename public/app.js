@@ -314,6 +314,42 @@ function shouldHighlightInviteRegistrationPath() {
   return Boolean(state.pendingInviteToken) && !state.token;
 }
 
+function getPendingInviteEmail() {
+  return String(state.pendingInvitePreview?.invite?.invited_email || '').trim();
+}
+
+function syncPendingInviteRegistrationFields() {
+  const inviteInput = document.getElementById('registerInviteToken');
+  if (inviteInput) {
+    if (state.pendingInviteToken) {
+      inviteInput.value = state.pendingInviteToken;
+      inviteInput.readOnly = true;
+    } else {
+      inviteInput.readOnly = false;
+    }
+  }
+
+  const registerEmailInput = document.getElementById('registerEmail');
+  if (!registerEmailInput) return;
+
+  const invitedEmail = getPendingInviteEmail();
+  if (state.pendingInviteToken && invitedEmail) {
+    registerEmailInput.value = invitedEmail;
+    registerEmailInput.disabled = false;
+    registerEmailInput.readOnly = true;
+    registerEmailInput.classList.add('is-prefilled-invite-email');
+    registerEmailInput.title = 'Ezt az emailt a meghivobol toltottuk be.';
+    return;
+  }
+
+  registerEmailInput.classList.remove('is-prefilled-invite-email');
+  registerEmailInput.removeAttribute('title');
+  if (!state.pendingInviteToken) {
+    registerEmailInput.readOnly = false;
+    registerEmailInput.disabled = false;
+  }
+}
+
 function setSelectedRegistrationPath(path) {
   const nextPath = path || getDefaultRegistrationPath() || '';
   state.selectedRegistrationPath = nextPath;
@@ -370,6 +406,7 @@ function syncRegistrationPathUi() {
   }
 
   syncAuthPoster();
+  syncPendingInviteRegistrationFields();
 }
 
 function getRegistrationPathPresentation(path) {
@@ -693,10 +730,7 @@ function ensureAuthOnboardingUi() {
     els.registerForm.appendChild(detailsBlock);
   }
 
-  const registerInviteInput = document.getElementById('registerInviteToken');
-  if (registerInviteInput && state.pendingInviteToken && !registerInviteInput.value) {
-    registerInviteInput.value = state.pendingInviteToken;
-  }
+  syncPendingInviteRegistrationFields();
 
   document.querySelectorAll('.auth-path-trigger').forEach(button => {
     if (button.dataset.boundRegistrationPath !== 'true') {
@@ -949,6 +983,7 @@ function setAuthMode(mode = 'login') {
     syncRegistrationPathUi();
     renderInviteLanding();
   } else {
+    syncPendingInviteRegistrationFields();
     syncAuthPoster();
     renderInviteLanding();
   }
@@ -993,6 +1028,7 @@ function resetAuthForms({ preserveInviteToken = true } = {}) {
 
   setSelectedRegistrationPath(getDefaultRegistrationPath());
   syncRegistrationPathUi();
+  syncPendingInviteRegistrationFields();
 }
 
 function syncSidebarCollapse() {
@@ -3669,6 +3705,7 @@ async function loadVersionInfo() {
 async function loadInvitePreview() {
   if (!state.pendingInviteToken) {
     state.pendingInvitePreview = null;
+    syncPendingInviteRegistrationFields();
     renderInviteLanding();
     return;
   }
@@ -3691,6 +3728,7 @@ async function loadInvitePreview() {
     };
   }
 
+  syncPendingInviteRegistrationFields();
   renderInviteLanding();
 }
 
@@ -3706,6 +3744,7 @@ async function tryAcceptPendingInviteToken() {
     state.pendingInviteToken = '';
     state.pendingInvitePreview = null;
     syncAppLinkParamsToUrl();
+    syncPendingInviteRegistrationFields();
     renderInviteLanding();
   } catch (error) {
     if (error.status !== 409 && error.status !== 403) {
@@ -5592,8 +5631,7 @@ function sortEventsByStart(events = []) {
   return [...events].sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
 }
 
-function getUpcomingEvents(events = []) {
-  const now = Date.now();
+function getUpcomingEvents(events = [], now = Date.now()) {
   return sortEventsByStart(events).filter(event => {
     const ts = new Date(event.start_at).getTime();
     if (Number.isNaN(ts)) return false;
@@ -5605,7 +5643,7 @@ function getUpcomingEvents(events = []) {
 const UPCOMING_EVENTS_LIST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function getUpcomingEventsWithinWindow(events = [], windowMs = UPCOMING_EVENTS_LIST_WINDOW_MS, now = Date.now()) {
-  return getUpcomingEvents(events).filter(event => {
+  return getUpcomingEvents(events, now).filter(event => {
     const ts = new Date(event.start_at).getTime();
     if (Number.isNaN(ts)) return false;
     return ts - now <= windowMs;
@@ -5680,10 +5718,22 @@ function formatSevenDayBoardTimeLabel(value) {
   });
 }
 
+function getSevenDayBoardStartTimestamp(events = [], now = new Date()) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const nowTs = Number.isNaN(nowDate.getTime()) ? Date.now() : nowDate.getTime();
+  const fallbackStartTs = startOfDayTimestamp(nowDate) || startOfDayTimestamp(new Date()) || nowTs;
+  const nextEventWithinWindow = getUpcomingEventsWithinWindow(events, UPCOMING_EVENTS_LIST_WINDOW_MS, nowTs)[0];
+  return startOfDayTimestamp(nextEventWithinWindow?.start_at) || fallbackStartTs;
+}
+
 function buildUserSevenDayBoardDays(events = [], options = {}) {
   const now = options.now instanceof Date ? options.now : new Date();
-  const startTs = startOfDayTimestamp(now);
-  const visibleEvents = getUpcomingEventsWithinWindow(events, UPCOMING_EVENTS_LIST_WINDOW_MS, now.getTime());
+  const startTs = getSevenDayBoardStartTimestamp(events, now);
+  const boardEndTs = startTs + UPCOMING_EVENTS_LIST_WINDOW_MS;
+  const visibleEvents = getUpcomingEvents(events, now.getTime()).filter(event => {
+    const dayTs = startOfDayTimestamp(event.start_at);
+    return dayTs !== null && dayTs >= startTs && dayTs < boardEndTs;
+  });
 
   return Array.from({ length: 7 }, (_, index) => {
     const dayTs = startTs + (index * 24 * 60 * 60 * 1000);
@@ -9447,6 +9497,7 @@ async function handleLogin(event) {
 async function handleRegister(event) {
   event.preventDefault();
   clearMessage();
+  syncPendingInviteRegistrationFields();
 
   const name = document.getElementById('registerName').value.trim();
   const email = document.getElementById('registerEmail').value.trim();

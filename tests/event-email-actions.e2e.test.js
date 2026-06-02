@@ -137,6 +137,88 @@ describe('Event email actions E2E', () => {
     expect(registrationResult.rows[0].registration_status).toBe('going');
   });
 
+  test('Jelentkezem email action telt esemenynel varolistara teszi a jatekost', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser({ name: 'Full Email Admin', email: `full_email_admin_${runId}@example.com` });
+    const goingMemberId = await createUser({ name: 'Full Going Member', email: `full_going_${runId}@example.com` });
+    const waitlistMemberId = await createUser({ name: 'Full Waitlist Member', email: `full_waitlist_${runId}@example.com` });
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, rank_module_enabled, created_at, updated_at)
+      values ($1, $2, $3, 'active', false, now(), now())
+      `,
+      [teamId, 'Email Varolista FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, goingMemberId, 'member');
+    await addMembership(teamId, waitlistMemberId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Email varolistas esemeny', 'Email action varolista teszt', '2026-06-10T18:00:00.000Z', 'Teszt palya', 1, 1, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values ($1, $2, '{"notifyTeamOnCreate":true}'::jsonb)
+      `,
+      [randomUUID(), eventId]
+    );
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, registered_at, created_at, updated_at
+      )
+      values ($1, $2, $3, $4, 'going', now() - interval '5 minutes', now(), now())
+      `,
+      [randomUUID(), eventId, teamId, goingMemberId]
+    );
+
+    const token = buildEventEmailActionToken({
+      eventId,
+      userId: waitlistMemberId,
+      action: EVENT_EMAIL_ACTIONS.REGISTER
+    });
+
+    const response = await request(app)
+      .get(`/api/event-email-actions/${encodeURIComponent(token)}`)
+      .redirects(0);
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('Jelentkez');
+    expect(response.text).toContain('varolistara');
+
+    const registrationResult = await pool.query(
+      `
+      select registration_status
+      from event_registrations
+      where event_id = $1
+        and user_id = $2
+      `,
+      [eventId, waitlistMemberId]
+    );
+
+    expect(registrationResult.rows).toHaveLength(1);
+    expect(registrationResult.rows[0].registration_status).toBe('waiting_list');
+  });
+
   test('Jelentkezem email action sem keruli meg az aktiv csapatszabalyzat elfogadasat', async () => {
     const runId = randomUUID();
     const adminId = await createUser({ name: 'Rules Email Admin', email: `rules_email_admin_${runId}@example.com` });
