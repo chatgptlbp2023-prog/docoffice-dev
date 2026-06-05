@@ -1133,7 +1133,7 @@ describe('Frontend auth UI smoke tests', () => {
     expect(secondBoot.document.querySelector('[data-view="adminView"]').style.display).not.toBe('none');
   });
 
-  test('a tornaszervezo kulon munkateret kap, es nem a csapatsport adminba esik vissza', async () => {
+  test('a tornaszervezo kulon munkateret kap, de megtartja a csapatszervezo admin jogat is', async () => {
     const { window, document } = await bootFrontend();
 
     window.setAuth('tournament-token', {
@@ -1147,11 +1147,11 @@ describe('Frontend auth UI smoke tests', () => {
     window.switchView('tournamentView');
 
     expect(document.querySelector('[data-view="tournamentView"]').style.display).not.toBe('none');
-    expect(document.querySelector('[data-view="adminView"]').style.display).toBe('none');
+    expect(document.querySelector('[data-view="adminView"]').style.display).not.toBe('none');
     expect(document.getElementById('tournamentView').hidden).toBe(false);
     expect(document.getElementById('tournamentView').classList.contains('active')).toBe(true);
-    expect(document.getElementById('adminView').hidden).toBe(true);
-    expect(document.getElementById('tournamentHomeContent').textContent).toContain('tornaszervezői munkatér');
+    expect(document.getElementById('adminView').hidden).toBe(false);
+    expect(document.getElementById('tournamentHomeContent').textContent).toContain('Torna létrehozása');
   });
 
   test('a tornaszervezo el tudja menteni a torna alapjait a sajat munkateren', async () => {
@@ -1174,12 +1174,25 @@ describe('Frontend auth UI smoke tests', () => {
     expect(form).toBeTruthy();
 
     document.getElementById('tournamentTitle').value = 'Tavaszi Városi Kupa';
+    document.getElementById('tournamentSportType').value = 'football';
     document.getElementById('tournamentLocationName').value = 'Vasas pálya';
+    document.getElementById('tournamentCounty').value = 'Budapest';
     document.getElementById('tournamentTeamCount').value = '16';
     document.getElementById('tournamentFieldCount').value = '2';
     document.getElementById('tournamentMatchDuration').value = '18';
     document.getElementById('tournamentStartDate').value = '2026-05-24T09:00';
+    document.getElementById('tournamentEndDate').value = '2026-05-24T18:00';
+    document.getElementById('tournamentRegistrationDeadline').value = '2026-05-20T20:00';
+    document.getElementById('tournamentRosterMin').value = '8';
+    document.getElementById('tournamentRosterMax').value = '14';
+    document.getElementById('tournamentMinAge').value = '18';
+    document.getElementById('tournamentMaxAge').value = '45';
+    document.getElementById('tournamentGameFormat').value = '6+1';
+    document.getElementById('tournamentPitchType').value = 'mufu';
     document.getElementById('tournamentFormatHint').value = 'group_knockout';
+    document.getElementById('tournamentEntryFee').value = '35000';
+    document.getElementById('tournamentPaymentDeadline').value = '2026-05-18T20:00';
+    document.getElementById('tournamentRegistrationRules').value = 'Maximum 2 igazolt játékos nevezhető.';
     document.getElementById('tournamentNotes').value = 'Két pályán párhuzamos lebonyolítás.';
 
     form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
@@ -1190,10 +1203,91 @@ describe('Frontend auth UI smoke tests', () => {
     const saved = JSON.parse(savedRaw);
     expect(saved.title).toBe('Tavaszi Városi Kupa');
     expect(saved.locationName).toBe('Vasas pálya');
+    expect(saved.county).toBe('Budapest');
     expect(saved.teamCount).toBe(16);
     expect(saved.fieldCount).toBe(2);
     expect(saved.matchDurationMinutes).toBe(18);
+    expect(saved.registrationDeadline).toBe('2026-05-20T20:00');
+    expect(saved.rosterMax).toBe(14);
+    expect(saved.gameFormat).toBe('6+1');
+    expect(saved.entryFee).toBe(35000);
+    expect(saved.modules.finance).toBe(true);
     expect(document.getElementById('tournamentWorkspaceSummary').textContent).toContain('Tavaszi Városi Kupa');
+    expect(document.getElementById('tournamentRegistrationsPanel').hidden).toBe(false);
+    expect(document.getElementById('tournamentRegistrationsPanel').textContent).toContain('Csapatok és nevezések');
+  });
+
+  test('a tornaszervezo parameterekbol optimalizalt torna tervet general', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.setAuth('tournament-token', {
+      id: 'user-tournament-plan',
+      name: 'Tornaszervező',
+      email: 'tournament-plan@example.com',
+      can_create_team: true,
+      registration_path: 'tournament_organizer'
+    });
+
+    window.localStorage.setItem('foci_tournament_setup_user-tournament-plan', JSON.stringify({
+      title: 'Majális tesztkupa',
+      sportType: 'football',
+      teamCount: 16,
+      fieldCount: 4,
+      locationName: 'Vasas pálya',
+      county: 'Budapest',
+      matchDurationMinutes: 30,
+      startDate: '2026-06-06T09:00',
+      gameFormat: '5+1',
+      pitchType: 'mufu',
+      formatHint: 'group_knockout',
+      registrationDeadline: '2026-06-01T20:00',
+      rosterMin: 8,
+      rosterMax: 12,
+      entryFee: 40000,
+      planning: {
+        groupSize: 4,
+        qualifiersPerGroup: 2,
+        fieldStartNumber: 1,
+        refereeCount: 4,
+        matchBreakMinutes: 10,
+        groupToKnockoutBreakMinutes: 20,
+        semiFinalBreakMinutes: 10,
+        finalBreakMinutes: 30,
+        fieldCostMode: 'hourly',
+        fieldHourlyRate: 12000,
+        refereeCostMode: 'per_match',
+        refereeMatchRate: 5000,
+        broadcastCost: 30000,
+        trophiesCost: 20000,
+        medicalCost: 15000,
+        otherCosts: 10000,
+        buffetMode: 'external',
+        publicNotes: 'Érkezés az első meccs előtt 30 perccel.'
+      }
+    }));
+
+    window.eval(`
+      renderTournamentWorkspace();
+      setTournamentWorkspace('format');
+    `);
+
+    const panel = document.getElementById('tournamentFormatPanel');
+    expect(panel.textContent).toContain('Optimalizált torna terv');
+    expect(panel.textContent).toContain('A csoport mátrix');
+    expect(panel.textContent).toContain('Negyeddöntő');
+    expect(panel.textContent).toContain('Pálya- és időbeosztás');
+    expect(panel.textContent).toContain('Erőforrás és belső költség');
+    expect(panel.textContent).toContain('Publikus versenykiírás váz');
+
+    document.getElementById('plannerRefereeCount').value = '3';
+    document.getElementById('tournamentPlannerForm').dispatchEvent(
+      new window.Event('submit', { bubbles: true, cancelable: true })
+    );
+    await flushMicrotasks();
+
+    const saved = JSON.parse(window.localStorage.getItem('foci_tournament_setup_user-tournament-plan'));
+    expect(saved.planning.refereeCount).toBe(3);
+    expect(document.getElementById('tournamentFormatPanel').textContent).toContain('egyszerre csak 3 használható');
   });
 
   test('login utan az auth/me alapjan is admin starterre valt, ha a login valaszban hianyzik a flag', async () => {
@@ -1417,7 +1511,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(window.document.getElementById('tournamentView').classList.contains('active')).toBe(true);
     expect(window.document.querySelector('[data-view="tournamentView"]').style.display).not.toBe('none');
-    expect(window.document.querySelector('[data-view="adminView"]').style.display).toBe('none');
+    expect(window.document.querySelector('[data-view="adminView"]').style.display).not.toBe('none');
   });
 
   test.skip('a m?ltbeli published esem?ny a megval?sult csoportba ker?l admin oldalon', async () => {
@@ -1838,6 +1932,85 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(teamPanel.hidden).toBe(false);
     expect(financePanel.hidden).toBe(true);
+  });
+
+  test('a csapatkapitány eléri az elérhető tornák szűrőit és listáját', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.setAuth('demo-admin-token', {
+      id: 'admin-user',
+      name: 'Admin',
+      email: 'admin@example.com',
+      can_create_team: true
+    });
+    window.switchView('adminView');
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      state.teamMembers = [
+        { user_id: 'admin-user', name: 'Kapitány', email: 'admin@example.com', membership_status: 'active', role: 'team_admin' },
+        { user_id: 'player-1', name: 'Ricsi', email: 'ricsi@example.com', membership_status: 'active', role: 'member' }
+      ];
+      applyRoleAwareUi();
+    `);
+
+    const tournamentsButton = document.querySelector('[data-admin-workspace="availableTournaments"]');
+    expect(tournamentsButton).toBeTruthy();
+
+    tournamentsButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    const tournamentsPanel = document.querySelector('[data-admin-workspace-panel="availableTournaments"]');
+    expect(tournamentsPanel.hidden).toBe(false);
+    expect(tournamentsPanel.textContent).toContain('Tornaszervező neve');
+    expect(tournamentsPanel.textContent).toContain('MUTAT');
+
+    document.getElementById('tournamentMarketGameFormat').value = '5+1';
+    document.querySelector('[data-admin-tournament-market-action="show"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+
+    expect(tournamentsPanel.textContent).toContain('Duna Kupa 2026');
+    expect(tournamentsPanel.textContent).not.toContain('Nyári Baráti Liga');
+    expect(tournamentsPanel.textContent).toContain('JELENTKEZEM');
+
+    document.getElementById('tournamentMarketSearchName').value = 'Budapesti 5+1 kupák';
+    document.querySelector('[data-admin-tournament-market-action="save-search"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+
+    expect(tournamentsPanel.textContent).toContain('Mentett keresések');
+    expect(tournamentsPanel.textContent).toContain('Budapesti 5+1 kupák');
+
+    document.querySelector('[data-admin-tournament-market-action="reset"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+    expect(document.getElementById('tournamentMarketGameFormat').value).toBe('');
+
+    document.querySelector('[data-admin-tournament-market-action="load-search"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+    expect(document.getElementById('tournamentMarketGameFormat').value).toBe('5+1');
+    expect(tournamentsPanel.textContent).toContain('Duna Kupa 2026');
+
+    document.querySelector('[data-admin-tournament-market-action="apply"][data-tournament-id="sample-tournament-1"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+
+    const applicationForm = document.querySelector('[data-tournament-application-form][data-tournament-id="sample-tournament-1"]');
+    expect(applicationForm).toBeTruthy();
+    expect(applicationForm.querySelector('[data-tournament-application-field="teamName"]').value).toBe('Teszt FC');
+    expect(applicationForm.querySelector('[data-tournament-application-field="playerList"]').value).toContain('Kapitány');
+    expect(applicationForm.querySelector('[data-tournament-application-field="playerList"]').value).toContain('Ricsi');
+
+    applicationForm.querySelector('[data-tournament-application-field="acceptRules"]').checked = true;
+    applicationForm.querySelector('[data-tournament-application-field="acceptData"]').checked = true;
+    document.querySelector('[data-admin-tournament-market-action="submit-application"][data-tournament-id="sample-tournament-1"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+
+    expect(window.eval('state.adminTournamentApplicationDrafts["sample-tournament-1"].acceptRules')).toBe(true);
+    expect(window.eval('state.adminTournamentApplicationDrafts["sample-tournament-1"].teamName')).toBe('Teszt FC');
   });
 
   test('a csapat testreszabása munkatér egy helyen mutatja a modulokat és a szabályzatot', async () => {

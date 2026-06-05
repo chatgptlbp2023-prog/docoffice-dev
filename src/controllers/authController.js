@@ -428,6 +428,52 @@ async function attachInviteIfPresent({ inviteToken, user }) {
   });
 }
 
+async function joinInviteWithExistingLocalUser({ existingUser, password, phone, inviteToken }) {
+  if (!inviteToken) {
+    throw Object.assign(new Error('Ez az email cĂ­m mĂˇr foglalt.'), {
+      statusCode: 409
+    });
+  }
+
+  if (existingUser.status !== 'active') {
+    throw Object.assign(new Error('A meglĂ©vĹ‘ felhasznĂˇlĂł nem aktĂ­v.'), {
+      statusCode: 403
+    });
+  }
+
+  if (!existingUser.password_hash) {
+    throw Object.assign(new Error('Ehhez az emailhez mĂˇr van fiĂłk. Jelentkezz be, Ă©s a meghĂ­vĂłt a belĂ©pett fiĂłkkal fogadd el.'), {
+      statusCode: 409
+    });
+  }
+
+  const passwordMatches = await bcrypt.compare(password, existingUser.password_hash);
+  if (!passwordMatches) {
+    throw Object.assign(new Error('Ehhez az emailhez mĂˇr van fiĂłk. Add meg a meglĂ©vĹ‘ jelszavadat, vagy jelentkezz be Ă©s Ăşgy fogadd el a meghĂ­vĂłt.'), {
+      statusCode: 401
+    });
+  }
+
+  const updatedUserResult = await pool.query(
+    `
+    update users
+    set phone = coalesce(phone, $2),
+        updated_at = now()
+    where id = $1
+    returning id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type
+    `,
+    [existingUser.id, phone]
+  );
+
+  const user = updatedUserResult.rows[0];
+  const inviteResult = await attachInviteIfPresent({ inviteToken, user });
+
+  return {
+    user,
+    inviteResult
+  };
+}
+
 async function register(req, res) {
   try {
     const { name, email, password } = req.body;
@@ -443,7 +489,7 @@ async function register(req, res) {
 
     const existingUserResult = await pool.query(
       `
-      select id
+      select id, name, nickname, email, phone, birth_year, avatar_data_url, payment_provider, payment_username, payment_qr_data_url, status, platform_role, auth_provider, can_create_team, registration_path, organizer_activity_type, password_hash
       from users
       where lower(email) = $1
       `,
@@ -451,6 +497,25 @@ async function register(req, res) {
     );
 
     if (existingUserResult.rows.length > 0) {
+      if (inviteToken && registrationPath === REGISTRATION_PATHS.INVITED_PARTICIPANT) {
+        const { user, inviteResult } = await joinInviteWithExistingLocalUser({
+          existingUser: existingUserResult.rows[0],
+          password,
+          phone,
+          inviteToken
+        });
+        const token = createToken(user);
+
+        return res.status(200).json({
+          ok: true,
+          message: 'MeglevĹ‘ fiĂłkkal sikeresen csatlakoztĂˇl a meghĂ­vott csapathoz.',
+          token,
+          user: serializeUser(user),
+          joined_invite: inviteResult,
+          existing_user_joined: true
+        });
+      }
+
       return res.status(409).json({
         ok: false,
         message: 'Ez az email cím már foglalt.'

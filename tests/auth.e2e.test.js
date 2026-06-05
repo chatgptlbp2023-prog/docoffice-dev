@@ -314,6 +314,106 @@ describe('Auth E2E', () => {
     expect(meRes.body.user.can_create_team).toBe(false);
   });
 
+  test('invite-based registration with an existing email joins the existing account to the new team', async () => {
+    const ownerId = randomUUID();
+    const existingUserId = randomUUID();
+    const teamId = randomUUID();
+    const inviteId = randomUUID();
+    const inviteToken = `invite_existing_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const inviteCode = `EXIST${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 10)}`;
+    const ownerEmail = `owner_existing_${Date.now()}@example.com`;
+    const existingEmail = `multi_team_${Date.now()}@example.com`;
+    const ownerPasswordHash = await bcrypt.hash(password, 10);
+    const existingPasswordHash = await bcrypt.hash(password, 10);
+
+    createdUserIds.push(ownerId, existingUserId);
+    createdTeamIds.push(teamId);
+    createdInviteIds.push(inviteId);
+
+    await pool.query(
+      `
+      insert into users (
+        id, name, email, status, password_hash, registration_path, can_create_team, created_at, updated_at
+      )
+      values
+        ($1, 'Invite Owner Existing', $2, 'active', $3, 'team_sport_organizer', true, now(), now()),
+        ($4, 'Already Registered Player', $5, 'active', $6, 'invited_participant', false, now(), now())
+      `,
+      [ownerId, ownerEmail, ownerPasswordHash, existingUserId, existingEmail, existingPasswordHash]
+    );
+
+    await pool.query(
+      `
+      insert into teams (
+        id, name, created_by_user_id, status, created_at, updated_at
+      )
+      values ($1, 'Second Team Invite Target', $2, 'active', now(), now())
+      `,
+      [teamId, ownerId]
+    );
+
+    await pool.query(
+      `
+      insert into team_members (
+        id, team_id, user_id, role, membership_status, joined_at, created_at, updated_at
+      )
+      values ($1, $2, $3, 'team_admin', 'active', now(), now(), now())
+      `,
+      [randomUUID(), teamId, ownerId]
+    );
+
+    await pool.query(
+      `
+      insert into team_invites (
+        id, team_id, invited_email, role, token, invite_code, status, invited_by_user_id, expires_at, created_at, updated_at
+      )
+      values ($1, $2, $3, 'member', $4, $5, 'pending', $6, now() + interval '7 days', now(), now())
+      `,
+      [inviteId, teamId, existingEmail, inviteToken, inviteCode, ownerId]
+    );
+
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Existing Player Rejoin',
+        email: existingEmail,
+        password,
+        inviteToken,
+        registrationPath: 'invited_participant',
+        registerAsOrganizer: false
+      });
+
+    expect(registerRes.status).toBe(200);
+    expect(registerRes.body.ok).toBe(true);
+    expect(registerRes.body.existing_user_joined).toBe(true);
+    expect(registerRes.body.user.id).toBe(existingUserId);
+    expect(registerRes.body.joined_invite).toBeTruthy();
+
+    const membershipRes = await pool.query(
+      `
+      select role, membership_status
+      from team_members
+      where team_id = $1 and user_id = $2
+      `,
+      [teamId, existingUserId]
+    );
+
+    expect(membershipRes.rows).toHaveLength(1);
+    expect(membershipRes.rows[0].role).toBe('member');
+    expect(membershipRes.rows[0].membership_status).toBe('active');
+
+    const userCountRes = await pool.query(
+      `
+      select count(*)::int as count
+      from users
+      where lower(email) = lower($1)
+      `,
+      [existingEmail]
+    );
+
+    expect(userCountRes.rows[0].count).toBe(1);
+  });
+
   test('tournament organizer registration stores the dedicated registration path', async () => {
     const email = `tournament_${Date.now()}@example.com`;
 

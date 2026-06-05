@@ -60,6 +60,11 @@ const state = {
   adminEventsSection: 'upcoming',
   adminFinanceSection: 'settlement',
   adminEventFormSection: 'basics',
+  adminTournamentMarketSearched: false,
+  adminTournamentMarketFilters: null,
+  adminTournamentSavedSearches: [],
+  adminTournamentApplicationTournamentId: '',
+  adminTournamentApplicationDrafts: {},
   authMode: 'login',
   selectedRegistrationPath: '',
   sidebarCollapsed: localStorage.getItem('foci_sidebar_collapsed') === 'true',
@@ -152,13 +157,56 @@ function getTournamentSetupStorageKey(userId) {
 function getDefaultTournamentSetupDraft() {
   return {
     title: '',
+    sportType: 'football',
     teamCount: 16,
     fieldCount: 2,
     locationName: '',
+    county: '',
     matchDurationMinutes: 20,
     startDate: '',
+    endDate: '',
+    gameFormat: '5+1',
+    pitchType: 'mufu',
     formatHint: 'group_knockout',
+    registrationDeadline: '',
+    paymentDeadline: '',
+    rosterMin: 8,
+    rosterMax: 12,
+    minAge: 18,
+    maxAge: 99,
+    entryFee: 0,
+    registrationRules: '',
+    planning: {
+      groupSize: 4,
+      qualifiersPerGroup: 2,
+      fieldStartNumber: 1,
+      refereeCount: 4,
+      matchBreakMinutes: 10,
+      groupToKnockoutBreakMinutes: 20,
+      semiFinalBreakMinutes: 10,
+      finalBreakMinutes: 30,
+      fieldCostMode: 'hourly',
+      fieldHourlyRate: 0,
+      fieldDayRate: 0,
+      refereeCostMode: 'per_match',
+      refereeHourlyRate: 0,
+      refereeMatchRate: 0,
+      refereeDayRate: 0,
+      broadcastCost: 0,
+      trophiesCost: 0,
+      medicalCost: 0,
+      otherCosts: 0,
+      buffetMode: 'none',
+      publicNotes: ''
+    },
     notes: '',
+    modules: {
+      registrations: true,
+      format: true,
+      finance: true,
+      communication: true,
+      stats: true
+    },
     savedAt: ''
   };
 }
@@ -169,9 +217,14 @@ function loadTournamentSetupDraft(userId = state.user?.id) {
 
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+    const defaultDraft = getDefaultTournamentSetupDraft();
     return {
-      ...getDefaultTournamentSetupDraft(),
-      ...(parsed && typeof parsed === 'object' ? parsed : {})
+      ...defaultDraft,
+      ...(parsed && typeof parsed === 'object' ? parsed : {}),
+      planning: {
+        ...defaultDraft.planning,
+        ...((parsed && typeof parsed === 'object' && parsed.planning && typeof parsed.planning === 'object') ? parsed.planning : {})
+      }
     };
   } catch {
     return getDefaultTournamentSetupDraft();
@@ -181,16 +234,103 @@ function loadTournamentSetupDraft(userId = state.user?.id) {
 function saveTournamentSetupDraft(draft, userId = state.user?.id) {
   const key = getTournamentSetupStorageKey(userId);
   if (!key) return getDefaultTournamentSetupDraft();
+  const defaultDraft = getDefaultTournamentSetupDraft();
+  const planning = {
+    ...defaultDraft.planning,
+    ...(draft?.planning || {})
+  };
   const normalized = {
-    ...getDefaultTournamentSetupDraft(),
+    ...defaultDraft,
     ...(draft || {}),
     teamCount: clamp(Number(draft?.teamCount) || 0, 2, 128),
     fieldCount: clamp(Number(draft?.fieldCount) || 0, 1, 24),
     matchDurationMinutes: clamp(Number(draft?.matchDurationMinutes) || 0, 5, 180),
+    rosterMin: clamp(Number(draft?.rosterMin) || 0, 1, 99),
+    rosterMax: clamp(Number(draft?.rosterMax) || 0, 1, 150),
+    minAge: clamp(Number(draft?.minAge) || 0, 0, 120),
+    maxAge: clamp(Number(draft?.maxAge) || 0, 0, 120),
+    entryFee: Math.max(0, Number(draft?.entryFee) || 0),
+    modules: {
+      ...defaultDraft.modules,
+      ...(draft?.modules || {})
+    },
+    planning: {
+      ...planning,
+      groupSize: clamp(Number(planning.groupSize) || 4, 3, 8),
+      qualifiersPerGroup: clamp(Number(planning.qualifiersPerGroup) || 2, 1, 4),
+      fieldStartNumber: clamp(Number(planning.fieldStartNumber) || 1, 1, 99),
+      refereeCount: clamp(Number(planning.refereeCount) || 1, 1, 64),
+      matchBreakMinutes: clamp(Number(planning.matchBreakMinutes) || 0, 0, 120),
+      groupToKnockoutBreakMinutes: clamp(Number(planning.groupToKnockoutBreakMinutes) || 0, 0, 240),
+      semiFinalBreakMinutes: clamp(Number(planning.semiFinalBreakMinutes) || 0, 0, 240),
+      finalBreakMinutes: clamp(Number(planning.finalBreakMinutes) || 0, 0, 240),
+      fieldHourlyRate: Math.max(0, Number(planning.fieldHourlyRate) || 0),
+      fieldDayRate: Math.max(0, Number(planning.fieldDayRate) || 0),
+      refereeHourlyRate: Math.max(0, Number(planning.refereeHourlyRate) || 0),
+      refereeMatchRate: Math.max(0, Number(planning.refereeMatchRate) || 0),
+      refereeDayRate: Math.max(0, Number(planning.refereeDayRate) || 0),
+      broadcastCost: Math.max(0, Number(planning.broadcastCost) || 0),
+      trophiesCost: Math.max(0, Number(planning.trophiesCost) || 0),
+      medicalCost: Math.max(0, Number(planning.medicalCost) || 0),
+      otherCosts: Math.max(0, Number(planning.otherCosts) || 0)
+    },
     savedAt: new Date().toISOString()
   };
   localStorage.setItem(key, JSON.stringify(normalized));
   return normalized;
+}
+
+function getTournamentMarketSearchesStorageKey(userId = state.user?.id, teamId = state.currentTeamId || state.currentTeam?.id) {
+  const normalizedUserId = String(userId || '').trim();
+  const normalizedTeamId = String(teamId || 'global').trim() || 'global';
+  return normalizedUserId ? `foci_tournament_market_searches_${normalizedUserId}_${normalizedTeamId}` : '';
+}
+
+function normalizeTournamentMarketFilters(filters = {}) {
+  const normalized = {};
+  Object.entries(filters || {}).forEach(([key, value]) => {
+    if (value == null || value === '') return;
+    normalized[key] = value;
+  });
+  return normalized;
+}
+
+function loadTournamentMarketSavedSearches() {
+  const key = getTournamentMarketSearchesStorageKey();
+  if (!key) return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(item => item && typeof item === 'object' && item.id && item.name)
+      .map(item => ({
+        id: String(item.id),
+        name: String(item.name),
+        filters: normalizeTournamentMarketFilters(item.filters || {}),
+        savedAt: String(item.savedAt || '')
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function saveTournamentMarketSavedSearches(searches = []) {
+  const key = getTournamentMarketSearchesStorageKey();
+  if (!key) return [];
+  const normalized = (searches || []).map(item => ({
+    id: String(item.id),
+    name: String(item.name || '').trim(),
+    filters: normalizeTournamentMarketFilters(item.filters || {}),
+    savedAt: String(item.savedAt || '')
+  })).filter(item => item.id && item.name);
+  localStorage.setItem(key, JSON.stringify(normalized));
+  state.adminTournamentSavedSearches = normalized;
+  return normalized;
+}
+
+function syncTournamentMarketSavedSearches() {
+  state.adminTournamentSavedSearches = loadTournamentMarketSavedSearches();
+  return state.adminTournamentSavedSearches;
 }
 
 const els = {
@@ -927,6 +1067,47 @@ function ensureAdminStatisticsUi() {
   }
 
   els.adminStatisticsContent = document.getElementById('adminStatisticsContent');
+}
+
+function ensureAdminAvailableTournamentsUi() {
+  const adminSubnav = document.querySelector('.admin-subnav-card .admin-subnav');
+  if (adminSubnav && !adminSubnav.querySelector('[data-admin-workspace="availableTournaments"]')) {
+    const button = document.createElement('button');
+    button.className = 'subnav-btn';
+    button.type = 'button';
+    button.dataset.adminWorkspace = 'availableTournaments';
+    button.textContent = 'Elérhető TORNÁK';
+    const statisticsButton = adminSubnav.querySelector('[data-admin-workspace="statistics"]');
+    if (statisticsButton) {
+      statisticsButton.insertAdjacentElement('afterend', button);
+    } else {
+      adminSubnav.appendChild(button);
+    }
+  }
+
+  const adminView = document.getElementById('adminView');
+  if (adminView && !document.querySelector('[data-admin-workspace-panel="availableTournaments"]')) {
+    const statisticsPanel = document.querySelector('[data-admin-workspace-panel="statistics"]');
+    const section = document.createElement('section');
+    section.className = 'top-space hidden';
+    section.hidden = true;
+    section.dataset.adminWorkspacePanel = 'availableTournaments';
+    section.innerHTML = `
+      <div class="card">
+        <h2>Elérhető TORNÁK</h2>
+        <div class="small muted section-note">Tornapiactér-vázlat csapatkapitányoknak. Állítsd be, milyen tornák érdekesek a csapatnak, majd a MUTAT gombbal listázd a találatokat.</div>
+        <div id="adminAvailableTournamentsContent" class="stack top-space"></div>
+      </div>
+    `;
+
+    if (statisticsPanel?.parentElement) {
+      statisticsPanel.insertAdjacentElement('afterend', section);
+    } else {
+      adminView.appendChild(section);
+    }
+  }
+
+  els.adminAvailableTournamentsContent = document.getElementById('adminAvailableTournamentsContent');
 }
 
 function placeAuthHeader(targetPanel) {
@@ -7558,7 +7739,7 @@ function getSmartAdminEventsSection() {
 }
 
 function setAdminWorkspace(workspace = 'home') {
-  let nextWorkspace = ['home', 'team', 'customization', 'events', 'finance', 'statistics'].includes(workspace)
+  let nextWorkspace = ['home', 'team', 'customization', 'events', 'finance', 'statistics', 'availableTournaments'].includes(workspace)
     ? workspace
     : 'home';
 
@@ -7596,6 +7777,10 @@ function setAdminWorkspace(workspace = 'home') {
   if (nextWorkspace === 'finance') {
     setAdminFinanceSection(getAdminFinanceFocusEvent() ? 'settlement' : 'balances');
     void ensureAdminFinanceFocusEvent();
+  }
+
+  if (nextWorkspace === 'availableTournaments') {
+    renderAdminAvailableTournamentsPanel();
   }
 }
 
@@ -8283,6 +8468,579 @@ function renderAdminHome() {
   `;
 }
 
+const ADMIN_AVAILABLE_TOURNAMENTS = Object.freeze([
+  {
+    id: 'sample-tournament-1',
+    title: 'Duna Kupa 2026',
+    organizerName: 'Budapest Sportiroda',
+    startDate: '2026-06-20',
+    endDate: '2026-06-21',
+    county: 'Budapest',
+    locationName: 'Budapest, Újpalotai Sportcentrum',
+    gameFormat: '5+1',
+    entryFee: 45000,
+    maxTeams: 16,
+    registeredTeams: 11,
+    registrationDeadline: '2026-06-12',
+    strength: 7,
+    minAge: 18,
+    maxAge: 45,
+    pitchType: 'mufu',
+    teamSizeSummary: '8-12 játékos nevezhető, meccsenként 5+1 fő van pályán.',
+    formatSummary: 'Csoportkör után egyenes kieséses ág, legalább 3 garantált mérkőzéssel.',
+    rulesSummary: 'Csoportkör után egyenes kieséses ág. Minimum 8 fős keret, legfeljebb 12 nevező játékos.',
+    moneySummary: 'A nevezési díj tartalmazza a pályabérletet és a játékvezetést. Helyszíni díj nincs.',
+    applicationSchemaSummary: 'Csapatnév, kapcsolattartó, játékoslista, születési év, igazolt/nem igazolt státusz.',
+    applicationFields: ['Csapatnév', 'Kapcsolattartó neve és email címe', 'Játékoslista', 'Születési év', 'Igazolt/nem igazolt státusz']
+  },
+  {
+    id: 'sample-tournament-2',
+    title: 'Nyári Baráti Liga',
+    organizerName: 'Kispesti Amatőr Liga',
+    startDate: '2026-07-04',
+    endDate: '2026-07-04',
+    county: 'Pest',
+    locationName: 'Kispest, Városi Sporttelep',
+    gameFormat: '6+1',
+    entryFee: 30000,
+    maxTeams: 12,
+    registeredTeams: 8,
+    registrationDeadline: '2026-06-25',
+    strength: 5,
+    minAge: 16,
+    maxAge: 99,
+    pitchType: 'fuves',
+    teamSizeSummary: 'Minimum 9 fős, maximum 14 fős keret. A játékforma 6+1.',
+    formatSummary: 'Baráti liga jellegű torna, körmérkőzéses kezdéssel.',
+    rulesSummary: 'Baráti torna, korlátozott igazolt játékos szabállyal. Minden csapat legalább 3 meccset játszik.',
+    moneySummary: 'A nevezési díj előre utalva rendezendő, a helyszínen csak pótbefizetés lehet.',
+    applicationSchemaSummary: 'Csapatnév, mezszín, játékosok neve, születési dátum, MLSZ-igazolás jelzése.',
+    applicationFields: ['Csapatnév', 'Mezszín', 'Játékosok neve', 'Születési dátum', 'MLSZ-igazolás jelzése']
+  },
+  {
+    id: 'sample-tournament-3',
+    title: 'Balaton Open MiniFoci',
+    organizerName: 'Balaton Sport Egyesület',
+    startDate: '2026-08-15',
+    endDate: '2026-08-16',
+    county: 'Somogy',
+    locationName: 'Siófok, Beach Arena',
+    gameFormat: '7+1',
+    entryFee: 65000,
+    maxTeams: 24,
+    registeredTeams: 18,
+    registrationDeadline: '2026-08-01',
+    strength: 8,
+    minAge: 18,
+    maxAge: 35,
+    pitchType: 'mufu',
+    teamSizeSummary: '10-16 fős keret, a nevezésnél igazolt játékosok számát is jelölni kell.',
+    formatSummary: 'Erősebb mezőny, csoportkör + helyosztók + döntő.',
+    rulesSummary: 'Komolyabb erősségű torna, versenykiírás szerinti sárga/piros lapos fegyelmi rendszerrel.',
+    moneySummary: 'Nevezési díj + opcionális szálláscsomag. A végső díjat a szervező igazolja vissza.',
+    applicationSchemaSummary: 'Csapatadatok, teljes keret, igazolt játékosok száma, nyilatkozat a versenykiírás elfogadásáról.',
+    applicationFields: ['Csapatadatok', 'Teljes keret', 'Igazolt játékosok száma', 'Szállásigény', 'Versenykiírás elfogadása']
+  }
+]);
+
+function getTournamentFreeSlots(tournament) {
+  return Math.max(Number(tournament.maxTeams || 0) - Number(tournament.registeredTeams || 0), 0);
+}
+
+function getTournamentDateTimestamp(value) {
+  const date = new Date(`${String(value || '').slice(0, 10)}T00:00:00`);
+  const timestamp = date.getTime();
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function formatTournamentPitchType(value) {
+  const labels = {
+    mufu: 'műfüves',
+    fuves: 'füves',
+    terem: 'terem'
+  };
+  return labels[value] || value || 'nincs megadva';
+}
+
+function tournamentFilterValue(filters, key) {
+  return filters?.[key] == null ? '' : String(filters[key]);
+}
+
+function tournamentSelectedAttr(filters, key, value) {
+  return tournamentFilterValue(filters, key) === String(value) ? ' selected' : '';
+}
+
+function readAdminTournamentMarketFilters() {
+  const valueOf = id => String(document.getElementById(id)?.value || '').trim();
+  const numberValueOf = id => {
+    const rawValue = valueOf(id);
+    if (rawValue === '') return null;
+    const value = Number(rawValue);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  return {
+    organizerName: valueOf('tournamentMarketOrganizer'),
+    dateFrom: valueOf('tournamentMarketDateFrom'),
+    dateTo: valueOf('tournamentMarketDateTo'),
+    county: valueOf('tournamentMarketCounty'),
+    gameFormat: valueOf('tournamentMarketGameFormat'),
+    feeMin: numberValueOf('tournamentMarketFeeMin'),
+    feeMax: numberValueOf('tournamentMarketFeeMax'),
+    maxTeamsMin: numberValueOf('tournamentMarketMaxTeamsMin'),
+    freeSlotsMin: numberValueOf('tournamentMarketFreeSlotsMin'),
+    deadlineUntil: valueOf('tournamentMarketDeadlineUntil'),
+    strengthMin: numberValueOf('tournamentMarketStrengthMin'),
+    strengthMax: numberValueOf('tournamentMarketStrengthMax'),
+    ageMin: numberValueOf('tournamentMarketAgeMin'),
+    ageMax: numberValueOf('tournamentMarketAgeMax'),
+    pitchType: valueOf('tournamentMarketPitchType')
+  };
+}
+
+function filterAdminAvailableTournaments(tournaments = ADMIN_AVAILABLE_TOURNAMENTS, filters = readAdminTournamentMarketFilters()) {
+  const dateFromTs = filters.dateFrom ? getTournamentDateTimestamp(filters.dateFrom) : null;
+  const dateToTs = filters.dateTo ? getTournamentDateTimestamp(filters.dateTo) : null;
+  const deadlineUntilTs = filters.deadlineUntil ? getTournamentDateTimestamp(filters.deadlineUntil) : null;
+
+  return tournaments.filter(tournament => {
+    const startTs = getTournamentDateTimestamp(tournament.startDate);
+    const deadlineTs = getTournamentDateTimestamp(tournament.registrationDeadline);
+    const freeSlots = getTournamentFreeSlots(tournament);
+    const organizerMatches = !filters.organizerName
+      || String(tournament.organizerName || '').toLowerCase().includes(filters.organizerName.toLowerCase());
+
+    return (
+      organizerMatches
+      && (dateFromTs == null || (startTs != null && startTs >= dateFromTs))
+      && (dateToTs == null || (startTs != null && startTs <= dateToTs))
+      && (!filters.county || tournament.county === filters.county)
+      && (!filters.gameFormat || tournament.gameFormat === filters.gameFormat)
+      && (filters.feeMin == null || Number(tournament.entryFee || 0) >= filters.feeMin)
+      && (filters.feeMax == null || Number(tournament.entryFee || 0) <= filters.feeMax)
+      && (filters.maxTeamsMin == null || Number(tournament.maxTeams || 0) >= filters.maxTeamsMin)
+      && (filters.freeSlotsMin == null || freeSlots >= filters.freeSlotsMin)
+      && (deadlineUntilTs == null || (deadlineTs != null && deadlineTs <= deadlineUntilTs))
+      && (filters.strengthMin == null || Number(tournament.strength || 0) >= filters.strengthMin)
+      && (filters.strengthMax == null || Number(tournament.strength || 0) <= filters.strengthMax)
+      && (filters.ageMin == null || Number(tournament.maxAge || 0) >= filters.ageMin)
+      && (filters.ageMax == null || Number(tournament.minAge || 0) <= filters.ageMax)
+      && (!filters.pitchType || tournament.pitchType === filters.pitchType)
+    );
+  });
+}
+
+function summarizeTournamentMarketFilters(filters = {}) {
+  const parts = [];
+  if (filters.organizerName) parts.push(`szervező: ${filters.organizerName}`);
+  if (filters.dateFrom || filters.dateTo) parts.push(`dátum: ${filters.dateFrom || 'bármikor'} - ${filters.dateTo || 'bármikor'}`);
+  if (filters.county) parts.push(`megye: ${filters.county}`);
+  if (filters.gameFormat) parts.push(`forma: ${filters.gameFormat}`);
+  if (filters.pitchType) parts.push(`pálya: ${formatTournamentPitchType(filters.pitchType)}`);
+  if (filters.feeMin != null || filters.feeMax != null) parts.push(`díj: ${filters.feeMin ?? 0}-${filters.feeMax ?? 'nincs plafon'} Ft`);
+  if (filters.freeSlotsMin != null) parts.push(`szabad hely: min. ${filters.freeSlotsMin}`);
+  if (filters.strengthMin != null || filters.strengthMax != null) parts.push(`erősség: ${filters.strengthMin ?? 1}-${filters.strengthMax ?? 10}`);
+  return parts.length ? parts.join(' · ') : 'Nincs szűrő beállítva, minden torna megjelenik.';
+}
+
+function renderTournamentMarketSavedSearches() {
+  const searches = state.adminTournamentSavedSearches || [];
+  return `
+    <div class="event-card stack">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Mentett keresések</strong>
+          <div class="small muted top-space">A gyakran használt szűrőket elmentheted, később egy kattintással visszatöltheted.</div>
+        </div>
+        <span class="badge badge-muted">${escapeHtml(String(searches.length))} mentés</span>
+      </div>
+      <div class="grid two-col inner-grid">
+        <div>
+          <label class="label" for="tournamentMarketSearchName">Keresés neve</label>
+          <input id="tournamentMarketSearchName" type="text" placeholder="pl. Budapesti 5+1 kupák" />
+        </div>
+        <div class="row align-end gap wrap">
+          <button class="btn btn-secondary" type="button" data-admin-tournament-market-action="save-search">Keresés mentése</button>
+        </div>
+      </div>
+      ${
+        searches.length
+          ? `<div class="stack">
+              ${searches.map(search => `
+                <div class="event-card compact-team-card">
+                  <div class="row between align-center wrap gap">
+                    <div>
+                      <strong>${escapeHtml(search.name)}</strong>
+                      <div class="small muted top-space">${escapeHtml(summarizeTournamentMarketFilters(search.filters))}</div>
+                      ${search.savedAt ? `<div class="small muted top-space">Mentve: ${escapeHtml(formatDateTime(search.savedAt))}</div>` : ''}
+                    </div>
+                    <div class="row gap wrap">
+                      <button class="btn btn-ghost" type="button" data-admin-tournament-market-action="load-search" data-search-id="${escapeHtml(search.id)}">Betöltés</button>
+                      <button class="btn btn-danger" type="button" data-admin-tournament-market-action="delete-search" data-search-id="${escapeHtml(search.id)}">Törlés</button>
+                    </div>
+                  </div>
+                </div>
+              `).join('')}
+            </div>`
+          : emptyState('Még nincs mentett keresés.', 'Állíts be szűrőket, adj nevet a keresésnek, majd kattints a Keresés mentése gombra.')
+      }
+    </div>
+  `;
+}
+
+function getAdminTournamentById(tournamentId) {
+  return ADMIN_AVAILABLE_TOURNAMENTS.find(tournament => String(tournament.id) === String(tournamentId)) || null;
+}
+
+function getTournamentApplicationPlayers() {
+  return (state.teamMembers || [])
+    .filter(member => member.membership_status === 'active')
+    .slice()
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'hu-HU'));
+}
+
+function buildDefaultTournamentApplicationDraft(tournament) {
+  const players = getTournamentApplicationPlayers();
+  return {
+    teamName: state.currentTeam?.name || '',
+    contactName: state.user?.name || '',
+    contactEmail: state.user?.email || '',
+    playerList: players.length
+      ? players.map(member => `${member.name || 'Névtelen játékos'}${member.email ? ` - ${member.email}` : ''}`).join('\n')
+      : '',
+    notes: '',
+    acceptRules: false,
+    acceptData: false,
+    tournamentId: tournament?.id || '',
+    updatedAt: ''
+  };
+}
+
+function getTournamentApplicationDraft(tournament) {
+  const existing = state.adminTournamentApplicationDrafts?.[tournament.id];
+  return {
+    ...buildDefaultTournamentApplicationDraft(tournament),
+    ...(existing || {})
+  };
+}
+
+function readTournamentApplicationDraft(tournamentId) {
+  const form = [...document.querySelectorAll('[data-tournament-application-form]')]
+    .find(candidate => candidate.dataset.tournamentId === String(tournamentId));
+  if (!form) return null;
+  const readField = key => String(form.querySelector(`[data-tournament-application-field="${key}"]`)?.value || '').trim();
+  return {
+    teamName: readField('teamName'),
+    contactName: readField('contactName'),
+    contactEmail: readField('contactEmail'),
+    playerList: readField('playerList'),
+    notes: readField('notes'),
+    acceptRules: Boolean(form.querySelector('[data-tournament-application-field="acceptRules"]')?.checked),
+    acceptData: Boolean(form.querySelector('[data-tournament-application-field="acceptData"]')?.checked),
+    tournamentId: String(tournamentId),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function renderTournamentApplicationForm(tournament) {
+  const draft = getTournamentApplicationDraft(tournament);
+  return `
+    <div class="event-card stack" data-tournament-application-shell="${escapeHtml(tournament.id)}">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Nevezési űrlap váz</strong>
+          <div class="small muted top-space">Ez még nem küld adatot a tornaszervezőnek, csak megmutatja a tervezett jelentkezési folyamatot.</div>
+        </div>
+        <span class="badge badge-draft">vázlat</span>
+      </div>
+      <form class="stack" data-tournament-application-form data-tournament-id="${escapeHtml(tournament.id)}">
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label">Csapatnév</label>
+            <input type="text" data-tournament-application-field="teamName" value="${escapeHtml(draft.teamName)}" />
+          </div>
+          <div>
+            <label class="label">Kapcsolattartó</label>
+            <input type="text" data-tournament-application-field="contactName" value="${escapeHtml(draft.contactName)}" />
+          </div>
+          <div>
+            <label class="label">Kapcsolattartó email címe</label>
+            <input type="email" data-tournament-application-field="contactEmail" value="${escapeHtml(draft.contactEmail)}" />
+          </div>
+          <div>
+            <label class="label">Torna</label>
+            <input type="text" value="${escapeHtml(tournament.title)}" disabled />
+          </div>
+        </div>
+        <div>
+          <label class="label">Előtöltött játékoslista</label>
+          <textarea data-tournament-application-field="playerList" rows="5" placeholder="Név - email vagy születési adat">${escapeHtml(draft.playerList)}</textarea>
+          <div class="small muted top-space">A későbbi backend körben ide jönnek a tornaszervező által kért mezők: születési idő, igazolt státusz, MLSZ-adat, mezszám és egyéb nyilatkozatok.</div>
+        </div>
+        <div>
+          <label class="label">Megjegyzés a tornaszervezőnek</label>
+          <textarea data-tournament-application-field="notes" rows="3" placeholder="pl. kapusigény, mezszínek, külön kérés">${escapeHtml(draft.notes)}</textarea>
+        </div>
+        <label class="choice-row">
+          <input type="checkbox" data-tournament-application-field="acceptRules" ${draft.acceptRules ? 'checked' : ''} />
+          <span>Elolvastam és elfogadom a versenykiírást.</span>
+        </label>
+        <label class="choice-row">
+          <input type="checkbox" data-tournament-application-field="acceptData" ${draft.acceptData ? 'checked' : ''} />
+          <span>Hozzájárulok, hogy a nevezési adatokat a tornaszervező részére továbbítsa a rendszer.</span>
+        </label>
+        <div class="row gap wrap">
+          <button class="btn" type="button" data-admin-tournament-market-action="submit-application" data-tournament-id="${escapeHtml(tournament.id)}">Nevezési vázlat rögzítése</button>
+          <button class="btn btn-ghost" type="button" data-admin-tournament-market-action="cancel-application" data-tournament-id="${escapeHtml(tournament.id)}">Mégsem</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function renderTournamentMarketFilters(filters = state.adminTournamentMarketFilters || {}) {
+  return `
+    <form id="adminTournamentMarketFilterForm" class="event-card stack" autocomplete="off">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Szűrők</strong>
+          <div class="small muted top-space">Ha nem állítasz be semmit, a MUTAT minden elérhető tornát listáz.</div>
+        </div>
+        <span class="badge badge-muted">piactérvázlat</span>
+      </div>
+      <div class="grid three-col inner-grid">
+        <div>
+          <label class="label" for="tournamentMarketOrganizer">Tornaszervező neve</label>
+          <input id="tournamentMarketOrganizer" type="text" placeholder="pl. Budapest Sportiroda" value="${escapeHtml(tournamentFilterValue(filters, 'organizerName'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketDateFrom">Dátum tól</label>
+          <input id="tournamentMarketDateFrom" type="date" value="${escapeHtml(tournamentFilterValue(filters, 'dateFrom'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketDateTo">Dátum ig</label>
+          <input id="tournamentMarketDateTo" type="date" value="${escapeHtml(tournamentFilterValue(filters, 'dateTo'))}" />
+        </div>
+      </div>
+      <div class="grid three-col inner-grid">
+        <div>
+          <label class="label" for="tournamentMarketCounty">Helyszín / megye</label>
+          <select id="tournamentMarketCounty">
+            <option value="">Mindegy</option>
+            <option value="Budapest"${tournamentSelectedAttr(filters, 'county', 'Budapest')}>Budapest</option>
+            <option value="Pest"${tournamentSelectedAttr(filters, 'county', 'Pest')}>Pest</option>
+            <option value="Somogy"${tournamentSelectedAttr(filters, 'county', 'Somogy')}>Somogy</option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketGameFormat">Játékforma</label>
+          <select id="tournamentMarketGameFormat">
+            <option value="">Mindegy</option>
+            <option value="5+1"${tournamentSelectedAttr(filters, 'gameFormat', '5+1')}>5+1</option>
+            <option value="6+1"${tournamentSelectedAttr(filters, 'gameFormat', '6+1')}>6+1</option>
+            <option value="7+1"${tournamentSelectedAttr(filters, 'gameFormat', '7+1')}>7+1</option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketPitchType">Pályatípus</label>
+          <select id="tournamentMarketPitchType">
+            <option value="">Mindegy</option>
+            <option value="mufu"${tournamentSelectedAttr(filters, 'pitchType', 'mufu')}>Műfüves</option>
+            <option value="fuves"${tournamentSelectedAttr(filters, 'pitchType', 'fuves')}>Füves</option>
+            <option value="terem"${tournamentSelectedAttr(filters, 'pitchType', 'terem')}>Terem</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid three-col inner-grid">
+        <div>
+          <label class="label" for="tournamentMarketFeeMin">Nevezési díj tól</label>
+          <input id="tournamentMarketFeeMin" type="number" min="0" step="1000" placeholder="Ft" value="${escapeHtml(tournamentFilterValue(filters, 'feeMin'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketFeeMax">Nevezési díj ig</label>
+          <input id="tournamentMarketFeeMax" type="number" min="0" step="1000" placeholder="Ft" value="${escapeHtml(tournamentFilterValue(filters, 'feeMax'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketDeadlineUntil">Nevezési határidő legkésőbb</label>
+          <input id="tournamentMarketDeadlineUntil" type="date" value="${escapeHtml(tournamentFilterValue(filters, 'deadlineUntil'))}" />
+        </div>
+      </div>
+      <div class="grid three-col inner-grid">
+        <div>
+          <label class="label" for="tournamentMarketMaxTeamsMin">Maximális csapatlétszám min.</label>
+          <input id="tournamentMarketMaxTeamsMin" type="number" min="1" placeholder="pl. 16" value="${escapeHtml(tournamentFilterValue(filters, 'maxTeamsMin'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketFreeSlotsMin">Szabad hely min.</label>
+          <input id="tournamentMarketFreeSlotsMin" type="number" min="0" placeholder="pl. 2" value="${escapeHtml(tournamentFilterValue(filters, 'freeSlotsMin'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketStrengthMin">Torna erőssége tól</label>
+          <input id="tournamentMarketStrengthMin" type="number" min="1" max="10" placeholder="1-10" value="${escapeHtml(tournamentFilterValue(filters, 'strengthMin'))}" />
+        </div>
+      </div>
+      <div class="grid three-col inner-grid">
+        <div>
+          <label class="label" for="tournamentMarketStrengthMax">Torna erőssége ig</label>
+          <input id="tournamentMarketStrengthMax" type="number" min="1" max="10" placeholder="1-10" value="${escapeHtml(tournamentFilterValue(filters, 'strengthMax'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketAgeMin">Korcsoport tól</label>
+          <input id="tournamentMarketAgeMin" type="number" min="0" placeholder="pl. 18" value="${escapeHtml(tournamentFilterValue(filters, 'ageMin'))}" />
+        </div>
+        <div>
+          <label class="label" for="tournamentMarketAgeMax">Korcsoport ig</label>
+          <input id="tournamentMarketAgeMax" type="number" min="0" placeholder="pl. 35" value="${escapeHtml(tournamentFilterValue(filters, 'ageMax'))}" />
+        </div>
+      </div>
+      <div class="row gap wrap">
+        <button class="btn" type="button" data-admin-tournament-market-action="show">MUTAT</button>
+        <button class="btn btn-ghost" type="button" data-admin-tournament-market-action="reset">Szűrők törlése</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderTournamentMarketRows(tournaments = []) {
+  if (!tournaments.length) {
+    return emptyState('Nincs találat.', 'Lazíts a szűrőkön, vagy próbálj másik megyére, játékformára és díjtartományra keresni.');
+  }
+
+  return `
+    <div class="stack">
+      ${tournaments.map(tournament => {
+        const freeSlots = getTournamentFreeSlots(tournament);
+        const isApplying = state.adminTournamentApplicationTournamentId === tournament.id;
+        return `
+          <details class="admin-collapse tournament-market-row" data-admin-tournament-id="${escapeHtml(tournament.id)}" ${isApplying ? 'open' : ''}>
+            <summary>
+              <span>${escapeHtml(tournament.title)}</span>
+              <span class="badge ${freeSlots > 0 ? 'badge-success' : 'badge-danger'}">${escapeHtml(String(freeSlots))} szabad hely</span>
+            </summary>
+            <div class="admin-collapse-body stack">
+              <div class="grid three-col inner-grid">
+                <div class="detail-box">
+                  <div class="detail-label">Szervező</div>
+                  <div class="detail-value">${escapeHtml(tournament.organizerName)}</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Időpont</div>
+                  <div class="detail-value">${escapeHtml(tournament.startDate)} - ${escapeHtml(tournament.endDate)}</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Helyszín</div>
+                  <div class="detail-value">${escapeHtml(tournament.locationName)}</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Játékforma</div>
+                  <div class="detail-value">${escapeHtml(tournament.gameFormat)}</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Nevezési díj</div>
+                  <div class="detail-value">${escapeHtml(formatMoney(tournament.entryFee))}</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Csapatok</div>
+                  <div class="detail-value">${escapeHtml(String(tournament.registeredTeams))}/${escapeHtml(String(tournament.maxTeams))}</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Határidő</div>
+                  <div class="detail-value">${escapeHtml(tournament.registrationDeadline)}</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Erősség</div>
+                  <div class="detail-value">${escapeHtml(String(tournament.strength))}/10</div>
+                </div>
+                <div class="detail-box">
+                  <div class="detail-label">Korcsoport / pálya</div>
+                  <div class="detail-value">${escapeHtml(String(tournament.minAge))}-${escapeHtml(String(tournament.maxAge))} év - ${escapeHtml(formatTournamentPitchType(tournament.pitchType))}</div>
+                </div>
+              </div>
+              <div class="event-card compact-team-card">
+                <strong>Versenykiírás röviden</strong>
+                <div class="small muted top-space">${escapeHtml(tournament.rulesSummary)}</div>
+              </div>
+              <div class="grid three-col inner-grid">
+                <div class="event-card compact-team-card">
+                  <strong>Lebonyolítás</strong>
+                  <div class="small muted top-space">${escapeHtml(tournament.formatSummary || tournament.rulesSummary)}</div>
+                </div>
+                <div class="event-card compact-team-card">
+                  <strong>Csapatlétszám</strong>
+                  <div class="small muted top-space">${escapeHtml(tournament.teamSizeSummary || `${tournament.maxTeams} csapatig nyitott nevezés.`)}</div>
+                </div>
+                <div class="event-card compact-team-card">
+                  <strong>Pénzügyi információk</strong>
+                  <div class="small muted top-space">${escapeHtml(tournament.moneySummary)}</div>
+                </div>
+              </div>
+              <div class="grid two-col inner-grid">
+                <div class="event-card compact-team-card">
+                  <strong>Várható nevezési űrlap</strong>
+                  <div class="small muted top-space">${escapeHtml(tournament.applicationSchemaSummary)}</div>
+                </div>
+                <div class="event-card compact-team-card">
+                  <strong>Kért adatok</strong>
+                  <div class="row gap wrap top-space">
+                    ${(tournament.applicationFields || []).map(field => `<span class="badge badge-muted">${escapeHtml(field)}</span>`).join('')}
+                  </div>
+                </div>
+              </div>
+              <div class="row gap wrap">
+                <button class="btn" type="button" data-admin-tournament-market-action="apply" data-tournament-id="${escapeHtml(tournament.id)}">${isApplying ? 'Űrlap megnyitva' : 'JELENTKEZEM'}</button>
+                <span class="small muted">A tényleges beküldés később backend végpontot kap; most a flow-váz és az előtöltés látszik.</span>
+              </div>
+              ${isApplying ? renderTournamentApplicationForm(tournament) : ''}
+            </div>
+          </details>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderAdminAvailableTournamentsPanel() {
+  if (!els.adminAvailableTournamentsContent) return;
+
+  syncTournamentMarketSavedSearches();
+  const activeFilters = state.adminTournamentMarketFilters || {};
+  const results = state.adminTournamentMarketSearched
+    ? filterAdminAvailableTournaments(ADMIN_AVAILABLE_TOURNAMENTS, activeFilters)
+    : [];
+
+  els.adminAvailableTournamentsContent.innerHTML = `
+    <div class="stack">
+      <div class="event-card admin-home-primary-card">
+        <div class="row between align-center wrap gap">
+          <div>
+            <div class="small muted">Tornapiactér</div>
+            <div class="admin-home-primary-title top-space">Találd meg, hova érdemes nevezni a csapatoddal.</div>
+          </div>
+          <span class="badge badge-draft">frontend vázlat</span>
+        </div>
+        <div class="small muted top-space">
+          Ez az első lépés: szűrők és listázás. A következő körben jön a tornaszervezői kiírás adatmodellje és az egyedi nevezési űrlap beküldése.
+        </div>
+      </div>
+      ${renderTournamentMarketFilters(activeFilters)}
+      ${renderTournamentMarketSavedSearches()}
+      <div id="adminTournamentMarketResults" class="stack">
+        ${
+          state.adminTournamentMarketSearched
+            ? `
+              <div class="row between align-center wrap gap">
+                <strong>Találatok</strong>
+                <span class="badge badge-muted">${escapeHtml(String(results.length))} torna</span>
+              </div>
+              ${renderTournamentMarketRows(results)}
+            `
+            : emptyState('Még nincs listázva torna.', 'Állíts be szűrőket, vagy hagyd üresen a mezőket, majd kattints a MUTAT gombra.')
+        }
+      </div>
+    </div>
+  `;
+}
+
 function getMemberRegistrationStats(member) {
   return member?.registration_stats || {};
 }
@@ -8846,7 +9604,7 @@ function shouldShowTournamentWorkspace() {
 }
 
 function shouldShowTeamAdminView() {
-  return canAccessAdminView() && !isTournamentOrganizer();
+  return canAccessAdminView();
 }
 
 function getPostAuthDefaultView() {
@@ -8967,6 +9725,7 @@ function applyRoleAwareUi() {
   renderAdminHome();
   renderAdminFinancePanel();
   renderAdminStatisticsPanel();
+  renderAdminAvailableTournamentsPanel();
   if (shouldShowTeamAdminView()) {
     setAdminWorkspace(state.adminWorkspace);
   }
@@ -9088,7 +9847,962 @@ function getTournamentWorkspacePanels() {
   return [...document.querySelectorAll('[data-tournament-workspace-panel]')];
 }
 
-function renderTournamentWorkspace() {
+function getTournamentSportLabel(value) {
+  const labels = {
+    football: 'foci',
+    basketball: 'kosárlabda',
+    volleyball: 'röplabda',
+    handball: 'kézilabda',
+    other: 'egyéb sport'
+  };
+  return labels[value] || value || 'nincs megadva';
+}
+
+function getTournamentFormatLabel(value) {
+  if (value === 'round_robin') return 'körmérkőzés';
+  if (value === 'knockout') return 'egyenes kiesés';
+  return 'csoportkör + kieséses ág';
+}
+
+const TOURNAMENT_GROUP_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+function getTournamentPlanningConfig(draft = getDefaultTournamentSetupDraft()) {
+  const planning = {
+    ...getDefaultTournamentSetupDraft().planning,
+    ...(draft.planning || {})
+  };
+  const duration = clamp(Number(draft.matchDurationMinutes) || 30, 5, 180);
+  const teamCount = clamp(Number(draft.teamCount) || 16, 2, 128);
+  const fieldCount = clamp(Number(draft.fieldCount) || 1, 1, 24);
+  const refereeCount = clamp(Number(planning.refereeCount) || fieldCount, 1, 64);
+
+  return {
+    teamCount,
+    fieldCount,
+    refereeCount,
+    matchDurationMinutes: duration,
+    groupSize: clamp(Number(planning.groupSize) || 4, 3, 8),
+    qualifiersPerGroup: clamp(Number(planning.qualifiersPerGroup) || 2, 1, 4),
+    fieldStartNumber: clamp(Number(planning.fieldStartNumber) || 1, 1, 99),
+    matchBreakMinutes: clamp(Number(planning.matchBreakMinutes) || 0, 0, 120),
+    groupToKnockoutBreakMinutes: clamp(Number(planning.groupToKnockoutBreakMinutes) || 0, 0, 240),
+    semiFinalBreakMinutes: clamp(Number(planning.semiFinalBreakMinutes) || 0, 0, 240),
+    finalBreakMinutes: clamp(Number(planning.finalBreakMinutes) || 0, 0, 240),
+    fieldCostMode: planning.fieldCostMode || 'hourly',
+    fieldHourlyRate: Math.max(0, Number(planning.fieldHourlyRate) || 0),
+    fieldDayRate: Math.max(0, Number(planning.fieldDayRate) || 0),
+    refereeCostMode: planning.refereeCostMode || 'per_match',
+    refereeHourlyRate: Math.max(0, Number(planning.refereeHourlyRate) || 0),
+    refereeMatchRate: Math.max(0, Number(planning.refereeMatchRate) || 0),
+    refereeDayRate: Math.max(0, Number(planning.refereeDayRate) || 0),
+    broadcastCost: Math.max(0, Number(planning.broadcastCost) || 0),
+    trophiesCost: Math.max(0, Number(planning.trophiesCost) || 0),
+    medicalCost: Math.max(0, Number(planning.medicalCost) || 0),
+    otherCosts: Math.max(0, Number(planning.otherCosts) || 0),
+    buffetMode: planning.buffetMode || 'none',
+    publicNotes: String(planning.publicNotes || '').trim(),
+    startMinutes: getTournamentStartMinutes(draft.startDate)
+  };
+}
+
+function getTournamentStartMinutes(startDate) {
+  const raw = String(startDate || '').trim();
+  const match = raw.match(/T(\d{2}):(\d{2})/);
+  if (match) return Number(match[1]) * 60 + Number(match[2]);
+  return 9 * 60;
+}
+
+function formatTournamentClock(totalMinutes) {
+  const normalized = ((Math.round(totalMinutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function formatTournamentDuration(minutes) {
+  const safeMinutes = Math.max(0, Math.round(Number(minutes) || 0));
+  const hours = Math.floor(safeMinutes / 60);
+  const rest = safeMinutes % 60;
+  if (hours && rest) return `${hours} óra ${rest} perc`;
+  if (hours) return `${hours} óra`;
+  return `${rest} perc`;
+}
+
+function getTournamentStageLabel(size) {
+  if (size === 32) return 'Tizenhatoddöntő';
+  if (size === 16) return 'Nyolcaddöntő';
+  if (size === 8) return 'Negyeddöntő';
+  if (size === 4) return 'Elődöntő';
+  if (size === 2) return 'Döntő';
+  return `${size} csapatos kieséses kör`;
+}
+
+function getNextPowerOfTwo(value) {
+  let power = 1;
+  while (power < value) power *= 2;
+  return power;
+}
+
+function buildTournamentGroups(config) {
+  const groupCount = Math.ceil(config.teamCount / config.groupSize);
+  const baseSize = Math.floor(config.teamCount / groupCount);
+  const remainder = config.teamCount % groupCount;
+  let nextTeam = 1;
+
+  return Array.from({ length: groupCount }, (_, groupIndex) => {
+    const size = baseSize + (groupIndex < remainder ? 1 : 0);
+    const teams = Array.from({ length: size }, () => `${nextTeam++}. cs`);
+    return {
+      id: TOURNAMENT_GROUP_LABELS[groupIndex] || `G${groupIndex + 1}`,
+      teams
+    };
+  });
+}
+
+function buildRoundRobinRounds(teams) {
+  const items = [...teams];
+  if (items.length % 2 === 1) items.push(null);
+  const rounds = [];
+  const roundCount = items.length - 1;
+  const half = items.length / 2;
+  let rotating = [...items];
+
+  for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
+    const round = [];
+    for (let pairIndex = 0; pairIndex < half; pairIndex += 1) {
+      const home = rotating[pairIndex];
+      const away = rotating[rotating.length - 1 - pairIndex];
+      if (home && away) {
+        round.push(roundIndex % 2 === 0 ? { home, away } : { home: away, away: home });
+      }
+    }
+    rounds.push(round);
+    rotating = [rotating[0], rotating[rotating.length - 1], ...rotating.slice(1, -1)];
+  }
+
+  return rounds;
+}
+
+function scheduleTournamentMatchBatches(batches, config, startMinutes, stageLabel) {
+  const matches = [];
+  const capacity = Math.max(1, Math.min(config.fieldCount, config.refereeCount));
+  let cursor = startMinutes;
+  let matchCounter = 1;
+
+  batches.forEach(batch => {
+    for (let offset = 0; offset < batch.length; offset += capacity) {
+      const slice = batch.slice(offset, offset + capacity);
+      slice.forEach((match, index) => {
+        const field = config.fieldStartNumber + index;
+        const referee = index + 1;
+        matches.push({
+          ...match,
+          id: `${stageLabel}-${matchCounter++}`,
+          stage: stageLabel,
+          startMinutes: cursor,
+          endMinutes: cursor + config.matchDurationMinutes,
+          startLabel: formatTournamentClock(cursor),
+          endLabel: formatTournamentClock(cursor + config.matchDurationMinutes),
+          field,
+          referee
+        });
+      });
+      cursor += config.matchDurationMinutes + config.matchBreakMinutes;
+    }
+  });
+
+  const endMinutes = matches.length
+    ? Math.max(...matches.map(match => match.endMinutes))
+    : startMinutes;
+
+  return { matches, endMinutes };
+}
+
+function buildTournamentGroupStage(groups, config) {
+  const groupRounds = groups.map(group => ({
+    groupId: group.id,
+    rounds: buildRoundRobinRounds(group.teams)
+  }));
+  const maxRounds = Math.max(...groupRounds.map(group => group.rounds.length), 0);
+  const batches = [];
+
+  for (let roundIndex = 0; roundIndex < maxRounds; roundIndex += 1) {
+    const roundMatches = [];
+    groupRounds.forEach(group => {
+      (group.rounds[roundIndex] || []).forEach(match => {
+        roundMatches.push({
+          groupId: group.groupId,
+          home: match.home,
+          away: match.away,
+          seedLabel: `${group.groupId} csoport`
+        });
+      });
+    });
+    if (roundMatches.length) batches.push(roundMatches);
+  }
+
+  return scheduleTournamentMatchBatches(batches, config, config.startMinutes, 'Csoportkör');
+}
+
+function buildTournamentGroupMatrix(group) {
+  return {
+    groupId: group.id,
+    teams: group.teams,
+    rows: group.teams.map(team => ({
+      team,
+      cells: group.teams.map(opponent => (team === opponent ? '-' : ''))
+    }))
+  };
+}
+
+function buildTournamentQualifierSeeds(groups, config) {
+  const qualifiersPerGroup = Math.min(config.qualifiersPerGroup, Math.max(1, Math.min(...groups.map(group => group.teams.length))));
+  return groups.flatMap(group => Array.from({ length: qualifiersPerGroup }, (_, index) => ({
+    groupId: group.id,
+    rank: index + 1,
+    label: `${group.id}${index + 1}`
+  })));
+}
+
+function buildFirstKnockoutPairs(groups, config) {
+  const qualifiersPerGroup = Math.min(config.qualifiersPerGroup, Math.max(1, Math.min(...groups.map(group => group.teams.length))));
+
+  if (groups.length === 4 && qualifiersPerGroup === 2) {
+    const byLabel = label => ({ groupId: label[0], rank: Number(label.slice(1)), label });
+    return [
+      [byLabel('A1'), byLabel('C2')],
+      [byLabel('C1'), byLabel('A2')],
+      [byLabel('B1'), byLabel('D2')],
+      [byLabel('D1'), byLabel('B2')]
+    ];
+  }
+
+  const firsts = groups.map(group => ({ groupId: group.id, rank: 1, label: `${group.id}1` }));
+  const rest = [];
+  for (let rank = qualifiersPerGroup; rank >= 2; rank -= 1) {
+    groups.slice().reverse().forEach(group => rest.push({ groupId: group.id, rank, label: `${group.id}${rank}` }));
+  }
+  const seeds = [...firsts, ...rest];
+  const pairs = [];
+  for (let index = 0; index < seeds.length; index += 2) {
+    if (seeds[index] && seeds[index + 1]) pairs.push([seeds[index], seeds[index + 1]]);
+  }
+  return pairs;
+}
+
+function scheduleTournamentKnockout(groups, config, groupStageEndMinutes) {
+  const seeds = buildTournamentQualifierSeeds(groups, config);
+  const warnings = [];
+  if (getNextPowerOfTwo(seeds.length) !== seeds.length) {
+    warnings.push(`${seeds.length} továbbjutó nem ad tiszta kieséses ágat. Ilyenkor előselejtező vagy erőnyerő szabály kell.`);
+  }
+
+  let currentPairs = buildFirstKnockoutPairs(groups, config);
+  let roundSize = currentPairs.length * 2;
+  let cursor = groupStageEndMinutes + config.groupToKnockoutBreakMinutes;
+  const rounds = [];
+
+  while (currentPairs.length > 0) {
+    const label = getTournamentStageLabel(roundSize);
+    const batches = [];
+    for (let index = 0; index < currentPairs.length; index += Math.max(1, Math.min(config.fieldCount, config.refereeCount))) {
+      batches.push(currentPairs.slice(index, index + Math.max(1, Math.min(config.fieldCount, config.refereeCount))).map((pair, pairIndex) => ({
+        home: pair[0].label,
+        away: pair[1].label,
+        seedLabel: `${pair[0].label} - ${pair[1].label}`,
+        bracketIndex: index + pairIndex + 1
+      })));
+    }
+    const scheduled = scheduleTournamentMatchBatches(batches, config, cursor, label);
+    rounds.push({ label, matches: scheduled.matches });
+
+    if (currentPairs.length === 1) break;
+
+    const winners = scheduled.matches.map((match, index) => ({
+      groupId: '',
+      rank: index + 1,
+      label: `Győztes ${label} ${index + 1}`
+    }));
+    currentPairs = [];
+    for (let index = 0; index < winners.length; index += 2) {
+      if (winners[index] && winners[index + 1]) currentPairs.push([winners[index], winners[index + 1]]);
+    }
+    roundSize = currentPairs.length * 2;
+
+    const nextLabel = getTournamentStageLabel(roundSize);
+    const nextBreak = nextLabel === 'Döntő'
+      ? config.finalBreakMinutes
+      : nextLabel === 'Elődöntő'
+        ? config.semiFinalBreakMinutes
+        : config.matchBreakMinutes;
+    cursor = scheduled.endMinutes + nextBreak;
+  }
+
+  return {
+    seeds,
+    rounds,
+    warnings,
+    matches: rounds.flatMap(round => round.matches)
+  };
+}
+
+function summarizeTournamentResourceUsage(matches, key) {
+  const grouped = new Map();
+  matches.forEach(match => {
+    const id = match[key];
+    if (!grouped.has(id)) grouped.set(id, []);
+    grouped.get(id).push(match);
+  });
+
+  return [...grouped.entries()].sort((a, b) => Number(a[0]) - Number(b[0])).map(([id, items]) => {
+    const first = Math.min(...items.map(item => item.startMinutes));
+    const last = Math.max(...items.map(item => item.endMinutes));
+    return {
+      id,
+      matchCount: items.length,
+      activeMinutes: items.reduce((sum, item) => sum + (item.endMinutes - item.startMinutes), 0),
+      windowMinutes: last - first,
+      firstLabel: formatTournamentClock(first),
+      lastLabel: formatTournamentClock(last)
+    };
+  });
+}
+
+function calculateTournamentPlannerCosts(plan, draft, config) {
+  const fieldUsage = plan.fieldUsage;
+  const refereeUsage = plan.refereeUsage;
+  const totalMatches = plan.matches.length;
+  const revenue = Math.max(0, Number(draft.entryFee) || 0) * config.teamCount;
+  const fieldCost = config.fieldCostMode === 'day'
+    ? fieldUsage.length * config.fieldDayRate
+    : fieldUsage.reduce((sum, item) => sum + (item.windowMinutes / 60) * config.fieldHourlyRate, 0);
+  const refereeCost = config.refereeCostMode === 'day'
+    ? refereeUsage.length * config.refereeDayRate
+    : config.refereeCostMode === 'hourly'
+      ? refereeUsage.reduce((sum, item) => sum + (item.windowMinutes / 60) * config.refereeHourlyRate, 0)
+      : totalMatches * config.refereeMatchRate;
+  const fixedCost = config.broadcastCost + config.trophiesCost + config.medicalCost + config.otherCosts;
+  const totalCost = fieldCost + refereeCost + fixedCost;
+
+  return {
+    revenue,
+    fieldCost,
+    refereeCost,
+    fixedCost,
+    totalCost,
+    balance: revenue - totalCost
+  };
+}
+
+function buildTournamentPlannerAdvice(plan, config) {
+  const advice = [];
+  const capacity = Math.min(config.fieldCount, config.refereeCount);
+  if (config.refereeCount < config.fieldCount) {
+    advice.push(`A ${config.fieldCount} pályából egyszerre csak ${capacity} használható, mert ${config.refereeCount} játékvezető van.`);
+  }
+  const fieldRelease = plan.fieldUsage
+    .filter(item => item.lastLabel !== plan.endLabel)
+    .map(item => `${item.id}. pálya ${item.lastLabel}-kor`);
+  if (fieldRelease.length) {
+    advice.push(`Pályaelengedési lehetőség: ${fieldRelease.join(', ')} után már nem kell minden pálya.`);
+  }
+  const refereeRelease = plan.refereeUsage
+    .filter(item => item.lastLabel !== plan.endLabel)
+    .map(item => `${item.id}. játékvezető ${item.lastLabel}-kor`);
+  if (refereeRelease.length) {
+    advice.push(`Játékvezetői optimalizáció: ${refereeRelease.join(', ')} után csökkenthető a létszám.`);
+  }
+  if (plan.knockout.warnings.length) {
+    advice.push(...plan.knockout.warnings);
+  }
+  if (!advice.length) {
+    advice.push('A megadott pálya- és játékvezetői keret tiszta, párhuzamos lebonyolítást tesz lehetővé.');
+  }
+  return advice;
+}
+
+function buildTournamentPlannerPlan(draft = getDefaultTournamentSetupDraft()) {
+  const config = getTournamentPlanningConfig(draft);
+  const groups = buildTournamentGroups(config);
+  const groupStage = buildTournamentGroupStage(groups, config);
+  const knockout = draft.formatHint === 'round_robin'
+    ? { seeds: [], rounds: [], warnings: ['Körmérkőzéses formánál nincs automatikus kieséses ág.'], matches: [] }
+    : scheduleTournamentKnockout(groups, config, groupStage.endMinutes);
+  const matches = [...groupStage.matches, ...knockout.matches];
+  const fieldUsage = summarizeTournamentResourceUsage(matches, 'field');
+  const refereeUsage = summarizeTournamentResourceUsage(matches, 'referee');
+  const endMinutes = matches.length ? Math.max(...matches.map(match => match.endMinutes)) : config.startMinutes;
+  const plan = {
+    config,
+    groups,
+    matrices: groups.map(buildTournamentGroupMatrix),
+    groupStage,
+    knockout,
+    matches,
+    fieldUsage,
+    refereeUsage,
+    startLabel: formatTournamentClock(config.startMinutes),
+    endLabel: formatTournamentClock(endMinutes),
+    durationMinutes: endMinutes - config.startMinutes
+  };
+  plan.costs = calculateTournamentPlannerCosts(plan, draft, config);
+  plan.advice = buildTournamentPlannerAdvice(plan, config);
+  return plan;
+}
+
+function getTournamentSetupReadiness(draft = getDefaultTournamentSetupDraft()) {
+  const hasBasics = Boolean(
+    String(draft.title || '').trim()
+    && String(draft.locationName || '').trim()
+    && String(draft.startDate || '').trim()
+    && Number(draft.teamCount || 0) >= 2
+    && Number(draft.fieldCount || 0) >= 1
+  );
+  const hasRegistrationRules = Boolean(
+    String(draft.registrationDeadline || '').trim()
+    && Number(draft.rosterMin || 0) >= 1
+    && Number(draft.rosterMax || 0) >= Number(draft.rosterMin || 0)
+  );
+  const hasFormat = Boolean(
+    String(draft.formatHint || '').trim()
+    && String(draft.gameFormat || '').trim()
+    && String(draft.pitchType || '').trim()
+    && Number(draft.matchDurationMinutes || 0) >= 5
+  );
+  const financeConfigured = Number(draft.entryFee || 0) === 0 || String(draft.paymentDeadline || '').trim();
+  const hasFinance = Boolean(Number(draft.entryFee || 0) >= 0 && financeConfigured);
+
+  return {
+    hasBasics,
+    hasRegistrationRules,
+    hasFormat,
+    hasFinance,
+    completedCount: [hasBasics, hasRegistrationRules, hasFormat, hasFinance].filter(Boolean).length
+  };
+}
+
+function renderTournamentProgressSteps(readiness) {
+  const steps = [
+    {
+      done: readiness.hasBasics,
+      title: 'Torna alapadatai',
+      hint: 'Név, helyszín, kezdés, csapatszám és pályaszám.'
+    },
+    {
+      done: readiness.hasRegistrationRules,
+      title: 'Nevezési szabályok',
+      hint: 'Határidő, keretlétszám, korcsoport és kötelező adatok.'
+    },
+    {
+      done: readiness.hasFormat,
+      title: 'Lebonyolítási alapok',
+      hint: 'Játékforma, pályatípus, meccshossz és versenyforma.'
+    },
+    {
+      done: readiness.hasFinance,
+      title: 'Pénzügyi keret',
+      hint: 'Nevezési díj, fizetési határidő és torna pénzügy.'
+    }
+  ];
+
+  return `
+    <div class="stack top-space">
+      ${steps.map(step => `
+        <div class="admin-home-progress-row ${step.done ? 'is-done' : ''}">
+          <span class="admin-home-progress-mark">${step.done ? '✓' : '•'}</span>
+          <div>
+            <div class="admin-home-progress-label">${escapeHtml(step.title)}</div>
+            <div class="small muted">${escapeHtml(step.hint)}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderTournamentSetupForm(tournamentDraft, readiness) {
+  const moduleRows = [
+    ['moduleRegistrations', 'Nevezéskezelés', tournamentDraft.modules?.registrations],
+    ['moduleFormat', 'Lebonyolítás', tournamentDraft.modules?.format],
+    ['moduleFinance', 'Torna pénzügy', tournamentDraft.modules?.finance],
+    ['moduleCommunication', 'Kommunikáció', tournamentDraft.modules?.communication],
+    ['moduleStats', 'Statisztika', tournamentDraft.modules?.stats]
+  ];
+
+  return `
+    <div class="event-card admin-home-sidecard">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Torna létrehozása és beállítása</strong>
+          <div class="admin-guide-title top-space">${escapeHtml(tournamentDraft.title || 'Itt indul az első torna vázlata')}</div>
+        </div>
+        <span class="badge ${readiness.hasBasics ? 'badge-live' : 'badge-draft'}">${readiness.hasBasics ? 'mentve' : 'első kör'}</span>
+      </div>
+      <div class="small muted top-space">Ez a torna törzslapja. Innen indul majd a csapatkapitány-meghívás, a nevezés, a lebonyolítás, a pénzügy és a kommunikáció.</div>
+    </div>
+    <form id="tournamentSetupForm" class="stack top-space">
+      <div class="event-card stack">
+        <div class="row between align-center wrap gap">
+          <strong>1. Alapadatok</strong>
+          <span class="badge ${readiness.hasBasics ? 'badge-live' : 'badge-draft'}">${readiness.hasBasics ? 'kész' : 'kötelező'}</span>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="tournamentTitle">Torna neve</label>
+            <input id="tournamentTitle" name="title" type="text" placeholder="Tavaszi Városi Kupa" value="${escapeAttribute(tournamentDraft.title || '')}" required />
+          </div>
+          <div>
+            <label class="label" for="tournamentSportType">Sportág</label>
+            <select id="tournamentSportType" name="sportType">
+              <option value="football"${tournamentDraft.sportType === 'football' ? ' selected' : ''}>Foci</option>
+              <option value="basketball"${tournamentDraft.sportType === 'basketball' ? ' selected' : ''}>Kosárlabda</option>
+              <option value="volleyball"${tournamentDraft.sportType === 'volleyball' ? ' selected' : ''}>Röplabda</option>
+              <option value="handball"${tournamentDraft.sportType === 'handball' ? ' selected' : ''}>Kézilabda</option>
+              <option value="other"${tournamentDraft.sportType === 'other' ? ' selected' : ''}>Egyéb sport</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="tournamentLocationName">Helyszín</label>
+            <input id="tournamentLocationName" name="locationName" type="text" placeholder="Budapest, Vasas pálya" value="${escapeAttribute(tournamentDraft.locationName || '')}" required />
+          </div>
+          <div>
+            <label class="label" for="tournamentCounty">Megye / régió</label>
+            <input id="tournamentCounty" name="county" type="text" placeholder="pl. Budapest vagy Pest" value="${escapeAttribute(tournamentDraft.county || '')}" />
+          </div>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="tournamentStartDate">Kezdő időpont</label>
+            <input id="tournamentStartDate" name="startDate" type="datetime-local" value="${escapeAttribute(tournamentDraft.startDate || '')}" />
+          </div>
+          <div>
+            <label class="label" for="tournamentEndDate">Záró időpont</label>
+            <input id="tournamentEndDate" name="endDate" type="datetime-local" value="${escapeAttribute(tournamentDraft.endDate || '')}" />
+          </div>
+        </div>
+      </div>
+
+      <div class="event-card stack">
+        <div class="row between align-center wrap gap">
+          <strong>2. Nevezési szabályok</strong>
+          <span class="badge ${readiness.hasRegistrationRules ? 'badge-live' : 'badge-draft'}">${readiness.hasRegistrationRules ? 'kész' : 'szükséges'}</span>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="tournamentTeamCount">Hány csapatos?</label>
+            <input id="tournamentTeamCount" name="teamCount" type="number" min="2" max="128" value="${escapeAttribute(String(tournamentDraft.teamCount || 16))}" required />
+          </div>
+          <div>
+            <label class="label" for="tournamentRosterMin">Min. keretlétszám</label>
+            <input id="tournamentRosterMin" name="rosterMin" type="number" min="1" max="99" value="${escapeAttribute(String(tournamentDraft.rosterMin || 8))}" />
+          </div>
+          <div>
+            <label class="label" for="tournamentRosterMax">Max. keretlétszám</label>
+            <input id="tournamentRosterMax" name="rosterMax" type="number" min="1" max="150" value="${escapeAttribute(String(tournamentDraft.rosterMax || 12))}" />
+          </div>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="tournamentRegistrationDeadline">Nevezési határidő</label>
+            <input id="tournamentRegistrationDeadline" name="registrationDeadline" type="datetime-local" value="${escapeAttribute(tournamentDraft.registrationDeadline || '')}" />
+          </div>
+          <div>
+            <label class="label" for="tournamentMinAge">Korcsoport tól</label>
+            <input id="tournamentMinAge" name="minAge" type="number" min="0" max="120" value="${escapeAttribute(String(tournamentDraft.minAge || 18))}" />
+          </div>
+          <div>
+            <label class="label" for="tournamentMaxAge">Korcsoport ig</label>
+            <input id="tournamentMaxAge" name="maxAge" type="number" min="0" max="120" value="${escapeAttribute(String(tournamentDraft.maxAge || 99))}" />
+          </div>
+        </div>
+        <div>
+          <label class="label" for="tournamentRegistrationRules">Nevezési megjegyzés / szabály</label>
+          <textarea id="tournamentRegistrationRules" name="registrationRules" rows="3" placeholder="Például: maximum 2 igazolt játékos, keretleadás nevezési határidőig, szabályzat elfogadása kötelező.">${escapeHtml(tournamentDraft.registrationRules || '')}</textarea>
+        </div>
+      </div>
+
+      <div class="event-card stack">
+        <div class="row between align-center wrap gap">
+          <strong>3. Lebonyolítási alapok</strong>
+          <span class="badge ${readiness.hasFormat ? 'badge-live' : 'badge-draft'}">${readiness.hasFormat ? 'kész' : 'szükséges'}</span>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="tournamentGameFormat">Játékforma</label>
+            <select id="tournamentGameFormat" name="gameFormat">
+              <option value="5+1"${tournamentDraft.gameFormat === '5+1' ? ' selected' : ''}>5+1</option>
+              <option value="6+1"${tournamentDraft.gameFormat === '6+1' ? ' selected' : ''}>6+1</option>
+              <option value="7+1"${tournamentDraft.gameFormat === '7+1' ? ' selected' : ''}>7+1</option>
+              <option value="11v11"${tournamentDraft.gameFormat === '11v11' ? ' selected' : ''}>11v11</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="tournamentPitchType">Pályatípus</label>
+            <select id="tournamentPitchType" name="pitchType">
+              <option value="mufu"${tournamentDraft.pitchType === 'mufu' ? ' selected' : ''}>Műfüves</option>
+              <option value="fuves"${tournamentDraft.pitchType === 'fuves' ? ' selected' : ''}>Füves</option>
+              <option value="terem"${tournamentDraft.pitchType === 'terem' ? ' selected' : ''}>Terem</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="tournamentFieldCount">Egyszerre hány pálya van?</label>
+            <input id="tournamentFieldCount" name="fieldCount" type="number" min="1" max="24" value="${escapeAttribute(String(tournamentDraft.fieldCount || 2))}" required />
+          </div>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="tournamentMatchDuration">Egy mérkőzés hány perces?</label>
+            <input id="tournamentMatchDuration" name="matchDurationMinutes" type="number" min="5" max="180" value="${escapeAttribute(String(tournamentDraft.matchDurationMinutes || 20))}" required />
+          </div>
+          <div>
+            <label class="label" for="tournamentFormatHint">Lebonyolítási forma</label>
+            <select id="tournamentFormatHint" name="formatHint">
+              <option value="group_knockout"${tournamentDraft.formatHint === 'group_knockout' ? ' selected' : ''}>Csoportkör + kieséses ág</option>
+              <option value="round_robin"${tournamentDraft.formatHint === 'round_robin' ? ' selected' : ''}>Körmérkőzés</option>
+              <option value="knockout"${tournamentDraft.formatHint === 'knockout' ? ' selected' : ''}>Egyenes kiesés</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="event-card stack">
+        <div class="row between align-center wrap gap">
+          <strong>4. Pénzügy és modulok</strong>
+          <span class="badge ${readiness.hasFinance ? 'badge-live' : 'badge-draft'}">${readiness.hasFinance ? 'kész' : 'opcionális'}</span>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="tournamentEntryFee">Nevezési díj / csapat</label>
+            <input id="tournamentEntryFee" name="entryFee" type="number" min="0" step="1000" value="${escapeAttribute(String(tournamentDraft.entryFee || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="tournamentPaymentDeadline">Fizetési határidő</label>
+            <input id="tournamentPaymentDeadline" name="paymentDeadline" type="datetime-local" value="${escapeAttribute(tournamentDraft.paymentDeadline || '')}" />
+          </div>
+        </div>
+        <div class="grid three-col inner-grid">
+          ${moduleRows.map(([name, label, checked]) => `
+            <label class="choice-row">
+              <input type="checkbox" name="${escapeHtml(name)}" ${checked ? 'checked' : ''} />
+              <span>${escapeHtml(label)}</span>
+            </label>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="event-card stack">
+        <strong>Szervezői megjegyzés</strong>
+        <div>
+          <label class="label" for="tournamentNotes">Belső szervezői jegyzet</label>
+          <textarea id="tournamentNotes" name="notes" rows="3" placeholder="Például: vasárnap délelőtt, 2 pályán párhuzamosan, büfé külön, döntő 17:00-kor.">${escapeHtml(tournamentDraft.notes || '')}</textarea>
+        </div>
+      </div>
+
+      <div class="row gap wrap">
+        <button class="btn" type="submit">Torna létrehozása / mentése</button>
+        <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="registrations">Tovább a nevezésekhez</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderTournamentPlannerForm(tournamentDraft, plan) {
+  const planning = {
+    ...getDefaultTournamentSetupDraft().planning,
+    ...(tournamentDraft.planning || {})
+  };
+
+  return `
+    <form id="tournamentPlannerForm" class="stack">
+      <div class="event-card stack">
+        <div class="row between align-center wrap gap">
+          <div>
+            <strong>Torna tervező motor</strong>
+            <div class="small muted top-space">A publikus kiírást és a belső szervezői optimalizációt külön kezeli. A költségeket csak a szervező látja.</div>
+          </div>
+          <span class="badge badge-live">generált terv</span>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="plannerGroupSize">Csoportméret</label>
+            <input id="plannerGroupSize" name="groupSize" type="number" min="3" max="8" value="${escapeAttribute(String(planning.groupSize || 4))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerQualifiers">Továbbjutó / csoport</label>
+            <input id="plannerQualifiers" name="qualifiersPerGroup" type="number" min="1" max="4" value="${escapeAttribute(String(planning.qualifiersPerGroup || 2))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerFieldStartNumber">Kezdő pályaszám</label>
+            <input id="plannerFieldStartNumber" name="fieldStartNumber" type="number" min="1" max="99" value="${escapeAttribute(String(planning.fieldStartNumber || 1))}" />
+          </div>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="plannerRefereeCount">Játékvezetők száma</label>
+            <input id="plannerRefereeCount" name="refereeCount" type="number" min="1" max="64" value="${escapeAttribute(String(planning.refereeCount || tournamentDraft.fieldCount || 1))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerMatchBreak">Meccsek közti fordulóidő</label>
+            <input id="plannerMatchBreak" name="matchBreakMinutes" type="number" min="0" max="120" value="${escapeAttribute(String(planning.matchBreakMinutes || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerGroupBreak">Csoportkör utáni szünet</label>
+            <input id="plannerGroupBreak" name="groupToKnockoutBreakMinutes" type="number" min="0" max="240" value="${escapeAttribute(String(planning.groupToKnockoutBreakMinutes || 0))}" />
+          </div>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div>
+            <label class="label" for="plannerSemiBreak">Elődöntő előtti szünet</label>
+            <input id="plannerSemiBreak" name="semiFinalBreakMinutes" type="number" min="0" max="240" value="${escapeAttribute(String(planning.semiFinalBreakMinutes || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerFinalBreak">Döntő előtti szünet</label>
+            <input id="plannerFinalBreak" name="finalBreakMinutes" type="number" min="0" max="240" value="${escapeAttribute(String(planning.finalBreakMinutes || 0))}" />
+          </div>
+        </div>
+      </div>
+
+      <div class="event-card stack">
+        <div class="row between align-center wrap gap">
+          <strong>Belső költségmodell</strong>
+          <span class="badge badge-muted">nem publikus</span>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="plannerFieldCostMode">Pálya elszámolás</label>
+            <select id="plannerFieldCostMode" name="fieldCostMode">
+              <option value="hourly"${planning.fieldCostMode === 'hourly' ? ' selected' : ''}>óradíj</option>
+              <option value="day"${planning.fieldCostMode === 'day' ? ' selected' : ''}>napidíj / pálya</option>
+              <option value="none"${planning.fieldCostMode === 'none' ? ' selected' : ''}>nincs rögzítve</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="plannerFieldHourlyRate">Pálya óradíj</label>
+            <input id="plannerFieldHourlyRate" name="fieldHourlyRate" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.fieldHourlyRate || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerFieldDayRate">Pálya napidíj</label>
+            <input id="plannerFieldDayRate" name="fieldDayRate" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.fieldDayRate || 0))}" />
+          </div>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="plannerRefereeCostMode">Játékvezető elszámolás</label>
+            <select id="plannerRefereeCostMode" name="refereeCostMode">
+              <option value="per_match"${planning.refereeCostMode === 'per_match' ? ' selected' : ''}>meccsenként</option>
+              <option value="hourly"${planning.refereeCostMode === 'hourly' ? ' selected' : ''}>óradíj</option>
+              <option value="day"${planning.refereeCostMode === 'day' ? ' selected' : ''}>napidíj / fő</option>
+              <option value="none"${planning.refereeCostMode === 'none' ? ' selected' : ''}>nincs rögzítve</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="plannerRefereeMatchRate">Bírói díj / meccs</label>
+            <input id="plannerRefereeMatchRate" name="refereeMatchRate" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.refereeMatchRate || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerRefereeHourlyRate">Bírói óradíj</label>
+            <input id="plannerRefereeHourlyRate" name="refereeHourlyRate" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.refereeHourlyRate || 0))}" />
+          </div>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="plannerRefereeDayRate">Bírói napidíj</label>
+            <input id="plannerRefereeDayRate" name="refereeDayRate" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.refereeDayRate || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerBroadcastCost">Videó / közvetítés</label>
+            <input id="plannerBroadcastCost" name="broadcastCost" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.broadcastCost || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerTrophiesCost">Díjak, kupák, érmek</label>
+            <input id="plannerTrophiesCost" name="trophiesCost" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.trophiesCost || 0))}" />
+          </div>
+        </div>
+        <div class="grid three-col inner-grid">
+          <div>
+            <label class="label" for="plannerMedicalCost">Egészségügyi biztosítás</label>
+            <input id="plannerMedicalCost" name="medicalCost" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.medicalCost || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerOtherCosts">Egyéb szervezői költség</label>
+            <input id="plannerOtherCosts" name="otherCosts" type="number" min="0" step="1000" value="${escapeAttribute(String(planning.otherCosts || 0))}" />
+          </div>
+          <div>
+            <label class="label" for="plannerBuffetMode">Büfé</label>
+            <select id="plannerBuffetMode" name="buffetMode">
+              <option value="none"${planning.buffetMode === 'none' ? ' selected' : ''}>nincs</option>
+              <option value="own"${planning.buffetMode === 'own' ? ' selected' : ''}>saját büfé</option>
+              <option value="external"${planning.buffetMode === 'external' ? ' selected' : ''}>külsős büfé</option>
+              <option value="partner"${planning.buffetMode === 'partner' ? ' selected' : ''}>partner / jutalékos</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="event-card stack">
+        <strong>Publikus kiírás kiegészítés</strong>
+        <textarea id="plannerPublicNotes" name="publicNotes" rows="3" placeholder="Érkezés, öltöző, parkolás, cipőszabály, büfé, regisztrációs instrukciók.">${escapeHtml(planning.publicNotes || '')}</textarea>
+      </div>
+
+      <div class="row gap wrap">
+        <button class="btn" type="submit">Terv generálása / mentése</button>
+        <span class="small muted">Aktuális terv: ${escapeHtml(String(plan.matches.length))} meccs, ${escapeHtml(plan.startLabel)}-${escapeHtml(plan.endLabel)}</span>
+      </div>
+    </form>
+  `;
+}
+
+function renderTournamentGroupMatrices(plan) {
+  return plan.matrices.map(matrix => `
+    <div class="event-card compact-team-card">
+      <strong>${escapeHtml(matrix.groupId)} csoport mátrix</strong>
+      <div class="table-like top-space">
+        <div class="statistics-table-row statistics-table-head" style="grid-template-columns: repeat(${matrix.teams.length + 1}, minmax(76px, 1fr));">
+          <span>${escapeHtml(matrix.groupId)}</span>
+          ${matrix.teams.map(team => `<span>${escapeHtml(team)}</span>`).join('')}
+        </div>
+        ${matrix.rows.map(row => `
+          <div class="statistics-table-row" style="grid-template-columns: repeat(${matrix.teams.length + 1}, minmax(76px, 1fr));">
+            <strong>${escapeHtml(row.team)}</strong>
+            ${row.cells.map(cell => `<span>${escapeHtml(cell)}</span>`).join('')}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderTournamentSchedule(plan) {
+  return `
+    <div class="event-card stack">
+      <div class="row between align-center wrap gap">
+        <strong>Pálya- és időbeosztás</strong>
+        <span class="badge badge-muted">${escapeHtml(String(plan.matches.length))} meccs</span>
+      </div>
+      <div class="stack top-space">
+        ${plan.matches.map(match => `
+          <div class="event-card compact-team-card">
+            <div class="row between align-center wrap gap">
+              <strong>${escapeHtml(match.startLabel)} · ${escapeHtml(String(match.field))}. pálya</strong>
+              <span class="badge badge-muted">${escapeHtml(match.stage)}</span>
+            </div>
+            <div class="detail-value top-space">${escapeHtml(match.home)} - ${escapeHtml(match.away)}</div>
+            <div class="small muted">Játékvezető: ${escapeHtml(String(match.referee))}. · ${escapeHtml(match.seedLabel || '')}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderTournamentResourceSummary(plan) {
+  const usageRows = (items, label) => items.map(item => `
+    <div class="detail-box">
+      <div class="detail-label">${escapeHtml(String(item.id))}. ${escapeHtml(label)}</div>
+      <div class="detail-value">${escapeHtml(String(item.matchCount))} meccs</div>
+      <div class="small muted">${escapeHtml(item.firstLabel)}-${escapeHtml(item.lastLabel)} · játékidő ${escapeHtml(formatTournamentDuration(item.activeMinutes))} · lekötés ${escapeHtml(formatTournamentDuration(item.windowMinutes))}</div>
+    </div>
+  `).join('');
+
+  return `
+    <div class="event-card stack">
+      <div class="row between align-center wrap gap">
+        <strong>Erőforrás és belső költség</strong>
+        <span class="badge badge-draft">csak szervező látja</span>
+      </div>
+      <div class="grid two-col inner-grid">
+        <div class="detail-box"><div class="detail-label">Várható nevezési bevétel</div><div class="detail-value">${escapeHtml(formatMoney(plan.costs.revenue))}</div></div>
+        <div class="detail-box"><div class="detail-label">Becsült összköltség</div><div class="detail-value">${escapeHtml(formatMoney(plan.costs.totalCost))}</div></div>
+        <div class="detail-box"><div class="detail-label">Pályaköltség</div><div class="detail-value">${escapeHtml(formatMoney(plan.costs.fieldCost))}</div></div>
+        <div class="detail-box"><div class="detail-label">Játékvezetői költség</div><div class="detail-value">${escapeHtml(formatMoney(plan.costs.refereeCost))}</div></div>
+        <div class="detail-box"><div class="detail-label">Fix / egyéb költség</div><div class="detail-value">${escapeHtml(formatMoney(plan.costs.fixedCost))}</div></div>
+        <div class="detail-box"><div class="detail-label">Becsült eredmény</div><div class="detail-value">${escapeHtml(formatMoney(plan.costs.balance))}</div></div>
+      </div>
+      <div class="grid two-col inner-grid">
+        ${usageRows(plan.fieldUsage, 'pálya')}
+      </div>
+      <div class="grid two-col inner-grid">
+        ${usageRows(plan.refereeUsage, 'játékvezető')}
+      </div>
+      <div class="event-card compact-team-card">
+        <strong>Optimalizációs javaslatok</strong>
+        <div class="stack top-space">
+          ${plan.advice.map(item => `<div class="small muted">- ${escapeHtml(item)}</div>`).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderTournamentPublicBrief(tournamentDraft, plan) {
+  const firstKnockout = plan.knockout.rounds[0];
+  return `
+    <div class="event-card stack">
+      <div class="row between align-center wrap gap">
+        <strong>Publikus versenykiírás váz</strong>
+        <span class="badge badge-live">csapatoknak</span>
+      </div>
+      <div class="grid two-col inner-grid">
+        <div class="detail-box"><div class="detail-label">Torna</div><div class="detail-value">${escapeHtml(tournamentDraft.title || 'Névtelen torna')}</div></div>
+        <div class="detail-box"><div class="detail-label">Helyszín</div><div class="detail-value">${escapeHtml(tournamentDraft.locationName || 'nincs megadva')}</div></div>
+        <div class="detail-box"><div class="detail-label">Csoportkör</div><div class="detail-value">${escapeHtml(String(plan.groups.length))} csoport · ${escapeHtml(String(plan.config.qualifiersPerGroup))} továbbjutó / csoport</div></div>
+        <div class="detail-box"><div class="detail-label">Rájátszás</div><div class="detail-value">${escapeHtml(firstKnockout?.label || 'nincs kieséses ág')}</div></div>
+        <div class="detail-box"><div class="detail-label">Játékidő</div><div class="detail-value">${escapeHtml(String(plan.config.matchDurationMinutes))} perc / meccs</div></div>
+        <div class="detail-box"><div class="detail-label">Tervezett időtartam</div><div class="detail-value">${escapeHtml(plan.startLabel)}-${escapeHtml(plan.endLabel)}</div></div>
+      </div>
+      <div class="small muted">${escapeHtml(tournamentDraft.registrationRules || 'A részletes nevezési és jogosultsági szabályokat a szervező adja meg.')}</div>
+      ${plan.config.publicNotes ? `<div class="small muted">${escapeHtml(plan.config.publicNotes)}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderTournamentPlannerPanel(tournamentDraft) {
+  const plan = buildTournamentPlannerPlan(tournamentDraft);
+  const knockoutOverview = plan.knockout.rounds.map(round => `
+    <div class="event-card compact-team-card">
+      <div class="row between align-center wrap gap">
+        <strong>${escapeHtml(round.label)}</strong>
+        <span class="badge badge-muted">${escapeHtml(round.matches[0]?.startLabel || '-')}</span>
+      </div>
+      <div class="stack top-space">
+        ${round.matches.map(match => `<div class="small muted">${escapeHtml(match.startLabel)} · ${escapeHtml(String(match.field))}. pálya · ${escapeHtml(match.home)} - ${escapeHtml(match.away)}</div>`).join('')}
+      </div>
+    </div>
+  `).join('');
+
+  return `
+    <div class="stack">
+      ${renderTournamentPlannerForm(tournamentDraft, plan)}
+      <div class="event-card admin-home-primary-card">
+        <div class="row between align-center wrap gap">
+          <div>
+            <div class="small muted">Optimalizált torna terv</div>
+            <div class="admin-home-primary-title top-space">${escapeHtml(String(plan.config.teamCount))} csapat · ${escapeHtml(String(plan.groups.length))} csoport · ${escapeHtml(String(plan.config.fieldCount))} pálya · ${escapeHtml(String(plan.config.refereeCount))} játékvezető</div>
+          </div>
+          <span class="badge badge-live">${escapeHtml(plan.startLabel)}-${escapeHtml(plan.endLabel)}</span>
+        </div>
+        <div class="grid three-col inner-grid top-space">
+          <div class="detail-box"><div class="detail-label">Csoportmeccsek</div><div class="detail-value">${escapeHtml(String(plan.groupStage.matches.length))}</div></div>
+          <div class="detail-box"><div class="detail-label">Kieséses meccsek</div><div class="detail-value">${escapeHtml(String(plan.knockout.matches.length))}</div></div>
+          <div class="detail-box"><div class="detail-label">Teljes időablak</div><div class="detail-value">${escapeHtml(formatTournamentDuration(plan.durationMinutes))}</div></div>
+        </div>
+      </div>
+      <div class="grid two-col inner-grid">
+        ${renderTournamentGroupMatrices(plan)}
+      </div>
+      <div class="grid two-col inner-grid">
+        ${knockoutOverview || emptyState('Nincs kieséses ág.', 'Körmérkőzéses formánál a tabella zárja a tornát.')}
+      </div>
+      ${renderTournamentResourceSummary(plan)}
+      ${renderTournamentPublicBrief(tournamentDraft, plan)}
+      ${renderTournamentSchedule(plan)}
+    </div>
+  `;
+}
+
+function renderTournamentWorkspaceV2() {
   if (!els.tournamentOverviewCards || !els.tournamentHomeContent || !els.tournamentWorkspaceSummary) return;
 
   if (!shouldShowTournamentWorkspace()) {
@@ -9099,26 +10813,30 @@ function renderTournamentWorkspace() {
   }
 
   const tournamentDraft = loadTournamentSetupDraft();
-  const hasTeams = (state.myTeams || []).length > 0;
+  const readiness = getTournamentSetupReadiness(tournamentDraft);
   const pendingInvites = (state.myInvites || []).filter(invite => invite?.status === 'pending').length;
-  const upcomingEvents = (state.myEvents || []).filter(event => isFuturePublishedEvent(event)).length;
-  const hasTournamentBasics = Boolean(
-    String(tournamentDraft.title || '').trim()
-    && String(tournamentDraft.locationName || '').trim()
-    && Number(tournamentDraft.teamCount || 0) >= 2
-    && Number(tournamentDraft.fieldCount || 0) >= 1
-  );
-  const formatLabel = tournamentDraft.formatHint === 'round_robin'
-    ? 'körmérkőzés'
-    : tournamentDraft.formatHint === 'knockout'
-      ? 'egyenes kiesés'
-      : 'csoportkör + kieséses ág';
+  const hasTournamentBasics = readiness.hasBasics;
+  const formatLabel = getTournamentFormatLabel(tournamentDraft.formatHint);
+  const moduleEntries = [
+    ['Nevezéskezelés', tournamentDraft.modules?.registrations],
+    ['Lebonyolítás', tournamentDraft.modules?.format],
+    ['Torna pénzügy', tournamentDraft.modules?.finance],
+    ['Kommunikáció', tournamentDraft.modules?.communication],
+    ['Statisztika', tournamentDraft.modules?.stats]
+  ];
+  const nextAction = !readiness.hasBasics
+    ? { title: 'Hozd létre az első tornát.', hint: 'Kezdd a névvel, helyszínnel, kezdéssel, csapatszámmal és pályaszámmal.', workspace: 'tournaments', button: 'Torna létrehozása' }
+    : !readiness.hasRegistrationRules
+      ? { title: 'Pontosítsd a nevezési szabályokat.', hint: 'A csapatkapitányok csak akkor tudnak jól nevezni, ha ismert a határidő és a keretlétszám.', workspace: 'tournaments', button: 'Nevezési szabályok' }
+      : !readiness.hasFormat
+        ? { title: 'Állítsd be a lebonyolítás alapját.', hint: 'A pályák, a meccshossz és a versenyforma adja majd a sorsolás alapját.', workspace: 'format', button: 'Lebonyolítás megnyitása' }
+        : { title: 'Következhetnek a csapatkapitányok.', hint: 'A torna alapjai készen állnak. Innen indulhat a meghívás és a nevezések begyűjtése.', workspace: 'registrations', button: 'Nevezések indítása' };
 
   els.tournamentOverviewCards.innerHTML = [
-    { label: 'Tornaalapok', value: hasTournamentBasics ? 'készül' : 'még üres' },
-    { label: 'Saját csapatok', value: state.myTeams?.length ?? 0 },
-    { label: 'Függő meghívók', value: pendingInvites },
-    { label: 'Látható események', value: upcomingEvents }
+    { label: 'Torna állapot', value: hasTournamentBasics ? 'beállítva' : 'indítás előtt' },
+    { label: 'Készültség', value: `${readiness.completedCount}/4` },
+    { label: 'Nevezési díj', value: Number(tournamentDraft.entryFee || 0) > 0 ? formatMoney(tournamentDraft.entryFee) : 'ingyenes' },
+    { label: 'Függő meghívók', value: pendingInvites }
   ].map(item => `
     <div class="stat-card">
       <div class="stat-label">${escapeHtml(item.label)}</div>
@@ -9127,140 +10845,102 @@ function renderTournamentWorkspace() {
   `).join('');
 
   els.tournamentHomeContent.innerHTML = `
-    <div class="event-card admin-home-sidecard">
+    <div class="event-card admin-home-primary-card">
       <div class="row between align-center wrap gap">
         <div>
-          <strong>Most ezzel foglalkozz</strong>
-          <div class="admin-guide-title top-space">A tornaszervezői munkatér külön világra váltott.</div>
+          <div class="small muted">Következő lépés</div>
+          <div class="admin-home-primary-title top-space">${escapeHtml(nextAction.title)}</div>
         </div>
-        <span class="badge badge-live">főmodul</span>
+        <span class="badge badge-live">tornaszervezői főmodul</span>
       </div>
-      <div class="small muted top-space">Előbb hozd létre az első tornát, utána hívd meg a csapatkapitányokat, majd építsd fel a lebonyolítást. A részletes meccs-, pénzügy- és kommunikációs modulok innen nőnek tovább.</div>
+      <div class="small muted top-space">${escapeHtml(nextAction.hint)}</div>
       <div class="row gap wrap top-space">
-        <button class="btn btn-secondary" type="button" data-tournament-workspace-jump="tournaments">Torna alapjai</button>
-        <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="registrations">Nevezések</button>
-        <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="format">Lebonyolítás</button>
+        <button class="btn btn-secondary" type="button" data-tournament-workspace-jump="${escapeHtml(nextAction.workspace)}">${escapeHtml(nextAction.button)}</button>
+        <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="tournaments">Torna beállításai</button>
+        <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="registrations">Csapatok és nevezések</button>
       </div>
     </div>
     <div class="grid two-col inner-grid top-space">
-      <div class="detail-box">
-        <div class="detail-label">Mi kész van már?</div>
-        <div class="detail-value">${hasTournamentBasics ? 'Az első torna alapjai már rögzítve vannak.' : (hasTeams ? 'Van saját szervezői jelenléted a rendszerben.' : 'Még nincs saját csapat vagy meghívott kör.')}</div>
-      </div>
-      <div class="detail-box">
-        <div class="detail-label">Mi jön most?</div>
-        <div class="detail-value">${hasTournamentBasics ? 'Következhetnek a csapatkapitányok és a nevezések.' : 'A torna alapadatait érdemes most összerakni: helyszín, csapatszám, pályaszám, meccshossz.'}</div>
-      </div>
+      <div class="detail-box"><div class="detail-label">Aktív torna</div><div class="detail-value">${escapeHtml(tournamentDraft.title || 'Még nincs létrehozott torna')}</div></div>
+      <div class="detail-box"><div class="detail-label">Torna típusa</div><div class="detail-value">${escapeHtml(getTournamentSportLabel(tournamentDraft.sportType))} · ${escapeHtml(tournamentDraft.gameFormat || 'játékforma nélkül')}</div></div>
+      <div class="detail-box"><div class="detail-label">Helyszín és idő</div><div class="detail-value">${escapeHtml(tournamentDraft.locationName || 'nincs helyszín')} · ${escapeHtml(tournamentDraft.startDate ? formatDateTime(tournamentDraft.startDate) : 'nincs kezdés')}</div></div>
+      <div class="detail-box"><div class="detail-label">Nevezési keret</div><div class="detail-value">${escapeHtml(String(tournamentDraft.teamCount || 0))} csapat · ${escapeHtml(String(tournamentDraft.rosterMin || 0))}-${escapeHtml(String(tournamentDraft.rosterMax || 0))} fős keret</div></div>
     </div>
   `;
 
   els.tournamentWorkspaceSummary.innerHTML = `
     <div class="event-card compact-team-card">
-      <strong>Itt tart most a struktúra</strong>
-      <div class="small muted top-space">Ez már nem a csapatsportos admin starter. A tornaszervező külön menüt, külön kezdőpultot és külön folyamatot kap.</div>
-      <div class="row gap wrap top-space">
-        <span class="badge ${hasTournamentBasics ? 'badge-live' : 'badge-draft'}">${hasTournamentBasics ? 'van tornaalap' : 'még indul a főmodul'}</span>
-        <span class="badge badge-muted">${pendingInvites} függő meghívó</span>
+      <div class="row between align-center wrap gap">
+        <strong>Torna létrehozási iránytű</strong>
+        <span class="badge badge-muted">${escapeHtml(String(readiness.completedCount))}/4 kész</span>
       </div>
+      ${renderTournamentProgressSteps(readiness)}
     </div>
     <div class="event-card compact-team-card top-space">
       <strong>${escapeHtml(tournamentDraft.title || 'Még nincs elnevezett torna')}</strong>
-      <div class="small muted top-space">
-        ${hasTournamentBasics
-          ? `${escapeHtml(String(tournamentDraft.teamCount))} csapat · ${escapeHtml(String(tournamentDraft.fieldCount))} pálya · ${escapeHtml(String(tournamentDraft.matchDurationMinutes))} perces meccsek`
-          : 'Ha kitöltöd az alapokat, itt rögtön látni fogod a torna fő paramétereit.'}
-      </div>
+      <div class="small muted top-space">${hasTournamentBasics ? `${escapeHtml(String(tournamentDraft.teamCount))} csapat · ${escapeHtml(String(tournamentDraft.fieldCount))} pálya · ${escapeHtml(String(tournamentDraft.matchDurationMinutes))} perces meccsek` : 'Ha kitöltöd az alapokat, itt rögtön látni fogod a torna fő paramétereit.'}</div>
       <div class="small muted">${escapeHtml(tournamentDraft.locationName || 'Még nincs helyszín megadva.')} · ${escapeHtml(formatLabel)}</div>
       <div class="small muted">${escapeHtml(tournamentDraft.startDate ? formatDateTime(tournamentDraft.startDate) : 'Még nincs kezdő időpont megadva.')}</div>
+      <div class="row gap wrap top-space">
+        ${moduleEntries.map(([label, enabled]) => `<span class="badge ${enabled ? 'badge-live' : 'badge-muted'}">${escapeHtml(label)} ${enabled ? 'ON' : 'OFF'}</span>`).join('')}
+      </div>
     </div>
     <details class="admin-collapse top-space">
-      <summary><span>Polcon maradt fejlesztési útvonalak</span></summary>
+      <summary><span>Hogyan lesz ebből éles torna?</span></summary>
       <div class="admin-collapse-body stack">
-        <div class="small muted">Tornák: alapbeállítások, csapatszám, pályák, helyszín, meccshossz.</div>
-        <div class="small muted">Csapatok és nevezések: meghívott csapatkapitányok, keretek, visszaigazolások.</div>
-        <div class="small muted">Lebonyolítás és mérkőzések: csoportok, pályabeosztás, eredmények, statisztika.</div>
+        <div class="small muted">1. A tornaszervező megadja a torna alapjait és nevezési szabályait.</div>
+        <div class="small muted">2. A rendszer meghívja a csapatkapitányokat, akik nevezési űrlapon adják le a keretet.</div>
+        <div class="small muted">3. A lezárt nevezésekből készül a csoportkör, pályabeosztás, meccslista és pénzügyi összesítő.</div>
       </div>
     </details>
   `;
 
   const tournamentsPanel = document.getElementById('tournamentTournamentsPanel');
   if (tournamentsPanel) {
-    tournamentsPanel.innerHTML = `
-      <div class="event-card admin-home-sidecard">
-        <div class="row between align-center wrap gap">
-          <div>
-            <strong>Torna alapjai</strong>
-            <div class="admin-guide-title top-space">${escapeHtml(tournamentDraft.title || 'Itt indul az első torna váza')}</div>
-          </div>
-          <span class="badge ${hasTournamentBasics ? 'badge-live' : 'badge-draft'}">${hasTournamentBasics ? 'mentve' : 'első kör'}</span>
-        </div>
-        <div class="small muted top-space">Add meg a torna nevét, a csapatok számát, a pályák számát, a helyszínt és a meccsek hosszát. Ez lesz a teljes későbbi lebonyolítás alapja.</div>
-      </div>
-      <form id="tournamentSetupForm" class="stack top-space">
-        <div class="grid two-col inner-grid">
-          <div>
-            <label class="label" for="tournamentTitle">Torna neve</label>
-            <input id="tournamentTitle" name="title" type="text" placeholder="Tavaszi Városi Kupa" value="${escapeAttribute(tournamentDraft.title || '')}" required />
-          </div>
-          <div>
-            <label class="label" for="tournamentLocationName">Helyszín</label>
-            <input id="tournamentLocationName" name="locationName" type="text" placeholder="Budapest, Vasas pálya" value="${escapeAttribute(tournamentDraft.locationName || '')}" required />
-          </div>
-        </div>
-        <div class="grid three-col inner-grid">
-          <div>
-            <label class="label" for="tournamentTeamCount">Hány csapatos?</label>
-            <input id="tournamentTeamCount" name="teamCount" type="number" min="2" max="128" value="${escapeAttribute(String(tournamentDraft.teamCount || 16))}" required />
-          </div>
-          <div>
-            <label class="label" for="tournamentFieldCount">Egyszerre hány pálya van?</label>
-            <input id="tournamentFieldCount" name="fieldCount" type="number" min="1" max="24" value="${escapeAttribute(String(tournamentDraft.fieldCount || 2))}" required />
-          </div>
-          <div>
-            <label class="label" for="tournamentMatchDuration">Egy mérkőzés hány perces?</label>
-            <input id="tournamentMatchDuration" name="matchDurationMinutes" type="number" min="5" max="180" value="${escapeAttribute(String(tournamentDraft.matchDurationMinutes || 20))}" required />
-          </div>
-        </div>
-        <div class="grid two-col inner-grid">
-          <div>
-            <label class="label" for="tournamentStartDate">Kezdő időpont</label>
-            <input id="tournamentStartDate" name="startDate" type="datetime-local" value="${escapeAttribute(tournamentDraft.startDate || '')}" />
-          </div>
-          <div>
-            <label class="label" for="tournamentFormatHint">Milyen irányban gondolkodsz?</label>
-            <select id="tournamentFormatHint" name="formatHint">
-              <option value="group_knockout"${tournamentDraft.formatHint === 'group_knockout' ? ' selected' : ''}>Csoportkör + kieséses ág</option>
-              <option value="round_robin"${tournamentDraft.formatHint === 'round_robin' ? ' selected' : ''}>Körmérkőzés</option>
-              <option value="knockout"${tournamentDraft.formatHint === 'knockout' ? ' selected' : ''}>Egyenes kiesés</option>
-            </select>
-          </div>
-        </div>
-        <div>
-          <label class="label" for="tournamentNotes">Szervezői megjegyzés</label>
-          <textarea id="tournamentNotes" name="notes" rows="3" placeholder="Például: vasárnap délelőtt, 2 pályán párhuzamosan, büfé külön, döntő 17:00-kor.">${escapeHtml(tournamentDraft.notes || '')}</textarea>
-        </div>
-        <div class="row gap wrap">
-          <button class="btn" type="submit">Tornaalapok mentése</button>
-          <button class="btn btn-ghost" type="button" data-tournament-workspace-jump="registrations">Tovább a nevezésekhez</button>
-        </div>
-      </form>
-    `;
+    tournamentsPanel.innerHTML = renderTournamentSetupForm(tournamentDraft, readiness);
   }
 
-  const placeholderMap = {
-    tournamentRegistrationsPanel: ['Itt jönnek a nevezések.', 'A csapatkapitányok meghívása és a benevezett keretek külön kezelést kapnak.'],
-    tournamentFormatPanel: ['Itt épül fel a lebonyolítás.', 'Csoportkör, kieséses ág és pálya-idő logika kerül ide.'],
-    tournamentMatchesPanel: ['Itt lesznek a mérkőzések.', 'Eredmények, gólok, asszisztok és élő állapotok jönnek ide.'],
-    tournamentFinancePanel: ['Itt lesz a torna pénzügye.', 'Nevezési díj, csapatonkénti befizetés és lezárás kerül ide.'],
-    tournamentCommsPanel: ['Itt lesz a kommunikáció.', 'Központi tájékoztatás, csapatkapitányi üzenetek és értesítések ide kerülnek.'],
-    tournamentStatsPanel: ['Itt lesz a torna statisztikája.', 'Tabella, játékosmutatók és összesített zárókép jelenik meg itt.']
+  const panelContent = {
+    tournamentRegistrationsPanel: `
+      <div class="event-card stack">
+        <div class="row between align-center wrap gap">
+          <div>
+            <strong>Csapatok és nevezések</strong>
+            <div class="small muted top-space">A tornaszervező itt hívja majd meg a csapatkapitányokat, és itt követi a benevezett csapatok státuszát.</div>
+          </div>
+          <span class="badge ${readiness.hasRegistrationRules ? 'badge-live' : 'badge-draft'}">${readiness.hasRegistrationRules ? 'nevezési szabály kész' : 'szabály hiányzik'}</span>
+        </div>
+        <div class="grid two-col inner-grid">
+          <div class="detail-box"><div class="detail-label">Nevezési határidő</div><div class="detail-value">${escapeHtml(tournamentDraft.registrationDeadline ? formatDateTime(tournamentDraft.registrationDeadline) : 'nincs beállítva')}</div></div>
+          <div class="detail-box"><div class="detail-label">Keretlétszám</div><div class="detail-value">${escapeHtml(String(tournamentDraft.rosterMin || 0))}-${escapeHtml(String(tournamentDraft.rosterMax || 0))} fő / csapat</div></div>
+        </div>
+        <div class="event-card compact-team-card"><strong>Következő fejlesztési lépés</strong><div class="small muted top-space">Meghívó email a csapatkapitányoknak, nevezési űrlap kitöltése, keretellenőrzés és státuszkövetés.</div></div>
+      </div>
+    `,
+    tournamentFormatPanel: renderTournamentPlannerPanel(tournamentDraft),
+    tournamentMatchesPanel: emptyState('Mérkőzések előkészítve.', 'A meccslista akkor generálható, ha a nevezések lezárultak és a lebonyolítási forma végleges.'),
+    tournamentFinancePanel: `
+      <div class="event-card stack">
+        <strong>Torna pénzügyi keret</strong>
+        <div class="grid two-col inner-grid">
+          <div class="detail-box"><div class="detail-label">Nevezési díj</div><div class="detail-value">${escapeHtml(Number(tournamentDraft.entryFee || 0) > 0 ? formatMoney(tournamentDraft.entryFee) : 'ingyenes')}</div></div>
+          <div class="detail-box"><div class="detail-label">Fizetési határidő</div><div class="detail-value">${escapeHtml(tournamentDraft.paymentDeadline ? formatDateTime(tournamentDraft.paymentDeadline) : 'nincs beállítva')}</div></div>
+        </div>
+        <div class="small muted">A torna pénzügy külön világ: csapatonkénti nevezési díj, befizetési státusz, költségek és összesített tornaegyenleg.</div>
+      </div>
+    `,
+    tournamentCommsPanel: emptyState('Kommunikáció előkészítve.', 'Ide kerülnek majd a csapatkapitányi meghívók, központi tornaüzenetek, változásértesítések és hiánypótlási kérések.'),
+    tournamentStatsPanel: emptyState('Statisztika előkészítve.', 'Tabella, góllövőlista, asszisztok, csapatmutatók és záró összesítés a mérkőzések után jelenik meg.')
   };
 
-  Object.entries(placeholderMap).forEach(([elementId, [title, hint]]) => {
+  Object.entries(panelContent).forEach(([elementId, html]) => {
     const mount = document.getElementById(elementId);
-    if (!mount) return;
-    mount.innerHTML = emptyState(title, hint);
+    if (mount) mount.innerHTML = html;
   });
+}
+
+function renderTournamentWorkspace() {
+  renderTournamentWorkspaceV2();
 }
 
 function setTournamentWorkspace(workspace = 'home') {
@@ -9289,12 +10969,25 @@ async function handleTournamentSetupSubmit(event) {
 
   const formData = new FormData(form);
   const title = String(formData.get('title') || '').trim();
+  const sportType = String(formData.get('sportType') || 'football').trim();
   const locationName = String(formData.get('locationName') || '').trim();
+  const county = String(formData.get('county') || '').trim();
   const teamCount = Number(formData.get('teamCount') || 0);
   const fieldCount = Number(formData.get('fieldCount') || 0);
   const matchDurationMinutes = Number(formData.get('matchDurationMinutes') || 0);
   const startDate = String(formData.get('startDate') || '').trim();
+  const endDate = String(formData.get('endDate') || '').trim();
+  const gameFormat = String(formData.get('gameFormat') || '5+1').trim();
+  const pitchType = String(formData.get('pitchType') || 'mufu').trim();
   const formatHint = String(formData.get('formatHint') || 'group_knockout').trim();
+  const registrationDeadline = String(formData.get('registrationDeadline') || '').trim();
+  const paymentDeadline = String(formData.get('paymentDeadline') || '').trim();
+  const rosterMin = Number(formData.get('rosterMin') || 0);
+  const rosterMax = Number(formData.get('rosterMax') || 0);
+  const minAge = Number(formData.get('minAge') || 0);
+  const maxAge = Number(formData.get('maxAge') || 0);
+  const entryFee = Number(formData.get('entryFee') || 0);
+  const registrationRules = String(formData.get('registrationRules') || '').trim();
   const notes = String(formData.get('notes') || '').trim();
 
   if (!title) {
@@ -9306,6 +10999,12 @@ async function handleTournamentSetupSubmit(event) {
   if (!locationName) {
     showMessage('Add meg a torna helyszínét.', 'error');
     document.getElementById('tournamentLocationName')?.focus();
+    return;
+  }
+
+  if (!startDate) {
+    showMessage('Add meg a torna kezdő időpontját.', 'error');
+    document.getElementById('tournamentStartDate')?.focus();
     return;
   }
 
@@ -9327,20 +11026,128 @@ async function handleTournamentSetupSubmit(event) {
     return;
   }
 
+  if (!Number.isFinite(rosterMin) || !Number.isFinite(rosterMax) || rosterMin < 1 || rosterMax < rosterMin) {
+    showMessage('A maximális keretlétszám nem lehet kisebb a minimumnál.', 'error');
+    document.getElementById('tournamentRosterMax')?.focus();
+    return;
+  }
+
+  if (!Number.isFinite(minAge) || !Number.isFinite(maxAge) || minAge < 0 || maxAge < minAge) {
+    showMessage('A korcsoport felső határa nem lehet kisebb az alsó határnál.', 'error');
+    document.getElementById('tournamentMaxAge')?.focus();
+    return;
+  }
+
+  if (!Number.isFinite(entryFee) || entryFee < 0) {
+    showMessage('A nevezési díj nem lehet negatív.', 'error');
+    document.getElementById('tournamentEntryFee')?.focus();
+    return;
+  }
+
+  if (entryFee > 0 && !paymentDeadline) {
+    showMessage('Fizetős tornánál adj meg fizetési határidőt is.', 'error');
+    document.getElementById('tournamentPaymentDeadline')?.focus();
+    return;
+  }
+
   saveTournamentSetupDraft({
     title,
+    sportType,
     locationName,
+    county,
     teamCount,
     fieldCount,
     matchDurationMinutes,
     startDate,
+    endDate,
+    gameFormat,
+    pitchType,
     formatHint,
+    registrationDeadline,
+    paymentDeadline,
+    rosterMin,
+    rosterMax,
+    minAge,
+    maxAge,
+    entryFee,
+    registrationRules,
+    modules: {
+      registrations: formData.has('moduleRegistrations'),
+      format: formData.has('moduleFormat'),
+      finance: formData.has('moduleFinance'),
+      communication: formData.has('moduleCommunication'),
+      stats: formData.has('moduleStats')
+    },
     notes
   });
 
   renderTournamentWorkspace();
-  setTournamentWorkspace('tournaments');
+  setTournamentWorkspace('registrations');
   showMessage('A torna alapjai elmentve. Következhetnek a csapatkapitányok és a nevezések.', 'success');
+}
+
+async function handleTournamentPlannerSubmit(event) {
+  event.preventDefault();
+  clearMessage();
+
+  const form = event.target;
+  if (!form || form.id !== 'tournamentPlannerForm') return;
+
+  const currentDraft = loadTournamentSetupDraft();
+  const formData = new FormData(form);
+  const groupSize = Number(formData.get('groupSize') || 4);
+  const qualifiersPerGroup = Number(formData.get('qualifiersPerGroup') || 2);
+  const refereeCount = Number(formData.get('refereeCount') || 1);
+
+  if (!Number.isFinite(groupSize) || groupSize < 3) {
+    showMessage('A csoportméret legalább 3 csapat legyen.', 'error');
+    document.getElementById('plannerGroupSize')?.focus();
+    return;
+  }
+
+  if (!Number.isFinite(qualifiersPerGroup) || qualifiersPerGroup < 1 || qualifiersPerGroup >= groupSize) {
+    showMessage('A továbbjutók száma legyen legalább 1, de kevesebb mint a csoportméret.', 'error');
+    document.getElementById('plannerQualifiers')?.focus();
+    return;
+  }
+
+  if (!Number.isFinite(refereeCount) || refereeCount < 1) {
+    showMessage('Legalább 1 játékvezető szükséges a beosztáshoz.', 'error');
+    document.getElementById('plannerRefereeCount')?.focus();
+    return;
+  }
+
+  saveTournamentSetupDraft({
+    ...currentDraft,
+    planning: {
+      ...currentDraft.planning,
+      groupSize,
+      qualifiersPerGroup,
+      fieldStartNumber: Number(formData.get('fieldStartNumber') || 1),
+      refereeCount,
+      matchBreakMinutes: Number(formData.get('matchBreakMinutes') || 0),
+      groupToKnockoutBreakMinutes: Number(formData.get('groupToKnockoutBreakMinutes') || 0),
+      semiFinalBreakMinutes: Number(formData.get('semiFinalBreakMinutes') || 0),
+      finalBreakMinutes: Number(formData.get('finalBreakMinutes') || 0),
+      fieldCostMode: String(formData.get('fieldCostMode') || 'hourly'),
+      fieldHourlyRate: Number(formData.get('fieldHourlyRate') || 0),
+      fieldDayRate: Number(formData.get('fieldDayRate') || 0),
+      refereeCostMode: String(formData.get('refereeCostMode') || 'per_match'),
+      refereeMatchRate: Number(formData.get('refereeMatchRate') || 0),
+      refereeHourlyRate: Number(formData.get('refereeHourlyRate') || 0),
+      refereeDayRate: Number(formData.get('refereeDayRate') || 0),
+      broadcastCost: Number(formData.get('broadcastCost') || 0),
+      trophiesCost: Number(formData.get('trophiesCost') || 0),
+      medicalCost: Number(formData.get('medicalCost') || 0),
+      otherCosts: Number(formData.get('otherCosts') || 0),
+      buffetMode: String(formData.get('buffetMode') || 'none'),
+      publicNotes: String(formData.get('publicNotes') || '').trim()
+    }
+  });
+
+  renderTournamentWorkspace();
+  setTournamentWorkspace('format');
+  showMessage('A torna tervező újragenerálta a csoportokat, a menetrendet és az erőforrás-tervet.', 'success');
 }
 
 function switchView(viewId) {
@@ -9395,6 +11202,7 @@ async function bootSession() {
   ensureAuthShell();
   ensureAuthOnboardingUi();
   ensureAdminStatisticsUi();
+  ensureAdminAvailableTournamentsUi();
   ensureUserDashboardLayout();
   setAuthMode(state.pendingInviteToken ? 'register' : 'login');
   syncAuthLayout();
@@ -13212,6 +15020,9 @@ function bindEvents() {
     if (event.target?.id === 'tournamentSetupForm') {
       await handleTournamentSetupSubmit(event);
     }
+    if (event.target?.id === 'tournamentPlannerForm') {
+      await handleTournamentPlannerSubmit(event);
+    }
   });
   document.addEventListener('click', async event => {
     if (event.target?.id === 'paymentQrPreviewOverlay' || event.target.closest('[data-payment-qr-close]')) {
@@ -13288,6 +15099,113 @@ function bindEvents() {
         setAdminEventFormSection(nextSection);
       }
       return;
+    }
+
+    const tournamentMarketAction = event.target.closest('[data-admin-tournament-market-action]');
+    if (tournamentMarketAction) {
+      const action = tournamentMarketAction.dataset.adminTournamentMarketAction;
+      if (action === 'show') {
+        state.adminTournamentMarketFilters = normalizeTournamentMarketFilters(readAdminTournamentMarketFilters());
+        state.adminTournamentMarketSearched = true;
+        state.adminTournamentApplicationTournamentId = '';
+        renderAdminAvailableTournamentsPanel();
+        return;
+      }
+      if (action === 'reset') {
+        state.adminTournamentMarketFilters = null;
+        state.adminTournamentMarketSearched = false;
+        state.adminTournamentApplicationTournamentId = '';
+        renderAdminAvailableTournamentsPanel();
+        return;
+      }
+      if (action === 'save-search') {
+        const name = String(document.getElementById('tournamentMarketSearchName')?.value || '').trim();
+        if (!name) {
+          showMessage('Adj nevet a mentett keresésnek.', 'warning');
+          return;
+        }
+        const filters = normalizeTournamentMarketFilters(readAdminTournamentMarketFilters());
+        const savedSearches = loadTournamentMarketSavedSearches();
+        const existing = savedSearches.find(search => search.name.toLowerCase() === name.toLowerCase());
+        const nextSearch = {
+          id: existing?.id || `search-${Date.now()}`,
+          name,
+          filters,
+          savedAt: new Date().toISOString()
+        };
+        saveTournamentMarketSavedSearches([
+          nextSearch,
+          ...savedSearches.filter(search => search.id !== nextSearch.id)
+        ].slice(0, 12));
+        state.adminTournamentMarketFilters = filters;
+        state.adminTournamentMarketSearched = true;
+        state.adminTournamentApplicationTournamentId = '';
+        renderAdminAvailableTournamentsPanel();
+        showMessage('A keresést elmentettem.', 'success');
+        return;
+      }
+      if (action === 'load-search') {
+        const savedSearch = loadTournamentMarketSavedSearches().find(search => search.id === tournamentMarketAction.dataset.searchId);
+        if (!savedSearch) {
+          showMessage('A mentett keresés már nem található.', 'warning');
+          renderAdminAvailableTournamentsPanel();
+          return;
+        }
+        state.adminTournamentMarketFilters = normalizeTournamentMarketFilters(savedSearch.filters);
+        state.adminTournamentMarketSearched = true;
+        state.adminTournamentApplicationTournamentId = '';
+        renderAdminAvailableTournamentsPanel();
+        showMessage(`Betöltöttem a mentett keresést: ${savedSearch.name}.`, 'success');
+        return;
+      }
+      if (action === 'delete-search') {
+        const savedSearches = loadTournamentMarketSavedSearches();
+        saveTournamentMarketSavedSearches(savedSearches.filter(search => search.id !== tournamentMarketAction.dataset.searchId));
+        renderAdminAvailableTournamentsPanel();
+        showMessage('A mentett keresést töröltem.', 'success');
+        return;
+      }
+      if (action === 'apply') {
+        const tournament = getAdminTournamentById(tournamentMarketAction.dataset.tournamentId);
+        if (!tournament) {
+          showMessage('A kiválasztott torna már nem található.', 'warning');
+          return;
+        }
+        state.adminTournamentApplicationTournamentId = tournament.id;
+        if (!state.adminTournamentApplicationDrafts[tournament.id]) {
+          state.adminTournamentApplicationDrafts[tournament.id] = buildDefaultTournamentApplicationDraft(tournament);
+        }
+        renderAdminAvailableTournamentsPanel();
+        showMessage(`Megnyitottam a nevezési űrlap vázát: ${tournament.title}.`, 'info');
+        return;
+      }
+      if (action === 'cancel-application') {
+        state.adminTournamentApplicationTournamentId = '';
+        renderAdminAvailableTournamentsPanel();
+        return;
+      }
+      if (action === 'submit-application') {
+        const tournament = getAdminTournamentById(tournamentMarketAction.dataset.tournamentId);
+        const draft = tournament ? readTournamentApplicationDraft(tournament.id) : null;
+        if (!tournament || !draft) {
+          showMessage('A nevezési vázlat nem olvasható.', 'warning');
+          return;
+        }
+        state.adminTournamentApplicationDrafts[tournament.id] = draft;
+        if (!draft.teamName || !draft.contactName || !draft.contactEmail || !draft.playerList) {
+          showMessage('A nevezési vázlathoz töltsd ki a csapatnevet, kapcsolattartót, emailt és játékoslistát.', 'warning');
+          renderAdminAvailableTournamentsPanel();
+          return;
+        }
+        if (!draft.acceptRules || !draft.acceptData) {
+          showMessage('A nevezés előtt a versenykiírást és az adattovábbítást is el kell fogadni.', 'warning');
+          renderAdminAvailableTournamentsPanel();
+          return;
+        }
+        renderAdminAvailableTournamentsPanel();
+        showMessage('A nevezési vázlatot rögzítettem. A tényleges beküldés backendje a következő fejlesztési lépés.', 'success');
+        return;
+      }
     }
 
     const workspaceJump = event.target.closest('[data-admin-workspace-jump]');
