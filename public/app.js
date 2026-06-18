@@ -70,6 +70,12 @@ const state = {
   adminTournamentSavedSearches: [],
   adminTournamentApplicationTournamentId: '',
   adminTournamentApplicationDrafts: {},
+  adminEmailTemplate: 'event_created',
+  adminEmailEventId: '',
+  adminEmailPreview: null,
+  adminEmailLoading: false,
+  adminEmailSending: false,
+  adminEmailMessage: null,
   authMode: 'login',
   selectedRegistrationPath: '',
   sidebarCollapsed: localStorage.getItem('foci_sidebar_collapsed') === 'true',
@@ -374,6 +380,7 @@ const els = {
   adminFinanceSettlementCard: document.getElementById('adminFinanceSettlementCard'),
   adminEventEditorCard: document.getElementById('adminEventEditorCard'),
   adminStatisticsContent: document.getElementById('adminStatisticsContent'),
+  adminEmailContent: document.getElementById('adminEmailContent'),
   userHeaderContext: document.getElementById('userHeaderContext'),
   userBreakBanner: document.getElementById('userBreakBanner'),
   userOverviewCards: document.getElementById('userOverviewCards'),
@@ -1125,6 +1132,53 @@ function ensureAdminAvailableTournamentsUi() {
   }
 
   els.adminAvailableTournamentsContent = document.getElementById('adminAvailableTournamentsContent');
+}
+
+function ensureAdminEmailUi() {
+  const adminSubnav = document.querySelector('.admin-subnav-card .admin-subnav');
+  if (adminSubnav && !adminSubnav.querySelector('[data-admin-workspace="email"]')) {
+    const button = document.createElement('button');
+    button.className = 'subnav-btn';
+    button.type = 'button';
+    button.dataset.adminWorkspace = 'email';
+    button.textContent = 'Email kuldes';
+    const availableTournamentsButton = adminSubnav.querySelector('[data-admin-workspace="availableTournaments"]');
+    const statisticsButton = adminSubnav.querySelector('[data-admin-workspace="statistics"]');
+    if (availableTournamentsButton) {
+      availableTournamentsButton.insertAdjacentElement('beforebegin', button);
+    } else if (statisticsButton) {
+      statisticsButton.insertAdjacentElement('afterend', button);
+    } else {
+      adminSubnav.appendChild(button);
+    }
+  }
+
+  const adminView = document.getElementById('adminView');
+  if (adminView && !document.querySelector('[data-admin-workspace-panel="email"]')) {
+    const availableTournamentsPanel = document.querySelector('[data-admin-workspace-panel="availableTournaments"]');
+    const statisticsPanel = document.querySelector('[data-admin-workspace-panel="statistics"]');
+    const section = document.createElement('section');
+    section.className = 'top-space hidden';
+    section.hidden = true;
+    section.dataset.adminWorkspacePanel = 'email';
+    section.innerHTML = `
+      <div class="card">
+        <h2>Email kuldes</h2>
+        <div class="small muted section-note">Kontrollalt ujrakuldes adminoknak. Elso korben az uj esemeny email indithato ujra, a meglevo sablonnal es cimzett-szuressekkel.</div>
+        <div id="adminEmailContent" class="stack top-space"></div>
+      </div>
+    `;
+
+    if (availableTournamentsPanel?.parentElement) {
+      availableTournamentsPanel.insertAdjacentElement('beforebegin', section);
+    } else if (statisticsPanel?.parentElement) {
+      statisticsPanel.insertAdjacentElement('afterend', section);
+    } else {
+      adminView.appendChild(section);
+    }
+  }
+
+  els.adminEmailContent = document.getElementById('adminEmailContent');
 }
 
 function placeAuthHeader(targetPanel) {
@@ -8108,7 +8162,7 @@ function getSmartAdminEventsSection() {
 }
 
 function setAdminWorkspace(workspace = 'home') {
-  let nextWorkspace = ['home', 'team', 'customization', 'events', 'finance', 'statistics', 'availableTournaments'].includes(workspace)
+  let nextWorkspace = ['home', 'team', 'customization', 'events', 'finance', 'statistics', 'email', 'availableTournaments'].includes(workspace)
     ? workspace
     : 'home';
 
@@ -8150,6 +8204,13 @@ function setAdminWorkspace(workspace = 'home') {
 
   if (nextWorkspace === 'availableTournaments') {
     renderAdminAvailableTournamentsPanel();
+  }
+
+  if (nextWorkspace === 'email') {
+    renderAdminEmailPanel();
+    if (!state.adminEmailPreview && state.adminEmailEventId) {
+      void loadAdminEmailPreview({ silent: true });
+    }
   }
 }
 
@@ -9751,6 +9812,248 @@ function renderAdminStatisticsPanel() {
   `;
 }
 
+function getAdminEmailCandidateEvents(events = state.adminEvents || []) {
+  const now = Date.now();
+  return [...(events || [])]
+    .filter(event => event.status === 'published')
+    .sort((left, right) => {
+      const leftTs = getEventStartTimestamp(left);
+      const rightTs = getEventStartTimestamp(right);
+      const leftUpcoming = leftTs != null && leftTs >= now;
+      const rightUpcoming = rightTs != null && rightTs >= now;
+
+      if (leftUpcoming !== rightUpcoming) {
+        return leftUpcoming ? -1 : 1;
+      }
+
+      if (leftTs != null && rightTs != null) {
+        return leftUpcoming ? leftTs - rightTs : rightTs - leftTs;
+      }
+
+      return String(left.title || '').localeCompare(String(right.title || ''), 'hu');
+    });
+}
+
+function getAdminEmailSelectedEvent() {
+  const candidates = getAdminEmailCandidateEvents();
+  return candidates.find(event => String(event.id) === String(state.adminEmailEventId || ''))
+    || candidates[0]
+    || null;
+}
+
+function renderAdminEmailPreviewCard() {
+  const preview = state.adminEmailPreview;
+  const selectedEvent = getAdminEmailSelectedEvent();
+
+  if (state.adminEmailLoading) {
+    return `
+      <div class="event-card top-space">
+        <strong>Elonezet betoltese...</strong>
+        <div class="small muted top-space">Ellenorzom az esemenyt, az ertesitesi beallitast es a cimzetteket.</div>
+      </div>
+    `;
+  }
+
+  if (!selectedEvent) {
+    return emptyState('Nincs valaszthato published esemeny.', 'Uj esemeny emailt csak published esemenyhez lehet ujrakuldeni.');
+  }
+
+  if (!preview || String(preview.event?.id || '') !== String(selectedEvent.id)) {
+    return `
+      <div class="event-card top-space">
+        <div class="row between align-center wrap gap">
+          <strong>Elonezet meg nincs betoltve</strong>
+          <button class="btn btn-secondary" type="button" data-admin-email-action="preview">Cimzettek ellenorzese</button>
+        </div>
+        <div class="small muted top-space">Valaszd ki az esemenyt, majd ellenorizd a varhato kikuldest.</div>
+      </div>
+    `;
+  }
+
+  const summary = preview.recipientSummary || {};
+  const event = preview.event || selectedEvent;
+
+  return `
+    <div class="event-card top-space">
+      <div class="row between align-center wrap gap">
+        <div>
+          <div class="small muted">Elonezeti informacio</div>
+          <strong>${escapeHtml(event.title || selectedEvent.title || 'Nevtelen esemeny')}</strong>
+        </div>
+        <span class="badge ${Number(summary.recipientCount || 0) > 0 ? 'badge-success' : 'badge-warning'}">
+          ${escapeHtml(String(summary.recipientCount || 0))} cimzett
+        </span>
+      </div>
+      <div class="grid two-col inner-grid top-space">
+        <div class="detail-box">
+          <div class="detail-label">Idopont</div>
+          <div class="detail-value">${escapeHtml(formatDateTime(event.start_at || selectedEvent.start_at))}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Helyszin</div>
+          <div class="detail-value">${escapeHtml(getEventDisplayLocation(event) || getEventDisplayLocation(selectedEvent) || '-')}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Varhato cimzettek</div>
+          <div class="detail-value">${escapeHtml(String(summary.recipientCount || 0))}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Kizart cimzettek</div>
+          <div class="detail-value">${escapeHtml(String(summary.excludedCount || 0))}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Szabin kizart</div>
+          <div class="detail-value">${escapeHtml(String(summary.excludedBreakCount || 0))}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Passziv kizart</div>
+          <div class="detail-value">${escapeHtml(String(summary.excludedPassiveCount || 0))}</div>
+        </div>
+      </div>
+      <div class="row gap wrap top-space">
+        <button
+          class="btn"
+          type="button"
+          data-admin-email-action="send"
+          ${state.adminEmailSending || Number(summary.recipientCount || 0) <= 0 ? 'disabled' : ''}
+        >
+          ${state.adminEmailSending ? 'Kuldes folyamatban...' : 'Email kikuldese'}
+        </button>
+        <button class="btn btn-secondary" type="button" data-admin-email-action="preview" ${state.adminEmailSending ? 'disabled' : ''}>Ujraellenorzes</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderAdminEmailPanel() {
+  if (!els.adminEmailContent) return;
+
+  if (!state.currentTeam) {
+    els.adminEmailContent.innerHTML = emptyState('Nincs betoltott csapat.', 'Elobb valassz aktiv csapatot, utana tudsz admin emailt ujrakuldeni.');
+    return;
+  }
+
+  if (!canAccessAdminView()) {
+    els.adminEmailContent.innerHTML = emptyState('Nincs admin hozzaferesed.', 'Ezt a nezetet csak csapatkapitany, helyettes vagy platform owner hasznalhatja.');
+    return;
+  }
+
+  const candidateEvents = getAdminEmailCandidateEvents();
+  const selectedEvent = getAdminEmailSelectedEvent();
+  if (!state.adminEmailEventId && selectedEvent?.id) {
+    state.adminEmailEventId = selectedEvent.id;
+  }
+
+  const messageHtml = state.adminEmailMessage
+    ? `<div class="message ${state.adminEmailMessage.type || 'info'} top-space">${escapeHtml(state.adminEmailMessage.text)}</div>`
+    : '';
+
+  els.adminEmailContent.innerHTML = `
+    <div class="event-card">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Rendszer-email ujrakuldes</strong>
+          <div class="small muted top-space">Nem hoz letre uj esemenyt, csak a valasztott rendszer-email sablont inditja ujra kontrollaltan.</div>
+        </div>
+        <span class="badge badge-muted">admin eszkoz</span>
+      </div>
+      <div class="grid two-col inner-grid top-space">
+        <label class="label">
+          Email sablon
+          <select data-admin-email-template>
+            <option value="event_created" ${state.adminEmailTemplate === 'event_created' ? 'selected' : ''}>Uj esemeny</option>
+          </select>
+        </label>
+        <label class="label">
+          Esemeny
+          <select data-admin-email-event ${candidateEvents.length ? '' : 'disabled'}>
+            ${candidateEvents.map(event => `
+              <option value="${escapeAttribute(event.id)}" ${String(event.id) === String(state.adminEmailEventId || selectedEvent?.id || '') ? 'selected' : ''}>
+                ${escapeHtml(`${event.title || 'Nevtelen esemeny'} - ${formatDateTime(event.start_at)}`)}
+              </option>
+            `).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="small muted top-space">
+        A kuldes a meglevo uj esemeny email sablont hasznalja, es nem keruli meg a szabi/passziv vagy notifyTeamOnCreate szuresokat.
+      </div>
+    </div>
+    ${renderAdminEmailPreviewCard()}
+    ${messageHtml}
+  `;
+}
+
+async function loadAdminEmailPreview({ silent = false } = {}) {
+  if (!state.currentTeamId || !state.adminEmailEventId) {
+    if (!silent) showMessage('Valassz csapatot es esemenyt.', 'warning');
+    return;
+  }
+
+  state.adminEmailLoading = true;
+  state.adminEmailMessage = null;
+  renderAdminEmailPanel();
+
+  try {
+    const result = await api(`/teams/${state.currentTeamId}/admin-email/preview`, {
+      method: 'POST',
+      body: JSON.stringify({
+        template: state.adminEmailTemplate || 'event_created',
+        eventId: state.adminEmailEventId
+      })
+    });
+    state.adminEmailPreview = result;
+    state.adminEmailMessage = null;
+  } catch (error) {
+    state.adminEmailPreview = null;
+    state.adminEmailMessage = {
+      type: 'error',
+      text: error.message
+    };
+    if (!silent) showMessage(error.message, 'error');
+  } finally {
+    state.adminEmailLoading = false;
+    renderAdminEmailPanel();
+  }
+}
+
+async function sendAdminEmail() {
+  if (!state.currentTeamId || !state.adminEmailEventId) {
+    showMessage('Valassz csapatot es esemenyt.', 'warning');
+    return;
+  }
+
+  state.adminEmailSending = true;
+  state.adminEmailMessage = null;
+  renderAdminEmailPanel();
+
+  try {
+    const result = await api(`/teams/${state.currentTeamId}/admin-email/send`, {
+      method: 'POST',
+      body: JSON.stringify({
+        template: state.adminEmailTemplate || 'event_created',
+        eventId: state.adminEmailEventId
+      })
+    });
+    const message = `Email kikuldes lefutott: ${result.sentCount || 0} elkuldve, ${result.skippedCount || 0} kihagyva, ${result.failedCount || 0} hiba.`;
+    state.adminEmailPreview = result.preview || state.adminEmailPreview;
+    state.adminEmailMessage = {
+      type: result.failedCount > 0 ? 'warning' : 'success',
+      text: message
+    };
+    showMessage(message, result.failedCount > 0 ? 'warning' : 'success');
+  } catch (error) {
+    state.adminEmailMessage = {
+      type: 'error',
+      text: error.message
+    };
+    showMessage(error.message, 'error');
+  } finally {
+    state.adminEmailSending = false;
+    renderAdminEmailPanel();
+  }
+}
+
 function renderAdminFinancePanel() {
   if (!els.adminFinanceContent || !els.adminAttendanceContent) return;
 
@@ -10095,6 +10398,7 @@ function applyRoleAwareUi() {
   renderAdminHome();
   renderAdminFinancePanel();
   renderAdminStatisticsPanel();
+  renderAdminEmailPanel();
   renderAdminAvailableTournamentsPanel();
   if (shouldShowTeamAdminView()) {
     setAdminWorkspace(state.adminWorkspace);
@@ -11572,6 +11876,7 @@ async function bootSession() {
   ensureAuthShell();
   ensureAuthOnboardingUi();
   ensureAdminStatisticsUi();
+  ensureAdminEmailUi();
   ensureAdminAvailableTournamentsUi();
   ensureUserDashboardLayout();
   setAuthMode(state.pendingInviteToken ? 'register' : 'login');
@@ -12187,6 +12492,11 @@ async function loadTeam(teamId) {
     const currentMember = state.teamMembers.find(m => m.user_id === state.user?.id);
     state.teamRole = currentMember?.role || null;
     state.teamSkillSettings = null;
+    state.adminEmailEventId = '';
+    state.adminEmailPreview = null;
+    state.adminEmailMessage = null;
+    state.adminEmailLoading = false;
+    state.adminEmailSending = false;
 
     if (canAccessAdminView()) {
       try {
@@ -15008,6 +15318,7 @@ async function loadAdminEvents() {
     renderAdminOverview();
     renderAdminHome();
     renderAdminFinancePanel();
+    renderAdminEmailPanel();
     if (state.currentTeam) {
       renderTeamSummary(state.currentTeam);
     }
@@ -16152,6 +16463,18 @@ function bindEvents() {
       return;
     }
 
+    const adminEmailAction = event.target.closest('[data-admin-email-action]');
+    if (adminEmailAction) {
+      const action = adminEmailAction.dataset.adminEmailAction;
+      if (action === 'preview') {
+        await loadAdminEmailPreview();
+      }
+      if (action === 'send') {
+        await sendAdminEmail();
+      }
+      return;
+    }
+
     const workspaceSwitch = event.target.closest('[data-admin-workspace]');
     if (workspaceSwitch) {
       setAdminWorkspace(workspaceSwitch.dataset.adminWorkspace);
@@ -16236,6 +16559,25 @@ function bindEvents() {
       return;
     }
 
+  });
+
+  document.addEventListener('change', async event => {
+    const emailTemplateSelect = event.target.closest('[data-admin-email-template]');
+    if (emailTemplateSelect) {
+      state.adminEmailTemplate = emailTemplateSelect.value || 'event_created';
+      state.adminEmailPreview = null;
+      renderAdminEmailPanel();
+      await loadAdminEmailPreview({ silent: true });
+      return;
+    }
+
+    const emailEventSelect = event.target.closest('[data-admin-email-event]');
+    if (emailEventSelect) {
+      state.adminEmailEventId = emailEventSelect.value || '';
+      state.adminEmailPreview = null;
+      renderAdminEmailPanel();
+      await loadAdminEmailPreview({ silent: true });
+    }
   });
 
   els.navButtons.forEach(btn => {

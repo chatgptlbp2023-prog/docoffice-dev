@@ -1,10 +1,15 @@
 
+jest.mock('../src/services/emailService', () => ({
+  sendEmail: jest.fn()
+}));
+
 const request = require('supertest');
 const bcrypt = require('bcryptjs');
 const { randomUUID } = require('crypto');
 
 const app = require('../src/index');
 const pool = require('../src/config/db');
+const { sendEmail } = require('../src/services/emailService');
 const holidayData = require('../src/data/hu-holidays.json');
 
 function buildFutureIsoDate({
@@ -96,6 +101,10 @@ describe('Event series E2E', () => {
   }
 
   beforeEach(async () => {
+    sendEmail.mockReset();
+    sendEmail.mockResolvedValue({ status: 'sent', messageId: 'series-email-msg' });
+    process.env.APP_BASE_URL = 'https://app.example.com';
+
     nextHoliday = getNextHolidayStartAt();
 
     captainEmail = `captain_series_${randomUUID()}@example.com`;
@@ -206,6 +215,7 @@ describe('Event series E2E', () => {
     expect(createRes.body.ok).toBe(true);
     expect(createRes.body.generatedCount).toBe(4);
     expect(createRes.body.series.recurrence_type).toBe('weekly');
+    expect(createRes.body.eventNotification.scheduledCount).toBe(3);
 
     const seriesId = createRes.body.series.id;
     created.series.push(seriesId);
@@ -213,6 +223,15 @@ describe('Event series E2E', () => {
     createRes.body.generatedEvents.forEach(item => {
       created.events.push(item.event.id);
     });
+
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+    const recipients = sendEmail.mock.calls.map(call => call[0].to).sort();
+    expect(recipients).toEqual([captainEmail, memberEmail].sort());
+    const payload = sendEmail.mock.calls[0][0];
+    expect(payload.subject).toContain('Keddi esti foci');
+    expect(payload.html).toContain('Jelentkezem');
+    expect(payload.html).toContain('Kihagyom');
+    expect(payload.html).toContain('Szabin vagyok');
 
     const eventsRes = await request(app)
       .get(`/api/teams/${teamId}/event-series/${seriesId}/events`)
@@ -227,6 +246,25 @@ describe('Event series E2E', () => {
     const secondStart = new Date(eventsRes.body.events[1].start_at).getTime();
 
     expect(secondStart - firstStart).toBe(7 * 24 * 60 * 60 * 1000);
+
+    const scheduleRes = await pool.query(
+      `
+      select ens.event_id, ens.scheduled_at, ens.status, e.occurrence_index, e.start_at
+      from event_notification_schedules ens
+      join events e on e.id = ens.event_id
+      where e.series_id = $1
+      order by e.occurrence_index asc
+      `,
+      [seriesId]
+    );
+
+    expect(scheduleRes.rows).toHaveLength(3);
+    expect(scheduleRes.rows.map(row => row.occurrence_index)).toEqual([2, 3, 4]);
+    expect(scheduleRes.rows.every(row => row.status === 'pending')).toBe(true);
+    for (const row of scheduleRes.rows) {
+      const expectedScheduledAt = new Date(new Date(row.start_at).getTime() - 163 * 60 * 60 * 1000);
+      expect(new Date(row.scheduled_at).toISOString()).toBe(expectedScheduledAt.toISOString());
+    }
 
     const listRes = await request(app)
       .get(`/api/teams/${teamId}/event-series`)

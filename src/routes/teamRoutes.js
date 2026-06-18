@@ -13,6 +13,8 @@ const {
   startMyTeamBreak,
   endMyTeamBreak,
   updateTeamMemberActivityStatus,
+  previewAdminEmailSend,
+  sendAdminEmail,
   handleTeamBreakEmailAction
 } = require('../controllers/teamController');
 
@@ -31,6 +33,7 @@ const {
   validateUpdateTeamRules,
   validateUpdateTeamModuleSettings,
   validateUpdateTeamMemberActivityStatus,
+  validateAdminEmailSend,
 } = require('../middleware/requestValidation');
 
 const router = express.Router();
@@ -94,6 +97,22 @@ router.patch(
   isCaptainOrViceCaptain,
   validateUpdateTeamMemberActivityStatus,
   updateTeamMemberActivityStatus
+);
+
+router.post(
+  '/teams/:teamId/admin-email/preview',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  validateAdminEmailSend,
+  previewAdminEmailSend
+);
+
+router.post(
+  '/teams/:teamId/admin-email/send',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  validateAdminEmailSend,
+  sendAdminEmail
 );
 
 router.post(

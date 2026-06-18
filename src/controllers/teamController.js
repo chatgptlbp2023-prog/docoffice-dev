@@ -1,6 +1,7 @@
 const teamService = require('../services/teamService');
 const teamRulesService = require('../services/teamRulesService');
 const teamBreakActionService = require('../services/teamBreakActionService');
+const adminEmailService = require('../services/adminEmailService');
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -336,6 +337,51 @@ async function updateTeamMemberActivityStatus(req, res) {
   }
 }
 
+async function previewAdminEmailSend(req, res) {
+  try {
+    const result = await adminEmailService.previewAdminEmailSend({
+      teamId: req.params.teamId,
+      template: req.body.template,
+      eventId: req.body.eventId
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Admin email preview hiba:',
+      'Szerverhiba admin email elonezet kozben.'
+    );
+  }
+}
+
+async function sendAdminEmail(req, res) {
+  try {
+    const result = await adminEmailService.sendAdminEmail({
+      teamId: req.params.teamId,
+      template: req.body.template,
+      eventId: req.body.eventId,
+      actorUserId: req.user.id
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Admin email kuldes hiba:',
+      'Szerverhiba admin email kuldese kozben.'
+    );
+  }
+}
+
 async function handleTeamBreakEmailAction(req, res) {
   try {
     const result = await teamBreakActionService.executeTeamBreakActionToken(req.params.token);
@@ -382,5 +428,7 @@ module.exports = {
   startMyTeamBreak,
   endMyTeamBreak,
   updateTeamMemberActivityStatus,
+  previewAdminEmailSend,
+  sendAdminEmail,
   handleTeamBreakEmailAction
 };

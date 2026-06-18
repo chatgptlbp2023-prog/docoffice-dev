@@ -1,5 +1,52 @@
 
 const eventSeriesService = require('../services/eventSeriesService');
+const eventNotificationService = require('../services/eventNotificationService');
+const eventNotificationScheduleService = require('../services/eventNotificationScheduleService');
+
+async function runNotificationSafely(work, label) {
+  try {
+    return await work();
+  } catch (error) {
+    console.error(label, error);
+    return null;
+  }
+}
+
+async function notifyFirstGeneratedEventCreated({ result, actorUserId }) {
+  const firstPublishedEvent = (result.generatedEvents || [])
+    .map(item => item?.event)
+    .find(event => event?.id && event?.status === 'published');
+
+  if (!firstPublishedEvent) return null;
+
+  const notificationResult = await runNotificationSafely(
+    () => eventNotificationService.notifyEventCreated({
+      eventId: firstPublishedEvent.id,
+      actorUserId
+    }),
+    'Esemenysorozat elso alkalom ertesitesi hiba:'
+  );
+
+  return {
+    event: firstPublishedEvent,
+    notificationResult
+  };
+}
+
+async function scheduleLaterGeneratedEventCreatedNotifications({ result }) {
+  const recurrenceType = result?.recurrence?.recurrenceType || result?.series?.recurrence_type;
+
+  if (!recurrenceType) return null;
+
+  return runNotificationSafely(
+    () => eventNotificationScheduleService.scheduleEventCreatedNotificationsForSeries({
+      generatedEvents: result.generatedEvents || [],
+      recurrenceType,
+      now: new Date()
+    }),
+    'Esemenysorozat kesobbi alkalmak email utemezesi hiba:'
+  );
+}
 
 function handleServiceError(res, error, logLabel, fallbackMessage) {
   if (error && error.statusCode) {
@@ -27,8 +74,20 @@ async function createEventSeries(req, res) {
       data: req.body
     });
 
+    const firstNotification = await notifyFirstGeneratedEventCreated({
+      result,
+      actorUserId: req.user.id
+    });
+    const scheduledNotifications = await scheduleLaterGeneratedEventCreatedNotifications({
+      result
+    });
+
     return res.status(201).json({
       ok: true,
+      eventNotification: {
+        firstEventId: firstNotification?.event?.id || null,
+        scheduledCount: scheduledNotifications?.scheduledCount || 0
+      },
       ...result
     });
   } catch (error) {

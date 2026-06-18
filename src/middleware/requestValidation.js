@@ -1056,6 +1056,32 @@ function validateUpdateTeamMemberActivityStatus(req, res, next) {
   return next();
 }
 
+function validateAdminEmailSend(req, res, next) {
+  if (!ensureBodyObject(req, res)) {
+    return;
+  }
+
+  const allowedFields = ['template', 'eventId'];
+  const unknownFields = rejectUnknownFields(req.body, allowedFields);
+  if (unknownFields.length > 0) {
+    return badRequest(res, `Ismeretlen admin email mezok: ${unknownFields.join(', ')}`);
+  }
+
+  const template = normalizeString(req.body.template).toLowerCase();
+  if (template !== 'event_created') {
+    return badRequest(res, 'A template csak event_created lehet.');
+  }
+
+  const eventId = normalizeString(req.body.eventId);
+  if (!eventId) {
+    return badRequest(res, 'Az eventId kotelezo.');
+  }
+
+  req.body.template = template;
+  req.body.eventId = eventId;
+  return next();
+}
+
 function validateUpdateEventStatus(req, res, next) {
   if (!ensureBodyObject(req, res)) {
     return;
@@ -1086,6 +1112,7 @@ module.exports = {
   validateUpdateTeamModuleSettings,
   validateUpdateMySkills,
   validateUpdateTeamMemberActivityStatus,
+  validateAdminEmailSend,
   validateCreateInvite,
   validateCreateJoinLink,
   validateGoogleAuth,

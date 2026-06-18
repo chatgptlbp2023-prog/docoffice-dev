@@ -1934,6 +1934,98 @@ describe('Frontend auth UI smoke tests', () => {
     expect(financePanel.hidden).toBe(true);
   });
 
+  test('az admin Email küldés workspace eseményválasztót és küldés endpointot használ', async () => {
+    const { window, document, fetchMock } = await bootFrontend();
+
+    fetchMock.mockImplementation(async (url, options = {}) => {
+      const target = String(url);
+      if (target.includes('/admin-email/preview')) {
+        return createJsonResponse({
+          ok: true,
+          template: 'event_created',
+          event: {
+            id: 'event-1',
+            title: 'Keddi foci',
+            start_at: '2026-07-01T18:00:00.000Z',
+            location_name: 'Teszt palya',
+            location_address: '1111 Budapest, Teszt utca 1.',
+            status: 'published'
+          },
+          recipientSummary: {
+            recipientCount: 12,
+            excludedCount: 2,
+            excludedBreakCount: 1,
+            excludedPassiveCount: 1
+          }
+        });
+      }
+      if (target.includes('/admin-email/send')) {
+        return createJsonResponse({
+          ok: true,
+          template: 'event_created',
+          eventId: 'event-1',
+          sentCount: 12,
+          skippedCount: 2,
+          failedCount: 0,
+          preview: {
+            event: { id: 'event-1', title: 'Keddi foci', start_at: '2026-07-01T18:00:00.000Z' },
+            recipientSummary: {
+              recipientCount: 12,
+              excludedCount: 2,
+              excludedBreakCount: 1,
+              excludedPassiveCount: 1
+            }
+          }
+        });
+      }
+      return createJsonResponse({});
+    });
+
+    window.setAuth('demo-admin-token', {
+      id: 'admin-user',
+      name: 'Admin',
+      email: 'admin@example.com',
+      can_create_team: true
+    });
+    window.switchView('adminView');
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      state.adminEvents = [
+        { id: 'event-1', title: 'Keddi foci', status: 'published', start_at: '2026-07-01T18:00:00.000Z', location_name: 'Teszt palya' },
+        { id: 'event-2', title: 'Piszkozat', status: 'draft', start_at: '2026-07-08T18:00:00.000Z', location_name: 'Teszt palya' }
+      ];
+      applyRoleAwareUi();
+    `);
+
+    const emailButton = document.querySelector('[data-admin-workspace="email"]');
+    expect(emailButton).toBeTruthy();
+
+    emailButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await flushMicrotasks();
+
+    const emailPanel = document.querySelector('[data-admin-workspace-panel="email"]');
+    expect(emailPanel.hidden).toBe(false);
+    expect(emailPanel.textContent).toContain('Email kuldes');
+    expect(emailPanel.querySelector('[data-admin-email-event]').options).toHaveLength(1);
+    expect(emailPanel.textContent).toContain('12 cimzett');
+    expect(emailPanel.textContent).toContain('Passziv kizart');
+
+    emailPanel.querySelector('[data-admin-email-action="send"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+    await flushMicrotasks();
+
+    const sendCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/admin-email/send'));
+    expect(sendCall).toBeTruthy();
+    expect(JSON.parse(sendCall[1].body)).toEqual({
+      template: 'event_created',
+      eventId: 'event-1'
+    });
+    expect(emailPanel.textContent).toContain('12 elkuldve');
+  });
+
   test('a csapatkapitány eléri az elérhető tornák szűrőit és listáját', async () => {
     const { window, document } = await bootFrontend();
 
