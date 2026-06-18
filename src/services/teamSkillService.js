@@ -13,6 +13,19 @@ const DRAW_STATUS = Object.freeze({
 
 const REQUIRED_GOALKEEPERS = 2;
 const NEUTRAL_SKILL_SCORE = 5;
+const STRONG_SKILL_THRESHOLD = 8;
+const AUTO_BALANCE_EXHAUSTIVE_LIMIT = 16;
+const AUTO_BALANCE_RANDOM_TRIALS = 700;
+const DRAW_STRATEGIES = Object.freeze({
+  AUTO_BALANCED: 'auto_balanced',
+  RANDOM: 'random',
+  SUM_BALANCE: 'sum_balance',
+  COUNTER_PAIR_BALANCE: 'counter_pair_balance',
+  ROLE_BALANCE: 'role_balance',
+  OPTIMIZED: 'optimized'
+});
+
+const ALLOWED_DRAW_STRATEGIES = new Set(Object.values(DRAW_STRATEGIES));
 
 function toBoolean(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -53,6 +66,9 @@ function mapDrawMember(member) {
   return {
     member_id: member.member_id,
     user_id: member.user_id,
+    is_guest: Boolean(member.is_guest),
+    guest_registration_id: member.guest_registration_id || null,
+    host_user_id: member.host_user_id || null,
     name: member.name,
     email: member.email,
     role: member.role,
@@ -69,6 +85,36 @@ function mapDrawMember(member) {
 
 function calculateTeamTotal(team) {
   return team.reduce((sum, member) => sum + Number(member.overall_skill || 0), 0);
+}
+
+function calculateTeamProfile(team = []) {
+  return team.reduce((profile, member) => {
+    const goalkeeperScore = Number(member.goalkeeper_score || 0);
+    const defenseScore = Number(member.defense_score || 0);
+    const attackScore = Number(member.attack_score || 0);
+    const overallScore = Number(member.overall_skill || goalkeeperScore + defenseScore + attackScore);
+    const goalkeeperCandidate = Boolean(member.goalkeeper_candidate || member.is_goalkeeper);
+
+    profile.size += 1;
+    profile.goalkeeperStrength += goalkeeperCandidate ? goalkeeperScore : 0;
+    profile.defenseStrength += defenseScore;
+    profile.attackStrength += attackScore;
+    profile.overallStrength += overallScore;
+    profile.goalkeeperCount += goalkeeperCandidate ? 1 : 0;
+    profile.strongAttackers += attackScore >= STRONG_SKILL_THRESHOLD ? 1 : 0;
+    profile.strongDefenders += defenseScore >= STRONG_SKILL_THRESHOLD ? 1 : 0;
+
+    return profile;
+  }, {
+    size: 0,
+    goalkeeperStrength: 0,
+    defenseStrength: 0,
+    attackStrength: 0,
+    overallStrength: 0,
+    goalkeeperCount: 0,
+    strongAttackers: 0,
+    strongDefenders: 0
+  });
 }
 
 function calculateDifferencePercent(teamATotal, teamBTotal) {
@@ -134,8 +180,13 @@ function validateGoalkeeperRequirement(members, label) {
   return goalkeeperCount;
 }
 
-function buildBalancedTeams(members) {
+function isGoalkeeperModuleEnabled(team) {
+  return team?.goalkeeper_module_enabled !== false;
+}
+
+function buildSumBalancedTeams(members) {
   const mappedMembers = members.map(mapDrawMember);
+  const maxTeamSize = Math.ceil(mappedMembers.length / 2);
   const selectedGoalkeepers = selectGoalkeeperCandidates(mappedMembers, 'skill');
   const selectedGoalkeeperIds = new Set(selectedGoalkeepers.map(member => member.member_id));
   const remainingMembers = mappedMembers
@@ -160,7 +211,13 @@ function buildBalancedTeams(members) {
   for (const member of remainingMembers) {
     const normalizedMember = { ...member, is_goalkeeper: false };
 
-    if (teamATotal <= teamBTotal) {
+    if (teamA.length >= maxTeamSize) {
+      teamB.push(normalizedMember);
+      teamBTotal += normalizedMember.overall_skill;
+    } else if (teamB.length >= maxTeamSize) {
+      teamA.push(normalizedMember);
+      teamATotal += normalizedMember.overall_skill;
+    } else if (teamATotal <= teamBTotal) {
       teamA.push(normalizedMember);
       teamATotal += normalizedMember.overall_skill;
     } else {
@@ -175,6 +232,246 @@ function buildBalancedTeams(members) {
     teamATotal,
     teamBTotal
   };
+}
+
+function applyGoalkeeperFlags(team = []) {
+  return team.map(member => ({
+    ...member,
+    is_goalkeeper: Boolean(member.goalkeeper_candidate)
+  }));
+}
+
+function normalizeCandidateTeams(teamA, teamB) {
+  return {
+    teamA: applyGoalkeeperFlags(teamA),
+    teamB: applyGoalkeeperFlags(teamB)
+  };
+}
+
+function scoreDrawCandidate(teamA, teamB, options = {}) {
+  const { goalkeeperModuleEnabled = true } = options;
+  const profileA = calculateTeamProfile(teamA);
+  const profileB = calculateTeamProfile(teamB);
+  const sizeDiff = Math.abs(profileA.size - profileB.size);
+  const overallDiff = Math.abs(profileA.overallStrength - profileB.overallStrength);
+  const attackDiff = Math.abs(profileA.attackStrength - profileB.attackStrength);
+  const defenseDiff = Math.abs(profileA.defenseStrength - profileB.defenseStrength);
+  const goalkeeperDiff = Math.abs(profileA.goalkeeperStrength - profileB.goalkeeperStrength);
+  const strongAttackerDiff = Math.abs(profileA.strongAttackers - profileB.strongAttackers);
+  const strongDefenderDiff = Math.abs(profileA.strongDefenders - profileB.strongDefenders);
+  const counterA = profileB.defenseStrength + (profileB.goalkeeperStrength * 0.7);
+  const counterB = profileA.defenseStrength + (profileA.goalkeeperStrength * 0.7);
+  const attackOverloadA = Math.max(profileA.attackStrength - counterA, 0);
+  const attackOverloadB = Math.max(profileB.attackStrength - counterB, 0);
+  let fairnessScore = 0;
+
+  fairnessScore += sizeDiff > 1 ? 100000 : sizeDiff * 300;
+  fairnessScore += overallDiff * 2.2;
+  fairnessScore += attackDiff * 3.1;
+  fairnessScore += defenseDiff * 2.6;
+  fairnessScore += goalkeeperDiff * 1.7;
+  fairnessScore += strongAttackerDiff * 90;
+  fairnessScore += strongDefenderDiff * 35;
+  fairnessScore += Math.max(attackOverloadA - 6, 0) * 8;
+  fairnessScore += Math.max(attackOverloadB - 6, 0) * 8;
+
+  if (goalkeeperModuleEnabled) {
+    if (profileA.goalkeeperCount === 0 || profileB.goalkeeperCount === 0) {
+      fairnessScore += 60000;
+    }
+  } else if ((profileA.goalkeeperCount + profileB.goalkeeperCount) >= REQUIRED_GOALKEEPERS) {
+    if (profileA.goalkeeperCount === 0 || profileB.goalkeeperCount === 0) {
+      fairnessScore += 250;
+    }
+  }
+
+  if (profileA.strongAttackers > 1 && profileB.strongDefenders === 0 && profileB.goalkeeperCount === 0) {
+    fairnessScore += 180;
+  }
+
+  if (profileB.strongAttackers > 1 && profileA.strongDefenders === 0 && profileA.goalkeeperCount === 0) {
+    fairnessScore += 180;
+  }
+
+  return {
+    fairnessScore: Number(fairnessScore.toFixed(2)),
+    profiles: {
+      teamA: profileA,
+      teamB: profileB
+    }
+  };
+}
+
+function buildDrawExplanation({ teamA, teamB, strategy, fairnessScore }) {
+  const profileA = calculateTeamProfile(teamA);
+  const profileB = calculateTeamProfile(teamB);
+  const overallDiffPercent = calculateDifferencePercent(profileA.overallStrength, profileB.overallStrength);
+  const attackDiff = Math.abs(profileA.attackStrength - profileB.attackStrength);
+  const defenseDiff = Math.abs(profileA.defenseStrength - profileB.defenseStrength);
+  const goalkeeperSeparated = profileA.goalkeeperCount > 0 && profileB.goalkeeperCount > 0;
+  const bullets = [];
+
+  if (strategy === DRAW_STRATEGIES.RANDOM) {
+    bullets.push('A skill modul ki van kapcsolva, ezért gyors random leosztás készült.');
+  } else {
+    bullets.push(`A két csapat összereje ${overallDiffPercent}%-on belül van.`);
+    bullets.push(attackDiff <= 3
+      ? 'A támadóerő közel azonos.'
+      : 'A támadóerőt védő- és kapuserővel ellensúlyoztam.');
+    bullets.push(defenseDiff <= 3
+      ? 'A védekező erő kiegyensúlyozott.'
+      : 'A védekező különbséget összerőben kompenzáltam.');
+
+    if (Math.abs(profileA.strongAttackers - profileB.strongAttackers) === 0 && (profileA.strongAttackers + profileB.strongAttackers) > 1) {
+      bullets.push('A legerősebb támadók nem kerültek egy oldalra.');
+    }
+
+    if (goalkeeperSeparated) {
+      bullets.push('A kapusjelöltek külön csapatba kerültek.');
+    }
+  }
+
+  return {
+    summary: strategy === DRAW_STRATEGIES.RANDOM
+      ? 'Gyors random leosztás készült.'
+      : 'Automatikusan kiegyensúlyozott leosztás készült.',
+    bullets: bullets.slice(0, 4),
+    profiles: {
+      teamA: {
+        overallStrength: profileA.overallStrength,
+        defenseStrength: profileA.defenseStrength,
+        attackStrength: profileA.attackStrength,
+        goalkeeperStrength: profileA.goalkeeperStrength
+      },
+      teamB: {
+        overallStrength: profileB.overallStrength,
+        defenseStrength: profileB.defenseStrength,
+        attackStrength: profileB.attackStrength,
+        goalkeeperStrength: profileB.goalkeeperStrength
+      }
+    },
+    fairnessScore
+  };
+}
+
+function buildCombinationCandidates(items, pickSize, onCandidate) {
+  const selectedIndexes = [];
+
+  function visit(startIndex) {
+    if (selectedIndexes.length === pickSize) {
+      onCandidate(new Set(selectedIndexes));
+      return;
+    }
+
+    const remainingNeeded = pickSize - selectedIndexes.length;
+    for (let index = startIndex; index <= items.length - remainingNeeded; index += 1) {
+      selectedIndexes.push(index);
+      visit(index + 1);
+      selectedIndexes.pop();
+    }
+  }
+
+  visit(0);
+}
+
+function evaluateAutoCandidate(teamA, teamB, options, bestCandidate) {
+  const normalized = normalizeCandidateTeams(teamA, teamB);
+  const score = scoreDrawCandidate(normalized.teamA, normalized.teamB, options);
+
+  if (!bestCandidate || score.fairnessScore < bestCandidate.fairnessScore) {
+    return {
+      ...normalized,
+      fairnessScore: score.fairnessScore,
+      profiles: score.profiles
+    };
+  }
+
+  return bestCandidate;
+}
+
+function buildAutoBalancedTeams(members, options = {}) {
+  const mappedMembers = members.map(mapDrawMember);
+  const memberCount = mappedMembers.length;
+  const targetSizes = Array.from(new Set([
+    Math.floor(memberCount / 2),
+    Math.ceil(memberCount / 2)
+  ])).filter(size => size > 0 && size < memberCount);
+  let bestCandidate = null;
+
+  try {
+    if (memberCount <= AUTO_BALANCE_EXHAUSTIVE_LIMIT) {
+      for (const targetSize of targetSizes) {
+        buildCombinationCandidates(mappedMembers, targetSize, teamAIndexes => {
+          const teamA = [];
+          const teamB = [];
+
+          mappedMembers.forEach((member, index) => {
+            if (teamAIndexes.has(index)) {
+              teamA.push(member);
+            } else {
+              teamB.push(member);
+            }
+          });
+
+          bestCandidate = evaluateAutoCandidate(teamA, teamB, options, bestCandidate);
+        });
+      }
+    } else {
+      for (let trial = 0; trial < AUTO_BALANCE_RANDOM_TRIALS; trial += 1) {
+        const shuffled = shuffleMembers(mappedMembers);
+        const targetSize = targetSizes[trial % targetSizes.length] || Math.ceil(memberCount / 2);
+        bestCandidate = evaluateAutoCandidate(
+          shuffled.slice(0, targetSize),
+          shuffled.slice(targetSize),
+          options,
+          bestCandidate
+        );
+      }
+    }
+
+    const sumBalanced = buildSumBalancedTeams(members);
+    bestCandidate = evaluateAutoCandidate(sumBalanced.teamA, sumBalanced.teamB, options, bestCandidate);
+
+    if (!bestCandidate) {
+      return {
+        ...sumBalanced,
+        explanation: buildDrawExplanation({
+          teamA: sumBalanced.teamA,
+          teamB: sumBalanced.teamB,
+          strategy: DRAW_STRATEGIES.SUM_BALANCE,
+          fairnessScore: 0
+        }),
+        fallbackUsed: true
+      };
+    }
+
+    return {
+      teamA: bestCandidate.teamA,
+      teamB: bestCandidate.teamB,
+      teamATotal: calculateTeamTotal(bestCandidate.teamA),
+      teamBTotal: calculateTeamTotal(bestCandidate.teamB),
+      explanation: buildDrawExplanation({
+        teamA: bestCandidate.teamA,
+        teamB: bestCandidate.teamB,
+        strategy: DRAW_STRATEGIES.AUTO_BALANCED,
+        fairnessScore: bestCandidate.fairnessScore
+      }),
+      fallbackUsed: false
+    };
+  } catch (error) {
+    const fallback = buildSumBalancedTeams(members);
+
+    return {
+      ...fallback,
+      explanation: buildDrawExplanation({
+        teamA: fallback.teamA,
+        teamB: fallback.teamB,
+        strategy: DRAW_STRATEGIES.SUM_BALANCE,
+        fairnessScore: scoreDrawCandidate(fallback.teamA, fallback.teamB, options).fairnessScore
+      }),
+      fallbackUsed: true
+    };
+  }
 }
 
 function buildRandomTeams(members) {
@@ -217,12 +514,15 @@ function buildRandomTeams(members) {
 function normalizeSavedDrawRow(row) {
   if (!row) return null;
 
+  const settings = row.settings_json || {};
+
   return {
     event_id: row.event_id,
     teamA: row.team_a_json || [],
     teamB: row.team_b_json || [],
     totals: row.totals_json || {},
-    settings: row.settings_json || {},
+    settings,
+    explanation: settings.explanation || null,
     withinTolerance: Boolean(row.within_tolerance),
     status: row.status || DRAW_STATUS.SAVED,
     published_at: row.published_at,
@@ -253,7 +553,13 @@ function normalizeProvidedEventDraw(draw, eventId) {
     teamA,
     teamB,
     totals: draw.totals && typeof draw.totals === 'object' ? draw.totals : {},
-    settings: draw.settings && typeof draw.settings === 'object' ? draw.settings : {},
+    settings: draw.settings && typeof draw.settings === 'object'
+      ? {
+          ...draw.settings,
+          ...(draw.explanation && typeof draw.explanation === 'object' ? { explanation: draw.explanation } : {})
+        }
+      : (draw.explanation && typeof draw.explanation === 'object' ? { explanation: draw.explanation } : {}),
+    explanation: draw.explanation && typeof draw.explanation === 'object' ? draw.explanation : null,
     withinTolerance: Boolean(draw.withinTolerance)
   };
 }
@@ -285,33 +591,62 @@ async function getEventById(eventId) {
 async function getEventDrawMembers(eventId, { respectSkillEnabled = true } = {}) {
   const result = await pool.query(
     `
-    select
-      tm.id as member_id,
-      tm.team_id,
-      tm.user_id,
-      tm.role,
-      tm.membership_status,
-      tm.skills_enabled,
-      tm.primary_position,
-      tm.is_goalkeeper,
-      tm.goalkeeper_score,
-      tm.defense_score,
-      tm.attack_score,
-      u.name,
-      u.email
-    from event_registrations er
-    join team_members tm
-      on tm.user_id = er.user_id
-     and tm.team_id = er.team_id
-    join users u
-      on u.id = tm.user_id
-    where er.event_id = $1
-      and er.registration_status = 'going'
-      and tm.membership_status = 'active'
-      and ($2::boolean = false or tm.skills_enabled = true)
-    order by u.name asc
+    select *
+    from (
+      select
+        tm.id::text as member_id,
+        tm.team_id,
+        tm.user_id,
+        false as is_guest,
+        null::uuid as guest_registration_id,
+        null::uuid as host_user_id,
+        tm.role,
+        tm.membership_status,
+        tm.skills_enabled,
+        tm.primary_position,
+        tm.is_goalkeeper,
+        tm.goalkeeper_score,
+        tm.defense_score,
+        tm.attack_score,
+        u.name,
+        u.email
+      from event_registrations er
+      join team_members tm
+        on tm.user_id = er.user_id
+       and tm.team_id = er.team_id
+      join users u
+        on u.id = tm.user_id
+      where er.event_id = $1
+        and er.registration_status = 'going'
+        and tm.membership_status = 'active'
+        and ($2::boolean = false or tm.skills_enabled = true)
+
+      union all
+
+      select
+        ('guest:' || egr.id::text) as member_id,
+        egr.team_id,
+        null::uuid as user_id,
+        true as is_guest,
+        egr.id as guest_registration_id,
+        egr.host_user_id,
+        'guest' as role,
+        'active' as membership_status,
+        true as skills_enabled,
+        null::text as primary_position,
+        false as is_goalkeeper,
+        $3::int as goalkeeper_score,
+        $3::int as defense_score,
+        $3::int as attack_score,
+        egr.guest_name as name,
+        null::text as email
+      from event_guest_registrations egr
+      where egr.event_id = $1
+        and egr.registration_status = 'going'
+    ) draw_members
+    order by name asc
     `,
-    [eventId, respectSkillEnabled]
+    [eventId, respectSkillEnabled, NEUTRAL_SKILL_SCORE]
   );
 
   return result.rows;
@@ -323,6 +658,8 @@ async function assertTeamExists(teamId) {
     select id, name, status,
            skill_balancing_enabled,
            skill_balance_tolerance_percent,
+           draw_strategy,
+           goalkeeper_module_enabled,
            rank_module_enabled
     from teams
     where id = $1
@@ -346,6 +683,8 @@ async function getSkillSettings(teamId) {
       team_id: team.id,
       skill_balancing_enabled: team.skill_balancing_enabled,
       skill_balance_tolerance_percent: team.skill_balance_tolerance_percent,
+      draw_strategy: resolveDrawStrategy(team),
+      goalkeeper_module_enabled: isGoalkeeperModuleEnabled(team),
       rank_module_enabled: team.rank_module_enabled,
       required_goalkeepers: REQUIRED_GOALKEEPERS
     }
@@ -353,22 +692,57 @@ async function getSkillSettings(teamId) {
 }
 
 function resolveDrawMode(team) {
-  if (team?.skill_balancing_enabled === false) {
+  if (resolveDrawStrategy(team) === DRAW_STRATEGIES.RANDOM) {
     return 'random';
   }
 
   return 'skill';
 }
 
-function buildDrawResult({ members, mode, tolerance }) {
-  const isRandomMode = mode === 'random';
-  const { teamA, teamB, teamATotal, teamBTotal } = isRandomMode
-    ? buildRandomTeams(members)
-    : buildBalancedTeams(members);
+function resolveDrawStrategy(team, requestedStrategy = null) {
+  if (team?.skill_balancing_enabled === false) {
+    return DRAW_STRATEGIES.RANDOM;
+  }
+
+  const requested = String(requestedStrategy || '').trim();
+  if (ALLOWED_DRAW_STRATEGIES.has(requested)) {
+    return requested;
+  }
+
+  const rawStrategy = String(team?.draw_strategy || '').trim();
+  if (ALLOWED_DRAW_STRATEGIES.has(rawStrategy)) {
+    return rawStrategy;
+  }
+
+  return DRAW_STRATEGIES.AUTO_BALANCED;
+}
+
+function buildDrawResult({ members, mode, strategy, tolerance, goalkeeperModuleEnabled = true }) {
+  const effectiveStrategy = strategy || (mode === 'random' ? DRAW_STRATEGIES.RANDOM : DRAW_STRATEGIES.AUTO_BALANCED);
+  const isRandomMode = mode === 'random' || effectiveStrategy === DRAW_STRATEGIES.RANDOM;
+  let drawTeams;
+
+  if (isRandomMode) {
+    drawTeams = buildRandomTeams(members);
+  } else if (effectiveStrategy === DRAW_STRATEGIES.SUM_BALANCE) {
+    drawTeams = buildSumBalancedTeams(members);
+  } else {
+    drawTeams = buildAutoBalancedTeams(members, { goalkeeperModuleEnabled });
+  }
+
+  const { teamA, teamB, teamATotal, teamBTotal } = drawTeams;
 
   const difference = Math.abs(teamATotal - teamBTotal);
   const differencePercent = calculateDifferencePercent(teamATotal, teamBTotal);
   const withinTolerance = isRandomMode ? true : differencePercent <= tolerance;
+  const fairnessScore = drawTeams.explanation?.fairnessScore
+    ?? scoreDrawCandidate(teamA, teamB, { goalkeeperModuleEnabled }).fairnessScore;
+  const explanation = drawTeams.explanation || buildDrawExplanation({
+    teamA,
+    teamB,
+    strategy: effectiveStrategy,
+    fairnessScore
+  });
 
   return {
     teamA,
@@ -377,11 +751,14 @@ function buildDrawResult({ members, mode, tolerance }) {
     teamBTotal,
     difference,
     differencePercent,
-    withinTolerance
+    withinTolerance,
+    strategy: effectiveStrategy,
+    explanation,
+    fallbackUsed: Boolean(drawTeams.fallbackUsed)
   };
 }
 
-async function updateSkillSettings({ teamId, skillBalancingEnabled, skillBalanceTolerancePercent, rankModuleEnabled }) {
+async function updateSkillSettings({ teamId, skillBalancingEnabled, skillBalanceTolerancePercent, goalkeeperModuleEnabled, rankModuleEnabled }) {
   const team = await assertTeamExists(teamId);
 
   const enabled =
@@ -396,6 +773,10 @@ async function updateSkillSettings({ teamId, skillBalancingEnabled, skillBalance
     rankModuleEnabled == null
       ? Boolean(team.rank_module_enabled)
       : toBoolean(rankModuleEnabled, false);
+  const goalkeeperEnabled =
+    goalkeeperModuleEnabled == null
+      ? isGoalkeeperModuleEnabled(team)
+      : toBoolean(goalkeeperModuleEnabled, true);
 
   const updateResult = await pool.query(
     `
@@ -403,11 +784,12 @@ async function updateSkillSettings({ teamId, skillBalancingEnabled, skillBalance
     set skill_balancing_enabled = $2,
         skill_balance_tolerance_percent = $3,
         rank_module_enabled = $4,
+        goalkeeper_module_enabled = $5,
         updated_at = now()
     where id = $1
-    returning id, skill_balancing_enabled, skill_balance_tolerance_percent, rank_module_enabled
+    returning id, skill_balancing_enabled, skill_balance_tolerance_percent, draw_strategy, goalkeeper_module_enabled, rank_module_enabled
     `,
-    [teamId, enabled, tolerance, rankEnabled]
+    [teamId, enabled, tolerance, rankEnabled, goalkeeperEnabled]
   );
 
   return {
@@ -416,6 +798,8 @@ async function updateSkillSettings({ teamId, skillBalancingEnabled, skillBalance
       team_id: updateResult.rows[0].id,
       skill_balancing_enabled: updateResult.rows[0].skill_balancing_enabled,
       skill_balance_tolerance_percent: updateResult.rows[0].skill_balance_tolerance_percent,
+      draw_strategy: resolveDrawStrategy(updateResult.rows[0]),
+      goalkeeper_module_enabled: updateResult.rows[0].goalkeeper_module_enabled,
       rank_module_enabled: updateResult.rows[0].rank_module_enabled,
       required_goalkeepers: REQUIRED_GOALKEEPERS
     }
@@ -567,6 +951,118 @@ async function updateMemberSkills({ teamId, memberId, skillsEnabled, goalkeeperS
   };
 }
 
+async function updateMySkills({ teamId, userId, goalkeeperSkill, defenseSkill, attackSkill, isGoalkeeper }) {
+  const team = await assertTeamExists(teamId);
+
+  if (team.skill_balancing_enabled === false) {
+    throw new AppError(400, 'A skill modul ennél a csapatnál nincs bekapcsolva.');
+  }
+
+  return withTransaction(async client => {
+    const memberResult = await client.query(
+      `
+      select
+        tm.id,
+        tm.team_id,
+        tm.user_id,
+        tm.role,
+        tm.membership_status,
+        tm.skills_enabled,
+        tm.is_goalkeeper,
+        tm.goalkeeper_score,
+        tm.defense_score,
+        tm.attack_score,
+        u.name,
+        u.email
+      from team_members tm
+      join users u on u.id = tm.user_id
+      where tm.team_id = $1
+        and tm.user_id = $2
+        and tm.membership_status = 'active'
+      for update
+      `,
+      [teamId, userId]
+    );
+
+    if (memberResult.rows.length === 0) {
+      throw new AppError(404, 'Nincs aktív tagságod ebben a csapatban.');
+    }
+
+    const member = memberResult.rows[0];
+    const nextGoalkeeper = parseScore(goalkeeperSkill ?? member.goalkeeper_score ?? 0, 'A kapus skill');
+    const nextDefense = parseScore(defenseSkill ?? member.defense_score ?? NEUTRAL_SKILL_SCORE, 'A védő skill');
+    const nextAttack = parseScore(attackSkill ?? member.attack_score ?? NEUTRAL_SKILL_SCORE, 'A támadó skill');
+    const nextIsGoalkeeper = toBoolean(isGoalkeeper, Boolean(member.is_goalkeeper));
+
+    const updateResult = await client.query(
+      `
+      update team_members
+      set is_goalkeeper = $3,
+          goalkeeper_score = $4,
+          defense_score = $5,
+          attack_score = $6,
+          updated_at = now()
+      where id = $1
+        and team_id = $2
+      returning id, team_id, user_id, role, membership_status,
+                skills_enabled, is_goalkeeper, goalkeeper_score, defense_score, attack_score
+      `,
+      [member.id, teamId, nextIsGoalkeeper, nextGoalkeeper, nextDefense, nextAttack]
+    );
+
+    const updated = updateResult.rows[0];
+
+    const affectedEventResult = await client.query(
+      `
+      select distinct er.event_id
+      from event_registrations er
+      join event_team_draws etd on etd.event_id = er.event_id
+      where er.team_id = $1
+        and er.user_id = $2
+        and er.registration_status = 'going'
+        and etd.status = $3
+      `,
+      [teamId, updated.user_id, DRAW_STATUS.PUBLISHED]
+    );
+
+    const staleEventIds = [];
+    for (const row of affectedEventResult.rows) {
+      const staleResult = await markPublishedEventDrawStale({
+        eventId: row.event_id,
+        client
+      });
+
+      if (staleResult.changed) {
+        staleEventIds.push(row.event_id);
+      }
+    }
+
+    return {
+      message: staleEventIds.length > 0
+        ? 'Saját skill értékeid mentve. A kapcsolódó, korábban kihirdetett csapatleosztás elavult állapotba került.'
+        : 'Saját skill értékeid mentve.',
+      member: {
+        member_id: updated.id,
+        team_id: updated.team_id,
+        user_id: updated.user_id,
+        name: member.name,
+        email: member.email,
+        role: updated.role,
+        membership_status: updated.membership_status,
+        skills_enabled: updated.skills_enabled,
+        is_goalkeeper: updated.is_goalkeeper,
+        goalkeeper_score: updated.goalkeeper_score,
+        defense_score: updated.defense_score,
+        attack_score: updated.attack_score,
+        goalkeeper_skill: updated.goalkeeper_score,
+        defense_skill: updated.defense_score,
+        attack_skill: updated.attack_score
+      },
+      staleEventIds
+    };
+  });
+}
+
 async function updateMemberGoalkeeperRole({ teamId, memberId, isGoalkeeper }) {
   await assertTeamExists(teamId);
 
@@ -675,8 +1171,9 @@ async function updateMemberGoalkeeperRole({ teamId, memberId, isGoalkeeper }) {
   });
 }
 
-async function previewBalancedTeams({ teamId }) {
+async function previewBalancedTeams({ teamId, strategy = null }) {
   const team = await assertTeamExists(teamId);
+  const drawStrategy = resolveDrawStrategy(team, strategy);
   const drawMode = resolveDrawMode(team);
   const respectSkillEnabled = drawMode === 'skill';
 
@@ -717,14 +1214,19 @@ async function previewBalancedTeams({ teamId }) {
     );
   }
 
-  validateGoalkeeperRequirement(members, drawMode === 'skill'
+  if (isGoalkeeperModuleEnabled(team)) {
+    validateGoalkeeperRequirement(members, drawMode === 'skill'
     ? 'A skill alapú csapatsorsoláshoz.'
     : 'A random csapatsorsoláshoz.');
+
+  }
 
   const tolerance = Number(team.skill_balance_tolerance_percent ?? 15);
   const drawResult = buildDrawResult({
     members,
     mode: drawMode,
+    strategy: drawStrategy,
+    goalkeeperModuleEnabled: isGoalkeeperModuleEnabled(team),
     tolerance
   });
 
@@ -747,17 +1249,22 @@ async function previewBalancedTeams({ teamId }) {
       settings: {
         skillBalancingEnabled: Boolean(team.skill_balancing_enabled),
         skillBalanceTolerancePercent: tolerance,
+        strategy: drawResult.strategy,
+        fallbackUsed: drawResult.fallbackUsed,
+        goalkeeperModuleEnabled: isGoalkeeperModuleEnabled(team),
         generationMode: drawMode,
         requiredGoalkeepers: REQUIRED_GOALKEEPERS
       },
+      explanation: drawResult.explanation,
       withinTolerance: drawResult.withinTolerance
     }
   };
 }
 
-async function previewEventBalancedTeams({ eventId }) {
+async function previewEventBalancedTeams({ eventId, strategy = null }) {
   const event = await getEventById(eventId);
   const team = await assertTeamExists(event.team_id);
+  const drawStrategy = resolveDrawStrategy(team, strategy);
   const drawMode = resolveDrawMode(team);
   const members = await getEventDrawMembers(eventId, {
     respectSkillEnabled: drawMode === 'skill'
@@ -772,14 +1279,19 @@ async function previewEventBalancedTeams({ eventId }) {
     );
   }
 
-  validateGoalkeeperRequirement(members, drawMode === 'skill'
+  if (isGoalkeeperModuleEnabled(team)) {
+    validateGoalkeeperRequirement(members, drawMode === 'skill'
     ? 'Az esemény skill alapú csapatleosztásához.'
     : 'Az esemény random csapatleosztásához.');
+
+  }
 
   const tolerance = Number(team.skill_balance_tolerance_percent ?? 15);
   const drawResult = buildDrawResult({
     members,
     mode: drawMode,
+    strategy: drawStrategy,
+    goalkeeperModuleEnabled: isGoalkeeperModuleEnabled(team),
     tolerance
   });
 
@@ -804,9 +1316,13 @@ async function previewEventBalancedTeams({ eventId }) {
       settings: {
         skillBalancingEnabled: Boolean(team.skill_balancing_enabled),
         skillBalanceTolerancePercent: tolerance,
+        strategy: drawResult.strategy,
+        fallbackUsed: drawResult.fallbackUsed,
+        goalkeeperModuleEnabled: isGoalkeeperModuleEnabled(team),
         generationMode: drawMode,
         requiredGoalkeepers: REQUIRED_GOALKEEPERS
       },
+      explanation: drawResult.explanation,
       withinTolerance: drawResult.withinTolerance,
       status: 'preview',
       persisted: false
@@ -880,6 +1396,12 @@ async function saveEventTeamDraw({ eventId, userId, draw }) {
 
     const normalizedProvidedDraw = normalizeProvidedEventDraw(draw, eventId);
     const persistedDraw = normalizedProvidedDraw || (await previewEventBalancedTeams({ eventId })).draw;
+    const persistedSettings = {
+      ...(persistedDraw.settings || {}),
+      ...(persistedDraw.explanation && typeof persistedDraw.explanation === 'object'
+        ? { explanation: persistedDraw.explanation }
+        : {})
+    };
 
     const result = await client.query(
       `
@@ -930,7 +1452,7 @@ async function saveEventTeamDraw({ eventId, userId, draw }) {
         JSON.stringify(persistedDraw.teamA || []),
         JSON.stringify(persistedDraw.teamB || []),
         JSON.stringify(persistedDraw.totals || {}),
-        JSON.stringify(persistedDraw.settings || {}),
+        JSON.stringify(persistedSettings),
         Boolean(persistedDraw.withinTolerance),
         DRAW_STATUS.SAVED,
         userId
@@ -979,10 +1501,12 @@ async function publishEventTeamDraw({ eventId }) {
     const currentMembers = await getEventDrawMembers(eventId, {
       respectSkillEnabled: drawMode === 'skill'
     });
-    validateGoalkeeperRequirement(
-      currentMembers,
-      'A kihirdetéshez.'
-    );
+    if (isGoalkeeperModuleEnabled(team)) {
+      validateGoalkeeperRequirement(
+        currentMembers,
+        'A kihirdetéshez.'
+      );
+    }
 
     const result = await client.query(
       `
@@ -1020,6 +1544,7 @@ module.exports = {
   updateSkillSettings,
   updateMemberRank,
   updateMemberSkills,
+  updateMySkills,
   updateMemberGoalkeeperRole,
   previewBalancedTeams,
   previewEventBalancedTeams,

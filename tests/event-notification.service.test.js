@@ -75,6 +75,7 @@ describe('Event notification service', () => {
     const runId = randomUUID();
     const adminId = await createUser('Captain', `captain_${runId}@example.com`);
     const memberId = await createUser('Member', `member_${runId}@example.com`);
+    const duplicateEmailMemberId = await createUser('Duplicate Email', `CAPTAIN_${runId}@example.com`);
     const teamId = randomUUID();
     const eventId = randomUUID();
     created.teams.push(teamId);
@@ -90,6 +91,7 @@ describe('Event notification service', () => {
 
     await addMembership(teamId, adminId, 'team_admin');
     await addMembership(teamId, memberId, 'member');
+    await addMembership(teamId, duplicateEmailMemberId, 'member');
 
     await pool.query(
       `
@@ -120,15 +122,23 @@ describe('Event notification service', () => {
       actorUserId: adminId
     });
 
-    expect(result.sentCount).toBe(1);
-    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(result.sentCount).toBe(2);
+    expect(sendEmail).toHaveBeenCalledTimes(2);
 
-    const payload = sendEmail.mock.calls[0][0];
-    expect(payload.to).toBe(`member_${runId}@example.com`);
+    const payloads = sendEmail.mock.calls.map(call => call[0]);
+    const recipients = payloads.map(payload => payload.to).sort();
+    expect(recipients).toEqual([
+      `captain_${runId}@example.com`,
+      `member_${runId}@example.com`
+    ].sort());
+
+    const payload = payloads.find(item => item.to === `captain_${runId}@example.com`);
     expect(payload.html).toContain('Jelentkezem');
     expect(payload.html).toContain('Kihagyom');
     expect(payload.html).toContain('Belepes a feluletre');
     expect(payload.html).toContain('Esemeny megnyitasa');
+    expect(payload.html).toContain('Szabin vagyok (1 hét)');
+    expect(payload.html).toContain('1 hétig nem kapsz értesítéseket az eseményekről. Ha a csapatodban aktív a rangmodul, akkor nem veszítesz pozíciót.');
     expect(payload.html).toContain('Milyen palya');
     expect(payload.html).toContain('Mennyi penz');
     expect(payload.html).toContain('2026. 06. 12. 20:30');
@@ -137,6 +147,209 @@ describe('Event notification service', () => {
     expect(payload.html).toContain('https://app.example.com/api/event-email-actions/');
     expect(payload.text).toContain('Belepes a feluletre: https://app.example.com/');
     expect(payload.text).toContain('Jelentkezem: https://app.example.com/api/event-email-actions/');
+    expect(payload.text).toContain('Szabin vagyok (1 hét): https://app.example.com/api/event-email-actions/');
+  });
+
+  test('uj esemeny email nem megy ki szabadsagon levo csapattagnak', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_break_${runId}@example.com`);
+    const memberId = await createUser('Member', `member_break_${runId}@example.com`);
+    const breakMemberId = await createUser('Break Member', `break_member_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Szabi FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, memberId, 'member');
+    await addMembership(teamId, breakMemberId, 'member');
+
+    await pool.query(
+      `
+      update team_members
+      set break_started_at = now() - interval '1 day',
+          break_until = now() + interval '6 days',
+          break_extensions_count = 1
+      where team_id = $1
+        and user_id = $2
+      `,
+      [teamId, breakMemberId]
+    );
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Szabis meccs', 'Szabi email teszt', now() + interval '2 days', 'Szabi palya', '1111 Budapest, Szabi utca 1.', 5, 12, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyTeamOnCreate":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    const result = await eventNotificationService.notifyEventCreated({
+      eventId,
+      actorUserId: adminId
+    });
+
+    expect(result.sentCount).toBe(2);
+    const recipients = sendEmail.mock.calls.map(call => call[0].to).sort();
+    expect(recipients).toEqual([
+      `captain_break_${runId}@example.com`,
+      `member_break_${runId}@example.com`
+    ].sort());
+    expect(recipients).not.toContain(`break_member_${runId}@example.com`);
+  });
+
+  test('uj esemeny email nem megy ki passziv csapattagnak', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_passive_${runId}@example.com`);
+    const memberId = await createUser('Member', `member_passive_${runId}@example.com`);
+    const passiveMemberId = await createUser('Passive Member', `passive_member_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Passziv FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, memberId, 'member');
+    await addMembership(teamId, passiveMemberId, 'member');
+
+    await pool.query(
+      `
+      update team_members
+      set passive_since = now() - interval '1 day',
+          passive_reason = 'test_passive'
+      where team_id = $1
+        and user_id = $2
+      `,
+      [teamId, passiveMemberId]
+    );
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Passziv szures meccs', 'Passziv email teszt', now() + interval '2 days', 'Passziv palya', '1111 Budapest, Passziv utca 1.', 5, 12, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyTeamOnCreate":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    const result = await eventNotificationService.notifyEventCreated({
+      eventId,
+      actorUserId: adminId
+    });
+
+    expect(result.sentCount).toBe(2);
+    const recipients = sendEmail.mock.calls.map(call => call[0].to).sort();
+    expect(recipients).toEqual([
+      `captain_passive_${runId}@example.com`,
+      `member_passive_${runId}@example.com`
+    ].sort());
+    expect(recipients).not.toContain(`passive_member_${runId}@example.com`);
+  });
+
+  test('uj esemeny email draft vagy kikapcsolt notifyTeamOnCreate mellett nem megy ki', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_disabled_${runId}@example.com`);
+    const memberId = await createUser('Member', `member_disabled_${runId}@example.com`);
+    const teamId = randomUUID();
+    const draftEventId = randomUUID();
+    const disabledEventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(draftEventId, disabledEventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Csendes FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, memberId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values
+        ($1, $3, $4, 'Draft meccs', 'Draft email teszt', now() + interval '1 day', 'Draft palya', '1111 Budapest, Draft utca 1.', 5, 12, 'draft', null, now(), now()),
+        ($2, $3, $4, 'Csendes meccs', 'Notify off teszt', now() + interval '2 days', 'Csendes palya', '1111 Budapest, Csendes utca 1.', 5, 12, 'published', now(), now(), now())
+      `,
+      [draftEventId, disabledEventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyTeamOnCreate":false}'::jsonb
+      )
+      `,
+      [randomUUID(), disabledEventId]
+    );
+
+    const draftResult = await eventNotificationService.notifyEventCreated({
+      eventId: draftEventId,
+      actorUserId: adminId
+    });
+    const disabledResult = await eventNotificationService.notifyEventCreated({
+      eventId: disabledEventId,
+      actorUserId: adminId
+    });
+
+    expect(draftResult).toBeNull();
+    expect(disabledResult).toBeNull();
+    expect(sendEmail).not.toHaveBeenCalled();
   });
 
   test('ujonnan csatlakozo tag catch-up emailt kap a kozelgo esemenyekrol', async () => {

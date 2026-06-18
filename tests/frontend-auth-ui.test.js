@@ -1062,7 +1062,7 @@ describe('Frontend auth UI smoke tests', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', admin_guide_module_enabled: true };
       state.teamMembers = [
         { user_id: 'admin-1', name: 'Captain', membership_status: 'active', is_goalkeeper: true },
         { user_id: 'user-2', name: 'Player', membership_status: 'active', is_goalkeeper: false }
@@ -1085,7 +1085,7 @@ describe('Frontend auth UI smoke tests', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', admin_guide_module_enabled: true };
       state.teamMembers = [
         { user_id: 'admin-1', name: 'Captain', membership_status: 'active', is_goalkeeper: true },
         { user_id: 'user-2', name: 'Kapus 2', membership_status: 'active', is_goalkeeper: true },
@@ -2031,15 +2031,18 @@ describe('Frontend auth UI smoke tests', () => {
         rules_version: 2,
         module_settings: {
           skill: { enabled: true, tolerance_percent: 15 },
+          goalkeeper: { enabled: true },
           rank: { enabled: true },
           rules: { enabled: true, version: 2, has_text: true },
           finance: { enabled: false },
-          discipline: { enabled: false }
+          discipline: { enabled: false },
+          adminGuide: { enabled: false }
         }
       };
       state.teamSkillSettings = {
         skill_balancing_enabled: true,
         skill_balance_tolerance_percent: 15,
+        goalkeeper_module_enabled: true,
         rank_module_enabled: true
       };
       renderTeamSummary(state.currentTeam);
@@ -2050,9 +2053,142 @@ describe('Frontend auth UI smoke tests', () => {
     expect(customizationPanel.hidden).toBe(false);
     expect(customizationPanel.textContent).toContain('Modulok áttekintése');
     expect(customizationPanel.textContent).toContain('Skill modul');
+    expect(customizationPanel.textContent).toContain('Kapus modul');
     expect(customizationPanel.textContent).toContain('Rangmodul');
+    expect(customizationPanel.textContent).toContain('Admin iránytű');
     expect(customizationPanel.textContent).toContain('SZABÁLYZAT MODUL ON');
     expect(document.getElementById('teamAdvancedContent').textContent).toContain('A modulkapcsolók átkerültek');
+  });
+
+  test('az admin iránytű modul OFF állapotban rejti, ON állapotban visszahozza a csapatadmin guide blokkokat', async () => {
+    const { window, document } = await bootFrontend();
+
+    window.eval(`
+      state.currentTeamId = 'team-1';
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Teszt FC',
+        admin_guide_module_enabled: false,
+        module_settings: {
+          skill: { enabled: true, tolerance_percent: 15 },
+          goalkeeper: { enabled: true },
+          rank: { enabled: false },
+          rules: { enabled: false, version: 1, has_text: false },
+          finance: { enabled: false },
+          discipline: { enabled: false },
+          adminGuide: { enabled: false }
+        }
+      };
+      state.teamSkillSettings = {
+        skill_balancing_enabled: true,
+        skill_balance_tolerance_percent: 15,
+        goalkeeper_module_enabled: true,
+        rank_module_enabled: false
+      };
+      state.teamMembers = [];
+      state.teamInvites = [];
+      state.adminEvents = [];
+      renderTeamSummary(state.currentTeam);
+    `);
+
+    expect(document.getElementById('teamSummary').textContent).not.toContain('Most ezzel foglalkozz');
+    expect(document.getElementById('teamSummary').textContent).not.toContain('Itt tart a csapat');
+    expect(document.getElementById('teamSummary').textContent).not.toContain('Polcra tett csapatfolyamat');
+    expect(document.getElementById('teamModuleSettingsContent').textContent).toContain('Admin iránytű');
+    expect(document.querySelector('[data-admin-guide-module-enabled]').checked).toBe(false);
+
+    window.eval(`
+      syncCurrentTeamModuleState({ adminGuideModuleEnabled: true });
+      renderTeamSummary(state.currentTeam);
+    `);
+
+    expect(document.getElementById('teamSummary').textContent).toContain('Most ezzel foglalkozz');
+    expect(document.getElementById('teamSummary').textContent).toContain('Itt tart a csapat');
+    expect(document.getElementById('teamSummary').textContent).toContain('Polcra tett csapatfolyamat');
+    expect(document.querySelector('[data-admin-guide-module-enabled]').checked).toBe(true);
+  });
+
+  test('a user saját skill blokk csak Skill modul ON mellett látszik és saját endpointot hív', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      if (String(url).includes('/teams/team-1/me/skills')) {
+        return createJsonResponse({
+          message: 'Saját skill értékeid mentve.',
+          member: {
+            member_id: 'member-1',
+            team_id: 'team-1',
+            user_id: 'user-1',
+            name: 'Játékos',
+            membership_status: 'active',
+            role: 'member',
+            is_goalkeeper: true,
+            goalkeeper_score: 6,
+            defense_score: 7,
+            attack_score: 8
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'token';
+      state.user = { id: 'user-1', name: 'Játékos' };
+      state.currentTeamId = 'team-1';
+      state.currentTeam = {
+        id: 'team-1',
+        name: 'Teszt FC',
+        module_settings: {
+          skill: { enabled: true, tolerance_percent: 15 },
+          goalkeeper: { enabled: true }
+        }
+      };
+      state.teamMembers = [{
+        member_id: 'member-1',
+        team_id: 'team-1',
+        user_id: 'user-1',
+        name: 'Játékos',
+        membership_status: 'active',
+        role: 'member',
+        is_goalkeeper: false,
+        goalkeeper_score: 1,
+        defense_score: 2,
+        attack_score: 3
+      }];
+      renderUserSkillModule();
+    `);
+
+    expect(document.getElementById('userSkillCard').hidden).toBe(false);
+    expect(document.getElementById('userSkillModule').textContent).toContain('Saját skill értékeim');
+    expect(document.getElementById('userSkillModule').textContent).not.toContain('Skill aktív');
+
+    document.querySelector('[data-user-skill-input="goalkeeper"]').value = '6';
+    document.querySelector('[data-user-skill-input="defense"]').value = '7';
+    document.querySelector('[data-user-skill-input="attack"]').value = '8';
+    document.querySelector('[data-user-skill-goalkeeper-toggle]').checked = true;
+    document.querySelector('[data-user-skill-action="save"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+    await flushMicrotasks();
+
+    const skillCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/teams/team-1/me/skills'));
+    expect(skillCall).toBeTruthy();
+    expect(JSON.parse(skillCall[1].body)).toEqual({
+      goalkeeperSkill: 6,
+      defenseSkill: 7,
+      attackSkill: 8,
+      isGoalkeeper: true
+    });
+    expect(window.eval('getCurrentTeamMember().goalkeeper_score')).toBe(6);
+
+    window.eval(`
+      state.currentTeam.module_settings.skill.enabled = false;
+      renderUserSkillModule();
+    `);
+
+    expect(document.getElementById('userSkillCard').hidden).toBe(true);
+    expect(document.getElementById('userSkillModule').innerHTML).toBe('');
   });
 
   test('a szabályzat mentés indításakor a frissen beírt szöveg és kapcsolóállapot nem ugrik vissza', async () => {
@@ -2128,7 +2264,7 @@ describe('Frontend auth UI smoke tests', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', admin_guide_module_enabled: true };
       state.teamMembers = [
         { user_id: 'admin-1', name: 'Captain', membership_status: 'active', is_goalkeeper: true }
       ];
@@ -2195,7 +2331,7 @@ describe('Frontend auth UI smoke tests', () => {
     const { window, document } = await bootFrontend();
 
     window.eval(`
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true, rank_module_enabled: true };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true, rank_module_enabled: true, admin_guide_module_enabled: true };
       state.teamMembers = [
         { user_id: 'admin-1', name: 'Captain', membership_status: 'active', is_goalkeeper: true }
       ];
@@ -2215,7 +2351,7 @@ describe('Frontend auth UI smoke tests', () => {
 
     window.eval(`
       state.user = { id: 'captain-1', can_create_team: true };
-      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', admin_guide_module_enabled: true };
       state.currentTeamId = 'team-1';
       state.teamRole = 'team_admin';
       state.teamMembers = [
@@ -2355,23 +2491,84 @@ describe('Frontend auth UI smoke tests', () => {
 
     document.getElementById('eventTitle').value = '';
     document.getElementById('eventStartAt').value = '';
-    document.getElementById('eventLocation').value = '';
+    document.getElementById('eventLocationAddress').value = '';
     document.getElementById('eventTitle').dispatchEvent(new window.Event('input', { bubbles: true }));
     document.getElementById('eventStartAt').dispatchEvent(new window.Event('input', { bubbles: true }));
-    document.getElementById('eventLocation').dispatchEvent(new window.Event('input', { bubbles: true }));
+    document.getElementById('eventLocationAddress').dispatchEvent(new window.Event('input', { bubbles: true }));
 
     const summary = document.getElementById('adminEventFormProgressSummary');
     expect(summary.textContent).toContain('alapok blokk');
 
     document.getElementById('eventTitle').value = 'Penteki foci';
     document.getElementById('eventStartAt').value = '2026-04-24T18:30';
-    document.getElementById('eventLocation').value = 'Vasas';
+    document.getElementById('eventLocationAddress').value = '1183 Budapest, Ferihegyi út 140';
     document.getElementById('eventTitle').dispatchEvent(new window.Event('input', { bubbles: true }));
     document.getElementById('eventStartAt').dispatchEvent(new window.Event('input', { bubbles: true }));
-    document.getElementById('eventLocation').dispatchEvent(new window.Event('input', { bubbles: true }));
+    document.getElementById('eventLocationAddress').dispatchEvent(new window.Event('input', { bubbles: true }));
 
     expect(summary.textContent).toContain('létszám és pálya blokk');
     expect(document.querySelector('[data-admin-event-form-section="basics"]').classList.contains('is-done')).toBe(true);
+  });
+
+  test('az esemény helyszín mező egy pontos címből kompatibilisen menti a helyszín adatokat', async () => {
+    const fetchMock = jest.fn(async url => {
+      const target = String(url);
+      if (target.includes('/teams/team-1/events')) {
+        return createJsonResponse({
+          event: {
+            id: 'event-1',
+            title: 'Pontos címes foci',
+            location_name: '1183 Budapest, Ferihegyi út 140',
+            location_address: '1183 Budapest, Ferihegyi út 140'
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'token-1';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamRole = 'team_admin';
+      setAdminEventFormMode('create');
+    `);
+
+    document.getElementById('eventTitle').value = 'Pontos címes foci';
+    document.getElementById('eventStartAt').value = '2026-06-12T18:00';
+    document.getElementById('eventLocationAddress').value = '1183 Budapest, Ferihegyi út 140';
+    document.getElementById('eventMinPlayers').value = '8';
+    document.getElementById('eventPlayersOnField').value = '10';
+    document.getElementById('createEventForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flushMicrotasks();
+
+    const eventCall = fetchMock.mock.calls.find(([url, options]) => (
+      String(url).includes('/teams/team-1/events') && options?.method === 'POST'
+    ));
+    expect(eventCall).toBeTruthy();
+    const payload = JSON.parse(eventCall[1].body);
+    expect(payload.locationAddress).toBe('1183 Budapest, Ferihegyi út 140');
+    expect(payload.locationName).toBe('1183 Budapest, Ferihegyi út 140');
+  });
+
+  test('a helyszín megjelenítés nem duplázza az azonos helyszínnevet és pontos címet', async () => {
+    const { window } = await bootFrontend();
+
+    expect(window.eval(`
+      getEventDisplayLocation({
+        location_name: '1183 Budapest, Ferihegyi út 140',
+        location_address: '1183 Budapest, Ferihegyi út 140'
+      })
+    `)).toBe('1183 Budapest, Ferihegyi út 140');
+
+    expect(window.eval(`
+      getEventDisplayLocation({
+        location_name: 'Vasas pálya',
+        location_address: '1183 Budapest, Ferihegyi út 140'
+      })
+    `)).toBe('Vasas pálya · 1183 Budapest, Ferihegyi út 140');
   });
 
   test('új esemény módban az alapok blokk kapja az automatikus fókuszt', async () => {
@@ -2682,13 +2879,14 @@ describe('Frontend auth UI smoke tests', () => {
       renderMyTeams(state.myTeams);
     `);
 
-    const contextCard = document.querySelector('#userOverviewCards .role-context-card');
+    const contextCard = document.querySelector('#userHeaderContext .role-context-card');
     expect(contextCard).toBeTruthy();
     expect(contextCard.textContent).toContain('Aktív csapat: Angyalföldi Zsiványok TC');
     expect(contextCard.textContent).toContain('Szereped ebben a csapatban: tag');
     expect(contextCard.textContent).toContain('csapatkapitányi funkciók nem jelennek meg');
     expect(contextCard.textContent).toContain('Csapatkapitányi funkcióid itt vannak: Keddi focis fiuk');
     expect(contextCard.querySelector('[data-context-team-id="team-admin"]')).toBeTruthy();
+    expect(document.querySelector('#userOverviewCards .role-context-card')).toBeNull();
 
     const teamList = document.getElementById('myTeamsList');
     expect(teamList.textContent).toContain('csapatkapitány');
@@ -3501,6 +3699,115 @@ describe('Frontend auth UI smoke tests', () => {
     expect(adminHomeContent.textContent).not.toContain('Setup checklist');
     expect(adminHomeContent.textContent).toContain('Fókusz esemény');
     expect(document.getElementById('adminHomeSummary').textContent).toContain('Polcra tett extra panelek');
+  });
+
+  test('szabin lévő játékosnál erős banner jelenik meg és vissza tud térni aktívnak', async () => {
+    const fetchMock = jest.fn(async (url, options = {}) => {
+      const target = String(url);
+
+      if (target.includes('/version')) {
+        return createJsonResponse({ version: { name: 'Foci Szervező', version: '1.0.0' } });
+      }
+
+      if (target.includes('/auth/google/config')) {
+        return createJsonResponse({ enabled: false, clientId: null });
+      }
+
+      if (target.includes('/auth/me')) {
+        return createJsonResponse({ user: null }, { status: 401, ok: false });
+      }
+
+      if (target.includes('/teams/team-1/me/break') && options.method === 'DELETE') {
+        return createJsonResponse({
+          ok: true,
+          message: 'Újra aktív vagy ebben a csapatban.',
+          member: {
+            member_id: 'member-1',
+            team_id: 'team-1',
+            user_id: 'user-1',
+            role: 'member',
+            membership_status: 'active',
+            break_started_at: null,
+            break_until: null,
+            break_extensions_count: 0,
+            is_on_break: false
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+
+    const { window, document } = await bootFrontend({ fetchMock });
+    const futureBreakUntil = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+
+    window.eval(`
+      state.token = 'token-1';
+      state.user = { id: 'user-1', name: 'Anna', email: 'anna@example.com' };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'member';
+      state.teamMembers = [
+        {
+          member_id: 'member-1',
+          team_id: 'team-1',
+          user_id: 'user-1',
+          role: 'member',
+          membership_status: 'active',
+          break_until: '${futureBreakUntil}',
+          break_started_at: new Date().toISOString(),
+          break_extensions_count: 1
+        }
+      ];
+      loadTeam = async () => {};
+      renderUserOverview();
+    `);
+
+    const banner = document.getElementById('userBreakBanner');
+    expect(banner.hidden).toBe(false);
+    expect(banner.textContent).toContain('Szabin vagy ebben a csapatban');
+    expect(banner.textContent).toContain('Visszatérek aktívnak');
+
+    banner.querySelector('[data-user-break-action="end"]').click();
+    await flushMicrotasks();
+
+    const breakCall = fetchMock.mock.calls.find(([url, options]) => (
+      String(url).includes('/teams/team-1/me/break') && options?.method === 'DELETE'
+    ));
+    expect(breakCall).toBeTruthy();
+    expect(banner.hidden).toBe(true);
+  });
+
+  test('az admin csapatkép mutatja az aktív és szabin lévő tagság arányát', async () => {
+    const { window, document } = await bootFrontend();
+    const futureBreakUntil = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+
+    window.eval(`
+      state.user = { id: 'captain-1', can_create_team: true };
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      state.teamInvites = [];
+      state.teamMembers = [
+        { user_id: 'captain-1', membership_status: 'active', role: 'team_admin', name: 'Kapitány' },
+        { user_id: 'member-2', membership_status: 'active', role: 'member', name: 'Tag 2', break_until: '${futureBreakUntil}' },
+        { user_id: 'member-3', membership_status: 'active', role: 'member', name: 'Tag 3' },
+        { user_id: 'member-4', membership_status: 'active', role: 'member', name: 'Passzív tag', passive_since: new Date().toISOString() },
+        { user_id: 'member-5', membership_status: 'removed', role: 'member', name: 'Régi tag' }
+      ];
+      state.adminEvents = [];
+      renderTeamSummary(state.currentTeam);
+    `);
+
+    const summary = document.getElementById('teamSummary');
+    expect(summary.textContent).toContain('Aktivitási összkép');
+    expect(summary.textContent).toContain('Összes aktív tagság');
+    expect(summary.textContent).toContain('Ténylegesen aktív');
+    expect(summary.textContent).toContain('Szabin arány');
+    expect(summary.textContent).toContain('Passzív arány');
+    expect(summary.textContent).toContain('Értesíthető tagok');
+    expect(summary.textContent).toContain('2 értesíthető');
+    expect(summary.textContent).toContain('25%');
   });
 });
 

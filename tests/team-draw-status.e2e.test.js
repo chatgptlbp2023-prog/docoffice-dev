@@ -98,9 +98,17 @@ describe('Event team draw status machine E2E', () => {
       'migrations',
       '2026-04-03_team_member_goalkeepers.sql'
     );
+    const goalkeeperModuleMigrationPath = path.join(
+      __dirname,
+      '..',
+      'db',
+      'migrations',
+      '2026-06-05_goalkeeper_module.sql'
+    );
 
     await pool.query(fs.readFileSync(migrationPath, 'utf8'));
     await pool.query(fs.readFileSync(goalkeeperMigrationPath, 'utf8'));
+    await pool.query(fs.readFileSync(goalkeeperModuleMigrationPath, 'utf8'));
   });
 
   beforeEach(async () => {
@@ -228,6 +236,80 @@ describe('Event team draw status machine E2E', () => {
     expect(res.body.draw.persisted).toBe(false);
     expect(Array.isArray(res.body.draw.teamA)).toBe(true);
     expect(Array.isArray(res.body.draw.teamB)).toBe(true);
+  });
+
+  test('skill draw keeps team sizes within one player even when skill totals are skewed', async () => {
+    await pool.query(
+      `
+      update team_members
+      set goalkeeper_score = case
+            when user_id = $2 then 10
+            when user_id = $3 then 0
+            else 0
+          end,
+          defense_score = case
+            when user_id = $2 then 10
+            when user_id = $3 then 0
+            else 1
+          end,
+          attack_score = case
+            when user_id = $2 then 10
+            when user_id = $3 then 0
+            else 1
+          end,
+          is_goalkeeper = case
+            when user_id in ($2, $3) then true
+            else false
+          end,
+          skills_enabled = true,
+          updated_at = now()
+      where team_id = $1
+      `,
+      [teamId, team_adminUserId, memberOneUserId]
+    );
+
+    for (let index = 0; index < 7; index += 1) {
+      const extraUserId = await createUser({
+        name: `Low Skill ${index + 1}`,
+        email: `low_skill_${index}_${Date.now()}@example.com`
+      });
+
+      await pool.query(
+        `
+        insert into team_members (
+          id, team_id, user_id, role, membership_status,
+          joined_at, created_at, updated_at,
+          skills_enabled, is_goalkeeper, goalkeeper_score, defense_score, attack_score
+        )
+        values (
+          $1, $2, $3, 'member', 'active',
+          now(), now(), now(),
+          true, false, 0, 1, 1
+        )
+        `,
+        [randomUUID(), teamId, extraUserId]
+      );
+
+      await pool.query(
+        `
+        insert into event_registrations (
+          id, event_id, user_id, team_id, registration_status, registered_at, created_at, updated_at
+        )
+        values ($1, $2, $3, $4, 'going', now(), now(), now())
+        `,
+        [randomUUID(), eventId, extraUserId, teamId]
+      );
+    }
+
+    const res = await request(app)
+      .post(`/api/events/${eventId}/team-draw/preview`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.draw.source_member_count).toBe(10);
+    expect(Math.abs(res.body.draw.teamA.length - res.body.draw.teamB.length)).toBeLessThanOrEqual(1);
+    expect(res.body.draw.teamA.length).toBe(5);
+    expect(res.body.draw.teamB.length).toBe(5);
   });
 
 

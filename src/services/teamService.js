@@ -199,9 +199,12 @@ async function getTeamById(teamId, currentUser = null) {
       t.created_by_user_id,
       t.skill_balancing_enabled,
       t.skill_balance_tolerance_percent,
+      t.draw_strategy,
+      t.goalkeeper_module_enabled,
       t.rank_module_enabled,
       t.cash_module_enabled,
       t.discipline_module_enabled,
+      t.admin_guide_module_enabled,
       t.rules_module_enabled,
       t.rules_text,
       t.rules_version,
@@ -239,6 +242,12 @@ async function getTeamById(teamId, currentUser = null) {
       tm.goalkeeper_score,
       tm.rank_value,
       tm.rank_status,
+      tm.break_started_at,
+      tm.break_until,
+      tm.break_extensions_count,
+      tm.break_reminder_sent_at,
+      tm.passive_since,
+      tm.passive_reason,
       tm.joined_at,
       rules.rules_version as rules_accepted_version,
       rules.accepted_at as rules_accepted_at
@@ -333,7 +342,10 @@ async function getTeamById(teamId, currentUser = null) {
     with active_members as (
       select
         tm.user_id,
-        tm.joined_at
+        tm.joined_at,
+        tm.break_started_at,
+        tm.break_until,
+        tm.passive_since
       from team_members tm
       where tm.team_id = $1
         and tm.membership_status = 'active'
@@ -348,6 +360,16 @@ async function getTeamById(teamId, currentUser = null) {
        and e.status in ('published', 'finished')
        and e.start_at < now()
        and e.start_at >= am.joined_at
+       and (
+         am.passive_since is null
+         or coalesce(e.published_at, e.created_at, e.start_at) < am.passive_since
+       )
+       and not (
+         am.break_started_at is not null
+         and am.break_until is not null
+         and coalesce(e.published_at, e.created_at, e.start_at) >= am.break_started_at
+         and coalesce(e.published_at, e.created_at, e.start_at) < am.break_until
+       )
     ),
     responded_events as (
       select distinct
@@ -357,6 +379,16 @@ async function getTeamById(teamId, currentUser = null) {
       join event_registrations er
         on er.event_id = ee.event_id
        and er.user_id = ee.user_id
+      union
+      select distinct
+        ee.user_id,
+        ee.event_id
+      from eligible_events ee
+      join event_email_action_log log
+        on log.event_id = ee.event_id
+       and log.user_id = ee.user_id
+       and log.action in ('register', 'skip', 'vacation_one_week')
+       and log.status <> 'error'
     )
     select
       ee.user_id,
@@ -949,12 +981,14 @@ async function addFinanceAdjustment({
 async function updateTeamModuleSettings({
   teamId,
   cashModuleEnabled = null,
-  disciplineModuleEnabled = null
+  disciplineModuleEnabled = null,
+  adminGuideModuleEnabled = null
 }) {
   const hasCashModuleUpdate = typeof cashModuleEnabled === 'boolean';
   const hasDisciplineModuleUpdate = typeof disciplineModuleEnabled === 'boolean';
+  const hasAdminGuideModuleUpdate = typeof adminGuideModuleEnabled === 'boolean';
 
-  if (!hasCashModuleUpdate && !hasDisciplineModuleUpdate) {
+  if (!hasCashModuleUpdate && !hasDisciplineModuleUpdate && !hasAdminGuideModuleUpdate) {
     throw new AppError(400, 'Nincs módosítandó modulbeállítás.');
   }
 
@@ -963,6 +997,7 @@ async function updateTeamModuleSettings({
     update teams
     set cash_module_enabled = coalesce($2::boolean, cash_module_enabled),
         discipline_module_enabled = coalesce($3::boolean, discipline_module_enabled),
+        admin_guide_module_enabled = coalesce($4::boolean, admin_guide_module_enabled),
         updated_at = now()
     where id = $1
     returning
@@ -971,9 +1006,12 @@ async function updateTeamModuleSettings({
       created_by_user_id,
       skill_balancing_enabled,
       skill_balance_tolerance_percent,
+      draw_strategy,
+      goalkeeper_module_enabled,
       rank_module_enabled,
       cash_module_enabled,
       discipline_module_enabled,
+      admin_guide_module_enabled,
       rules_module_enabled,
       rules_text,
       rules_version,
@@ -985,7 +1023,8 @@ async function updateTeamModuleSettings({
     [
       teamId,
       hasCashModuleUpdate ? cashModuleEnabled : null,
-      hasDisciplineModuleUpdate ? disciplineModuleEnabled : null
+      hasDisciplineModuleUpdate ? disciplineModuleEnabled : null,
+      hasAdminGuideModuleUpdate ? adminGuideModuleEnabled : null
     ]
   );
 
@@ -1003,6 +1042,260 @@ async function updateTeamModuleSettings({
   };
 }
 
+function serializeBreakMembership(row = {}) {
+  const breakUntil = row.break_until || null;
+  const isOnBreak = Boolean(breakUntil && new Date(breakUntil) > new Date());
+  const isPassive = Boolean(row.passive_since);
+
+  return {
+    member_id: row.id || row.member_id,
+    team_id: row.team_id,
+    user_id: row.user_id,
+    name: row.name,
+    email: row.email,
+    role: normalizeTeamRole(row.role),
+    membership_status: row.membership_status,
+    joined_at: row.joined_at,
+    break_started_at: row.break_started_at || null,
+    break_until: breakUntil,
+    break_reminder_sent_at: row.break_reminder_sent_at || null,
+    break_extensions_count: Number(row.break_extensions_count || 0),
+    passive_since: row.passive_since || null,
+    passive_reason: row.passive_reason || null,
+    is_on_break: isOnBreak,
+    is_passive: isPassive
+  };
+}
+
+async function startMyTeamBreak({ teamId, userId }) {
+  const result = await pool.query(
+    `
+    update team_members
+    set break_started_at = coalesce(break_started_at, now()),
+        break_until = now() + interval '7 days',
+        break_extensions_count = coalesce(break_extensions_count, 0) + 1,
+        break_reminder_sent_at = null,
+        passive_since = null,
+        passive_reason = null,
+        updated_at = now()
+    where team_id = $1
+      and user_id = $2
+      and membership_status = 'active'
+      and coalesce(break_extensions_count, 0) < 4
+    returning id, team_id, user_id, role, membership_status, joined_at,
+              break_started_at, break_until, break_extensions_count,
+              break_reminder_sent_at, passive_since, passive_reason
+    `,
+    [teamId, userId]
+  );
+
+  if (!result.rows.length) {
+    const membershipResult = await pool.query(
+      `
+      select id, break_extensions_count
+      from team_members
+      where team_id = $1
+        and user_id = $2
+        and membership_status = 'active'
+      `,
+      [teamId, userId]
+    );
+
+    if (!membershipResult.rows.length) {
+      throw new AppError(404, 'Nincs aktív csapattagságod ebben a csapatban.');
+    }
+
+    throw new AppError(400, 'Ezt a szabadságot már négyszer hosszabbítottad. A további kimaradást egyeztesd a csapatkapitánnyal.');
+  }
+
+  return {
+    message: 'Rögzítettük: 1 hétig szabin vagy ebben a csapatban.',
+    member: serializeBreakMembership(result.rows[0])
+  };
+}
+
+async function endMyTeamBreak({ teamId, userId }) {
+  const result = await pool.query(
+    `
+    update team_members
+    set break_started_at = null,
+        break_until = null,
+        break_extensions_count = 0,
+        break_reminder_sent_at = null,
+        passive_since = null,
+        passive_reason = null,
+        updated_at = now()
+    where team_id = $1
+      and user_id = $2
+      and membership_status = 'active'
+    returning id, team_id, user_id, role, membership_status, joined_at,
+              break_started_at, break_until, break_extensions_count,
+              break_reminder_sent_at, passive_since, passive_reason
+    `,
+    [teamId, userId]
+  );
+
+  if (!result.rows.length) {
+    throw new AppError(404, 'Nincs aktív csapattagságod ebben a csapatban.');
+  }
+
+  return {
+    message: 'Újra aktív vagy ebben a csapatban.',
+    member: serializeBreakMembership(result.rows[0])
+  };
+}
+
+async function extendMyTeamBreak({ teamId, userId }) {
+  const result = await pool.query(
+    `
+    update team_members
+    set break_started_at = coalesce(break_started_at, now()),
+        break_until = now() + interval '7 days',
+        break_extensions_count = coalesce(break_extensions_count, 0) + 1,
+        break_reminder_sent_at = null,
+        passive_since = null,
+        passive_reason = null,
+        updated_at = now()
+    where team_id = $1
+      and user_id = $2
+      and membership_status = 'active'
+      and coalesce(break_extensions_count, 0) < 4
+    returning id, team_id, user_id, role, membership_status, joined_at,
+              break_started_at, break_until, break_extensions_count,
+              break_reminder_sent_at, passive_since, passive_reason
+    `,
+    [teamId, userId]
+  );
+
+  if (!result.rows.length) {
+    const membershipResult = await pool.query(
+      `
+      select id, break_extensions_count
+      from team_members
+      where team_id = $1
+        and user_id = $2
+        and membership_status = 'active'
+      `,
+      [teamId, userId]
+    );
+
+    if (!membershipResult.rows.length) {
+      throw new AppError(404, 'Nincs aktív csapattagságod ebben a csapatban.');
+    }
+
+    throw new AppError(400, 'Elérted a 4 hetes szabi limitet. Most térj vissza aktívnak, vagy egyeztess a csapatkapitánnyal.');
+  }
+
+  return {
+    message: 'Rögzítettük: még 1 hétig szabin vagy ebben a csapatban.',
+    member: serializeBreakMembership(result.rows[0])
+  };
+}
+
+async function updateTeamMemberActivityStatus({
+  teamId,
+  memberId,
+  status = null,
+  clearBreak = false,
+  extendBreak = false
+}) {
+  if (!status && !clearBreak && !extendBreak) {
+    throw new AppError(400, 'Nincs módosítandó aktivitási állapot.');
+  }
+
+  if (status && !['active', 'passive'].includes(status)) {
+    throw new AppError(400, 'Az aktivitási státusz csak active vagy passive lehet.');
+  }
+
+  const currentResult = await pool.query(
+    `
+    select
+      tm.id,
+      tm.team_id,
+      tm.user_id,
+      tm.role,
+      tm.membership_status,
+      tm.joined_at,
+      tm.break_extensions_count,
+      u.name,
+      lower(u.email) as email
+    from team_members tm
+    join users u on u.id = tm.user_id
+    where tm.team_id = $1
+      and tm.id = $2
+      and tm.membership_status = 'active'
+    limit 1
+    `,
+    [teamId, memberId]
+  );
+
+  if (!currentResult.rows.length) {
+    throw new AppError(404, 'A csapattag nem található vagy nem aktív.');
+  }
+
+  if (extendBreak && Number(currentResult.rows[0].break_extensions_count || 0) >= 4) {
+    throw new AppError(400, 'Ez a tag már elérte a 4 hetes szabi limitet.');
+  }
+
+  const updateResult = await pool.query(
+    `
+    update team_members
+    set
+      break_started_at = case
+        when $5::boolean then coalesce(break_started_at, now())
+        when $4::boolean or $3::text = 'active' then null
+        else break_started_at
+      end,
+      break_until = case
+        when $5::boolean then now() + interval '7 days'
+        when $4::boolean or $3::text = 'active' then null
+        else break_until
+      end,
+      break_extensions_count = case
+        when $5::boolean then coalesce(break_extensions_count, 0) + 1
+        when $4::boolean or $3::text = 'active' then 0
+        else break_extensions_count
+      end,
+      break_reminder_sent_at = case
+        when $5::boolean or $4::boolean or $3::text = 'active' then null
+        else break_reminder_sent_at
+      end,
+      passive_since = case
+        when $3::text = 'passive' then coalesce(passive_since, now())
+        when $3::text = 'active' then null
+        else passive_since
+      end,
+      passive_reason = case
+        when $3::text = 'passive' then 'admin_marked_passive'
+        when $3::text = 'active' then null
+        else passive_reason
+      end,
+      updated_at = now()
+    where team_id = $1
+      and id = $2
+      and membership_status = 'active'
+    returning id, team_id, user_id, role, membership_status, joined_at,
+              break_started_at, break_until, break_extensions_count,
+              break_reminder_sent_at, passive_since, passive_reason
+    `,
+    [teamId, memberId, status, Boolean(clearBreak), Boolean(extendBreak)]
+  );
+
+  return {
+    message: status === 'passive'
+      ? 'A tag passzív státuszba került.'
+      : status === 'active'
+        ? 'A tag újra aktív.'
+        : extendBreak
+          ? 'A tag szabi állapota 1 héttel hosszabbítva.'
+          : 'A tag szabi állapota törölve.',
+    member: serializeBreakMembership({
+      ...currentResult.rows[0],
+      ...updateResult.rows[0]
+    })
+  };
+}
+
 module.exports = {
   normalizeEmail,
   normalizeRole,
@@ -1015,5 +1308,9 @@ module.exports = {
   updateTeamMember,
   removeTeamMember,
   addFinanceAdjustment,
-  updateTeamModuleSettings
+  updateTeamModuleSettings,
+  startMyTeamBreak,
+  endMyTeamBreak,
+  extendMyTeamBreak,
+  updateTeamMemberActivityStatus
 };

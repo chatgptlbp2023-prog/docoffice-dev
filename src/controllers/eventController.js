@@ -232,6 +232,71 @@ async function cancelEventRegistration(req, res) {
   }
 }
 
+async function registerGuestForEvent(req, res) {
+  try {
+    const result = await registrationService.registerGuestForEvent({
+      eventId: req.params.eventId,
+      userId: req.user.id,
+      guestName: req.body.guestName
+    });
+
+    await runNotificationSafely(
+      () => eventNotificationService.notifyRegistrationActivity({
+        eventId: req.params.eventId,
+        actorUserId: req.user.id,
+        registrationStatus: result.guestRegistration?.registration_status || 'going',
+        includeNewRegistrationNotification: false,
+        includeCapacityNotifications: false
+      }),
+      'Vendegjelentkezesi ertesitesi hiba:'
+    );
+
+    return res.status(201).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Vendegjelentkezesi hiba:',
+      'Szerverhiba vendegjelentkezes kozben.'
+    );
+  }
+}
+
+async function cancelGuestRegistration(req, res) {
+  try {
+    const result = await registrationService.cancelGuestRegistration({
+      eventId: req.params.eventId,
+      userId: req.user.id,
+      guestRegistrationId: req.params.guestRegistrationId
+    });
+
+    await runNotificationSafely(
+      () => eventNotificationService.notifyRegistrationActivity({
+        eventId: req.params.eventId,
+        promotedUserId: result.promotedRegistration?.is_guest ? null : result.promotedRegistration?.user_id || null,
+        includeNewRegistrationNotification: false,
+        includeCapacityNotifications: false
+      }),
+      'Vendeg varolista promoci o ertesitesi hiba:'
+    );
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Vendeglemondasi hiba:',
+      'Szerverhiba vendeg lemondasa kozben.'
+    );
+  }
+}
+
 async function getEventById(req, res) {
   try {
     const result = await eventService.getEventById(req.params.eventId, req.user.id);
@@ -302,16 +367,18 @@ async function getEventWeather(req, res) {
   try {
     const result = await eventService.getEventById(req.params.eventId, req.user.id);
     const event = result?.event || null;
-    const weather = await fetchEventWeatherForecast(event);
+    const forecastResult = await fetchEventWeatherForecast(event);
 
-    if (!weather) {
+    if (!forecastResult?.available) {
       return res.status(200).json({
         ok: true,
         available: false,
-        message: 'Ehhez az esemenyhez most nem erheto el idojarasi adat.'
+        reason: forecastResult?.reason || 'forecast_not_found',
+        message: forecastResult?.message || 'Ehhez az időponthoz nem találtunk órás előrejelzést.'
       });
     }
 
+    const { available, reason, message, ...weather } = forecastResult;
     return res.status(200).json({
       ok: true,
       available: true,
@@ -330,12 +397,16 @@ async function getEventWeather(req, res) {
 async function handleEventEmailAction(req, res) {
   try {
     const result = await eventEmailActionService.executeEventEmailActionToken(req.params.token);
+    const titleByAction = {
+      skip: 'Kihagyás rögzítve',
+      vacation_one_week: 'Szabadság rögzítve'
+    };
     return res
       .status(200)
       .type('html')
       .send(
         renderEmailActionResultPage({
-          title: result.action === 'skip' ? 'Kihagyás rögzítve' : 'Jelentkezés rögzítve',
+          title: titleByAction[result.action] || 'Jelentkezés rögzítve',
           message: result.message,
           tone: result.ok === false ? 'error' : 'success'
         })
@@ -384,8 +455,10 @@ module.exports = {
   updateEvent,
   updateEventStatus,
   registerForEvent,
+  registerGuestForEvent,
   handleEventEmailAction,
   cancelEventRegistration,
+  cancelGuestRegistration,
   setEventAttendanceStatus,
   getEventById,
   getEventWeather,

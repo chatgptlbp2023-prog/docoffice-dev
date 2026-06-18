@@ -25,6 +25,10 @@ describe('weatherService', () => {
       '1046 Budapest, Hungary',
       'Budapest, Hungary'
     ]);
+
+    expect(buildLocationQueryCandidates('Ferihegyi út 140')).toContain(
+      'Budapest, Ferihegyi út 140, Hungary'
+    );
   });
 
   test('AccuWeather forecastbol a legkozelebbi oras adatot valasztja', async () => {
@@ -88,6 +92,111 @@ describe('weatherService', () => {
       weatherCode: 15,
       weatherLabel: 'Zivatar',
       weatherIcon: '⛈️'
+    });
+
+    jest.useRealTimers();
+  });
+
+  test('strukturalt okot ad, ha hianyzik az API kulcs', async () => {
+    delete process.env.ACCUWEATHER_API_KEY;
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-05-13T10:00:00.000Z'));
+
+    const result = await fetchEventWeatherForecast({
+      id: 'evt-no-key',
+      start_at: '2026-05-13T18:00:00.000Z',
+      location_address: 'Budapest, 1046 Oceanarok 23'
+    });
+
+    expect(result).toMatchObject({
+      available: false,
+      reason: 'missing_api_key',
+      message: 'Az időjárás szolgáltatás nincs bekonfigurálva.'
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    jest.useRealTimers();
+  });
+
+  test('strukturalt okot ad tul tavoli es multbeli esemenyre', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-05-13T10:00:00.000Z'));
+
+    const futureResult = await fetchEventWeatherForecast({
+      id: 'evt-future',
+      start_at: '2026-05-25T18:00:00.000Z',
+      location_address: 'Budapest, 1046 Oceanarok 23'
+    });
+
+    expect(futureResult).toMatchObject({
+      available: false,
+      reason: 'outside_forecast_window',
+      message: 'Az órás előrejelzés az esemény előtt kb. 5 nappal lesz elérhető.'
+    });
+
+    const pastResult = await fetchEventWeatherForecast({
+      id: 'evt-past',
+      start_at: '2026-05-12T18:00:00.000Z',
+      location_address: 'Budapest, 1046 Oceanarok 23'
+    });
+
+    expect(pastResult).toMatchObject({
+      available: false,
+      reason: 'past_event',
+      message: 'Múltbeli eseményhez már nem kérünk időjárás-előrejelzést.'
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    jest.useRealTimers();
+  });
+
+  test('strukturalt okot ad geokod es forecast hianyra', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-05-13T10:00:00.000Z'));
+
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => []
+    });
+
+    const geocodeResult = await fetchEventWeatherForecast({
+      id: 'evt-geocode',
+      start_at: '2026-05-13T18:00:00.000Z',
+      location_address: 'Nemletezo palya'
+    });
+
+    expect(geocodeResult).toMatchObject({
+      available: false,
+      reason: 'geocode_failed',
+      message: 'Ehhez a helyszínhez nem sikerült koordinátát találni. Adj meg várost és irányítószámot is.'
+    });
+
+    global.fetch.mockReset();
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ([{
+          Key: '12345',
+          LocalizedName: 'Budapest',
+          Country: { ID: 'HU', LocalizedName: 'Hungary' },
+          GeoPosition: { Latitude: 47.55, Longitude: 19.11 }
+        }])
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => []
+      });
+
+    const forecastResult = await fetchEventWeatherForecast({
+      id: 'evt-forecast',
+      start_at: '2026-05-13T18:00:00.000Z',
+      location_address: 'Budapest, 1046 Oceanarok 23'
+    });
+
+    expect(forecastResult).toMatchObject({
+      available: false,
+      reason: 'forecast_not_found',
+      message: 'Ehhez az időponthoz nem találtunk órás előrejelzést.'
     });
 
     jest.useRealTimers();

@@ -144,6 +144,8 @@ async function updateTeamRules({
         created_by_user_id,
         skill_balancing_enabled,
         skill_balance_tolerance_percent,
+        draw_strategy,
+        goalkeeper_module_enabled,
         rank_module_enabled,
         cash_module_enabled,
         discipline_module_enabled,

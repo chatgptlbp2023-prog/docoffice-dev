@@ -158,4 +158,58 @@ describe('Team members E2E', () => {
     expect(secondRes.status).toBe(409);
     expect(secondRes.body.ok).toBe(false);
   });
+
+  test('active member can start and end their own one-week break', async () => {
+    const addRes = await request(app)
+      .post(`/api/teams/${teamId}/members`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        email: global.__teamMemberTestEmail,
+        role: 'member'
+      });
+
+    expect(addRes.status).toBe(201);
+
+    const memberToken = await login(global.__teamMemberTestEmail);
+
+    const startRes = await request(app)
+      .post(`/api/teams/${teamId}/me/break`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ memberId: team_adminUserId });
+
+    expect(startRes.status).toBe(200);
+    expect(startRes.body.ok).toBe(true);
+    expect(startRes.body.member.user_id).toBe(memberUserId);
+    expect(startRes.body.member.break_until).toBeTruthy();
+    expect(startRes.body.member.is_on_break).toBe(true);
+
+    const afterStart = await pool.query(
+      `
+      select user_id, break_started_at, break_until, break_extensions_count
+      from team_members
+      where team_id = $1
+      order by user_id
+      `,
+      [teamId]
+    );
+
+    const memberRow = afterStart.rows.find(row => row.user_id === memberUserId);
+    const captainRow = afterStart.rows.find(row => row.user_id === team_adminUserId);
+    expect(memberRow.break_started_at).toBeTruthy();
+    expect(memberRow.break_until).toBeTruthy();
+    expect(Number(memberRow.break_extensions_count)).toBe(1);
+    expect(captainRow.break_until).toBeNull();
+
+    const endRes = await request(app)
+      .delete(`/api/teams/${teamId}/me/break`)
+      .set('Authorization', `Bearer ${memberToken}`);
+
+    expect(endRes.status).toBe(200);
+    expect(endRes.body.ok).toBe(true);
+    expect(endRes.body.member.user_id).toBe(memberUserId);
+    expect(endRes.body.member.break_until).toBeNull();
+    expect(endRes.body.member.break_started_at).toBeNull();
+    expect(endRes.body.member.break_extensions_count).toBe(0);
+    expect(endRes.body.member.is_on_break).toBe(false);
+  });
 });

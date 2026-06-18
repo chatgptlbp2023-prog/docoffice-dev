@@ -121,6 +121,12 @@ async function getMyEvents(userId) {
       my_reg.registered_at as my_registered_at,
       my_reg.cancelled_at as my_cancelled_at,
       my_reg.promoted_at as my_promoted_at,
+      my_guest.id as my_guest_registration_id,
+      my_guest.guest_name as my_guest_name,
+      my_guest.registration_status as my_guest_registration_status,
+      my_guest.registered_at as my_guest_registered_at,
+      my_guest.cancelled_at as my_guest_cancelled_at,
+      my_guest.promoted_at as my_guest_promoted_at,
       coalesce(my_reg_stats.cancelled_count, 0)::int as my_cancelled_count
     from team_members tm
     join teams t on t.id = tm.team_id
@@ -137,12 +143,48 @@ async function getMyEvents(userId) {
     left join event_settings es on es.event_id = e.id
     left join lateral (
       select
-        count(*) filter (where er.registration_status = 'going') as going_count,
-        count(*) filter (where er.registration_status = 'waiting_list') as waiting_count,
-        count(*) filter (where er.registration_status = 'waiting_list_rank') as rank_waiting_count,
-        count(*) filter (where er.registration_status = 'cancelled') as cancelled_count
-      from event_registrations er
-      where er.event_id = e.id
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'going'
+        ) +
+        (
+          select count(*)::int
+          from event_guest_registrations egr
+          where egr.event_id = e.id
+            and egr.registration_status = 'going'
+        ) as going_count,
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'waiting_list'
+        ) +
+        (
+          select count(*)::int
+          from event_guest_registrations egr
+          where egr.event_id = e.id
+            and egr.registration_status = 'waiting_list'
+        ) as waiting_count,
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'waiting_list_rank'
+        ) as rank_waiting_count,
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'cancelled'
+        ) +
+        (
+          select count(*)::int
+          from event_guest_registrations egr
+          where egr.event_id = e.id
+            and egr.registration_status = 'cancelled'
+        ) as cancelled_count
     ) stats on true
     left join lateral (
       select
@@ -164,6 +206,27 @@ async function getMyEvents(userId) {
         er.registered_at desc
       limit 1
     ) my_reg on true
+    left join lateral (
+      select
+        egr.id,
+        egr.guest_name,
+        egr.registration_status,
+        egr.registered_at,
+        egr.cancelled_at,
+        egr.promoted_at
+      from event_guest_registrations egr
+      where egr.event_id = e.id
+        and egr.host_user_id = $1
+      order by
+        case egr.registration_status
+          when 'going' then 1
+          when 'waiting_list' then 2
+          when 'cancelled' then 3
+          else 4
+        end,
+        egr.registered_at desc
+      limit 1
+    ) my_guest on true
     left join lateral (
       select count(*)::int as cancelled_count
       from event_registrations er
@@ -226,6 +289,17 @@ async function getMyEvents(userId) {
       ...event,
       my_cancelled_count: Number(event.my_cancelled_count || 0),
       registration_limit_reached: Number(event.my_cancelled_count || 0) >= 2,
+      my_guest_registration: event.my_guest_registration_id
+        ? {
+            id: event.my_guest_registration_id,
+            guest_name: event.my_guest_name,
+            registration_status: event.my_guest_registration_status,
+            registered_at: event.my_guest_registered_at,
+            cancelled_at: event.my_guest_cancelled_at,
+            promoted_at: event.my_guest_promoted_at,
+            is_guest: true
+          }
+        : null,
       spots_left: Math.max(event.max_players - event.going_count, 0),
       is_registration_open: isRegistrationOpen(event),
       registration_window: registrationWindow,

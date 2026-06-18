@@ -9,7 +9,11 @@ const {
   addFinanceAdjustment,
   updateTeamRules,
   updateTeamModuleSettings,
-  acceptTeamRules
+  acceptTeamRules,
+  startMyTeamBreak,
+  endMyTeamBreak,
+  updateTeamMemberActivityStatus,
+  handleTeamBreakEmailAction
 } = require('../controllers/teamController');
 
 const requireAuth = require('../middleware/requireAuth');
@@ -26,9 +30,15 @@ const {
   validateTeamFinanceAdjustment,
   validateUpdateTeamRules,
   validateUpdateTeamModuleSettings,
+  validateUpdateTeamMemberActivityStatus,
 } = require('../middleware/requestValidation');
 
 const router = express.Router();
+
+router.get(
+  '/team-break-actions/:token',
+  handleTeamBreakEmailAction
+);
 
 router.post('/teams', requireAuth, validateCreateTeam, createTeam);
 router.get('/teams/:teamId', requireAuth, isTeamMember, getTeamById);
@@ -57,11 +67,33 @@ router.post(
 );
 
 router.post(
+  '/teams/:teamId/me/break',
+  requireAuth,
+  isTeamMember,
+  startMyTeamBreak
+);
+
+router.delete(
+  '/teams/:teamId/me/break',
+  requireAuth,
+  isTeamMember,
+  endMyTeamBreak
+);
+
+router.post(
   '/teams/:teamId/captain-transfer',
   requireAuth,
   isCaptain,
   validateCaptainTransfer,
   transferCaptainRole
+);
+
+router.patch(
+  '/teams/:teamId/members/:memberId/activity-status',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  validateUpdateTeamMemberActivityStatus,
+  updateTeamMemberActivityStatus
 );
 
 router.post(

@@ -1,12 +1,14 @@
 const express = require('express');
 const requireAuth = require('../middleware/requireAuth');
-const { isCaptainOrViceCaptain } = require('../middleware/teamPermissions');
+const { isTeamMember, isCaptainOrViceCaptain } = require('../middleware/teamPermissions');
+const { validateUpdateMySkills } = require('../middleware/requestValidation');
 const {
   getSkillSettings,
   updateSkillSettings,
   updateMemberRank,
   updateMemberGoalkeeperRole,
   updateMemberSkills,
+  updateMySkills,
   previewBalancedTeams,
   previewEventBalancedTeams,
   saveEventTeamDraw,
@@ -50,6 +52,14 @@ router.patch(
   requireAuth,
   isCaptainOrViceCaptain,
   updateMemberSkills
+);
+
+router.patch(
+  '/teams/:teamId/me/skills',
+  requireAuth,
+  isTeamMember,
+  validateUpdateMySkills,
+  updateMySkills
 );
 
 router.post(

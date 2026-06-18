@@ -140,6 +140,11 @@ describe('Event registration flow E2E', () => {
   afterEach(async () => {
     if (created.events.length > 0) {
       await pool.query(
+        `delete from event_guest_registrations where event_id = any($1::uuid[])`,
+        [created.events]
+      );
+
+      await pool.query(
         `delete from event_registrations where event_id = any($1::uuid[])`,
         [created.events]
       );
@@ -243,6 +248,81 @@ describe('Event registration flow E2E', () => {
 
     expect(eventAfterCancel.body.registrations.going[0].user_id).toBe(memberBUserId);
     expect(eventAfterCancel.body.registrations.cancelled[0].user_id).toBe(memberAUserId);
+  });
+
+  test('registered player can add one guest and guest counts toward capacity', async () => {
+    const createEventRes = await request(app)
+      .post(`/api/teams/${teamId}/events`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        title: 'Guest Capacity Event',
+        description: 'Vendeg letszam teszt',
+        startAt: futureIso(10, 19, 0),
+        locationName: 'Teszt palya',
+        minPlayers: 1,
+        playersOnFieldTotal: 2,
+        substitutesEnabled: false,
+        initialStatus: 'published',
+        confirmHolidayOverride: true
+      });
+
+    expect(createEventRes.status).toBe(201);
+
+    const eventId = createEventRes.body.event.id;
+    created.events.push(eventId);
+
+    const regARes = await request(app)
+      .post(`/api/events/${eventId}/register`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+
+    expect(regARes.status).toBe(201);
+    expect(regARes.body.registration.registration_status).toBe('going');
+
+    const guestRes = await request(app)
+      .post(`/api/events/${eventId}/guests`)
+      .set('Authorization', `Bearer ${memberAToken}`)
+      .send({ guestName: 'Rudi' });
+
+    expect(guestRes.status).toBe(201);
+    expect(guestRes.body.guestRegistration.registration_status).toBe('going');
+    expect(guestRes.body.guestRegistration.guest_name).toBe('Rudi');
+
+    const regBRes = await request(app)
+      .post(`/api/events/${eventId}/register`)
+      .set('Authorization', `Bearer ${memberBToken}`);
+
+    expect(regBRes.status).toBe(201);
+    expect(regBRes.body.registration.registration_status).toBe('waiting_list');
+
+    const detailRes = await request(app)
+      .get(`/api/events/${eventId}`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.summary.goingCount).toBe(2);
+    expect(detailRes.body.summary.waitingCount).toBe(1);
+    expect(detailRes.body.summary.spotsLeft).toBe(0);
+    expect(detailRes.body.event.my_guest_registration.guest_name).toBe('Rudi');
+    expect(detailRes.body.registrations.going.some(item => item.is_guest && item.name === 'Rudi')).toBe(true);
+
+    const cancelGuestRes = await request(app)
+      .post(`/api/events/${eventId}/guests/${guestRes.body.guestRegistration.id}/cancel`)
+      .set('Authorization', `Bearer ${memberAToken}`);
+
+    expect(cancelGuestRes.status).toBe(200);
+    expect(cancelGuestRes.body.previousStatus).toBe('going');
+    expect(cancelGuestRes.body.promotedRegistration.user_id).toBe(memberBUserId);
+    expect(cancelGuestRes.body.promotedRegistration.registration_status).toBe('going');
+
+    const afterCancelDetailRes = await request(app)
+      .get(`/api/events/${eventId}`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(afterCancelDetailRes.status).toBe(200);
+    expect(afterCancelDetailRes.body.summary.goingCount).toBe(2);
+    expect(afterCancelDetailRes.body.summary.waitingCount).toBe(0);
+    expect(afterCancelDetailRes.body.registrations.going.some(item => item.user_id === memberBUserId)).toBe(true);
+    expect(afterCancelDetailRes.body.registrations.cancelled.some(item => item.is_guest && item.name === 'Rudi')).toBe(true);
   });
 
   test('user cannot register twice actively, but can re-register after cancel', async () => {

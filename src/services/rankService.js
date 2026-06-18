@@ -22,7 +22,10 @@ async function getMemberRankSnapshot({ teamId, userId, client }) {
       t.rank_module_enabled,
       tm.joined_at,
       tm.rank_value,
-      tm.rank_status
+      tm.rank_status,
+      tm.break_started_at,
+      tm.break_until,
+      tm.passive_since
     from team_members tm
     join teams t on t.id = tm.team_id
     where tm.team_id = $1
@@ -76,6 +79,16 @@ async function getMemberRankSnapshot({ teamId, userId, client }) {
         and e.start_at >= $3
         and e.start_at < now()
         and e.status in ('published', 'finished', 'cancelled')
+        and (
+          $6::timestamptz is null
+          or coalesce(e.published_at, e.created_at, e.start_at) < $6::timestamptz
+        )
+        and not (
+          $4::timestamptz is not null
+          and $5::timestamptz is not null
+          and coalesce(e.published_at, e.created_at, e.start_at) >= $4::timestamptz
+          and coalesce(e.published_at, e.created_at, e.start_at) < $5::timestamptz
+        )
     )
     select
       count(*) filter (where outcome in ('attended', 'missed'))::int as evaluated_events,
@@ -84,7 +97,14 @@ async function getMemberRankSnapshot({ teamId, userId, client }) {
       count(*) filter (where outcome = 'neutral')::int as neutral_events
     from event_outcomes
     `,
-    [teamId, userId, membership.joined_at]
+    [
+      teamId,
+      userId,
+      membership.joined_at,
+      membership.break_started_at,
+      membership.break_until,
+      membership.passive_since
+    ]
   );
 
   const stats = statsResult.rows[0] || {};
@@ -171,8 +191,15 @@ async function shouldEarlyOpenRegistrationWindow({
     from team_members
     where team_id = $1
       and membership_status = 'active'
+      and passive_since is null
+      and not (
+        break_started_at is not null
+        and break_until is not null
+        and $2::timestamptz >= break_started_at
+        and $2::timestamptz < break_until
+      )
     `,
-    [event.team_id]
+    [event.team_id, event.published_at || event.created_at || event.start_at]
   );
 
   const higherWaveMembers = [];

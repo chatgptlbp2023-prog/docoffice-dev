@@ -4,10 +4,12 @@ const { randomUUID } = require('crypto');
 const AppError = require('../utils/appError');
 const { pool } = require('./dbService');
 const registrationService = require('./registrationService');
+const teamService = require('./teamService');
 
 const EVENT_EMAIL_ACTIONS = Object.freeze({
   REGISTER: 'register',
-  SKIP: 'skip'
+  SKIP: 'skip',
+  VACATION_ONE_WEEK: 'vacation_one_week'
 });
 
 function normalizeAppBaseUrl(baseUrl = '') {
@@ -291,6 +293,37 @@ async function performSkipAction(context, payload) {
   };
 }
 
+async function performVacationOneWeekAction(context, payload) {
+  const breakResult = await teamService.startMyTeamBreak({
+    teamId: context.team_id,
+    userId: context.user_id
+  });
+  const breakUntil = breakResult.member.break_until;
+  const message = breakResult.message || 'Rogzitettuk: 1 hetig szabin vagy ebben a csapatban.';
+
+  await logEventEmailAction({
+    eventId: context.event_id,
+    teamId: context.team_id,
+    userId: context.user_id,
+    action: EVENT_EMAIL_ACTIONS.VACATION_ONE_WEEK,
+    status: 'recorded',
+    message,
+    tokenJti: payload.jti,
+    metadata: {
+      breakUntil,
+      breakExtensionsCount: breakResult.member.break_extensions_count,
+      rankModuleEnabled: Boolean(context.rank_module_enabled)
+    }
+  });
+
+  return {
+    ok: true,
+    status: 'recorded',
+    message,
+    breakUntil
+  };
+}
+
 async function executeEventEmailActionToken(token) {
   const payload = verifyEventEmailActionToken(token);
   const context = await getEventEmailActionContext({
@@ -300,6 +333,17 @@ async function executeEventEmailActionToken(token) {
 
   if (payload.action === EVENT_EMAIL_ACTIONS.REGISTER) {
     const outcome = await performRegisterAction(context, payload);
+    return {
+      ...outcome,
+      action: payload.action,
+      eventId: context.event_id,
+      teamId: context.team_id,
+      eventTitle: context.title
+    };
+  }
+
+  if (payload.action === EVENT_EMAIL_ACTIONS.VACATION_ONE_WEEK) {
+    const outcome = await performVacationOneWeekAction(context, payload);
     return {
       ...outcome,
       action: payload.action,

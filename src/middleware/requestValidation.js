@@ -896,6 +896,21 @@ function validateUpdateEvent(req, res, next) {
   return next();
 }
 
+function validateRegisterEventGuest(req, res, next) {
+  if (!ensureBodyObject(req, res)) {
+    return;
+  }
+
+  const guestName = validateRequiredString(req.body.guestName, 'A vendeg neve', {
+    minLength: 2,
+    maxLength: 120
+  });
+  if (guestName.error) return badRequest(res, guestName.error);
+
+  req.body.guestName = guestName.value.replace(/\s+/g, ' ').trim();
+  return next();
+}
+
 function validateUpdateTeamRules(req, res, next) {
   if (!ensureBodyObject(req, res)) {
     return;
@@ -938,7 +953,7 @@ function validateUpdateTeamModuleSettings(req, res, next) {
     return;
   }
 
-  const allowedFields = ['cashModuleEnabled', 'disciplineModuleEnabled'];
+  const allowedFields = ['cashModuleEnabled', 'disciplineModuleEnabled', 'adminGuideModuleEnabled'];
   const keys = Object.keys(req.body);
   if (keys.length === 0) {
     return badRequest(res, 'Nincs módosítandó modulbeállítás mező.');
@@ -958,6 +973,84 @@ function validateUpdateTeamModuleSettings(req, res, next) {
     if (result.error) {
       return badRequest(res, result.error);
     }
+  }
+
+  return next();
+}
+
+function validateUpdateMySkills(req, res, next) {
+  if (!ensureBodyObject(req, res)) {
+    return;
+  }
+
+  const allowedFields = ['goalkeeperSkill', 'defenseSkill', 'attackSkill', 'isGoalkeeper'];
+  const keys = Object.keys(req.body);
+  if (keys.length === 0) {
+    return badRequest(res, 'Nincs módosítandó skill mező.');
+  }
+
+  const unknownFields = rejectUnknownFields(req.body, allowedFields);
+  if (unknownFields.length > 0) {
+    return badRequest(res, `Ismeretlen saját skill mezők: ${unknownFields.join(', ')}`);
+  }
+
+  for (const field of ['goalkeeperSkill', 'defenseSkill', 'attackSkill']) {
+    if (!Object.prototype.hasOwnProperty.call(req.body, field)) {
+      continue;
+    }
+
+    const numericValue = Number(req.body[field]);
+    if (!Number.isInteger(numericValue) || numericValue < 0 || numericValue > 10) {
+      return badRequest(res, `A ${field} csak 0 és 10 közötti egész szám lehet.`);
+    }
+    req.body[field] = numericValue;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'isGoalkeeper')) {
+    const result = validateBoolean(req.body.isGoalkeeper, 'Az isGoalkeeper', { required: true });
+    if (result.error) {
+      return badRequest(res, result.error);
+    }
+    req.body.isGoalkeeper = result.value;
+  }
+
+  return next();
+}
+
+function validateUpdateTeamMemberActivityStatus(req, res, next) {
+  if (!ensureBodyObject(req, res)) {
+    return;
+  }
+
+  const allowedFields = ['status', 'clearBreak', 'extendBreak'];
+  const keys = Object.keys(req.body);
+  if (keys.length === 0) {
+    return badRequest(res, 'Nincs módosítandó aktivitási állapot mező.');
+  }
+
+  const unknownFields = rejectUnknownFields(req.body, allowedFields);
+  if (unknownFields.length > 0) {
+    return badRequest(res, `Ismeretlen aktivitási állapot mezők: ${unknownFields.join(', ')}`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'status')) {
+    const status = normalizeString(req.body.status).toLowerCase();
+    if (!['active', 'passive'].includes(status)) {
+      return badRequest(res, 'A status csak active vagy passive lehet.');
+    }
+    req.body.status = status;
+  }
+
+  for (const field of ['clearBreak', 'extendBreak']) {
+    if (!Object.prototype.hasOwnProperty.call(req.body, field)) {
+      continue;
+    }
+
+    const result = validateBoolean(req.body[field], `A ${field}`, { required: true });
+    if (result.error) {
+      return badRequest(res, result.error);
+    }
+    req.body[field] = result.value;
   }
 
   return next();
@@ -991,11 +1084,14 @@ module.exports = {
   validateTeamFinanceAdjustment,
   validateUpdateTeamRules,
   validateUpdateTeamModuleSettings,
+  validateUpdateMySkills,
+  validateUpdateTeamMemberActivityStatus,
   validateCreateInvite,
   validateCreateJoinLink,
   validateGoogleAuth,
   validateUpdateProfile,
   validateCreateEvent,
   validateUpdateEvent,
+  validateRegisterEventGuest,
   validateUpdateEventStatus,
 };

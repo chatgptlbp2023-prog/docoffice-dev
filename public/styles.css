@@ -1793,6 +1793,49 @@ textarea {
   background: linear-gradient(180deg, rgba(247, 251, 255, 0.94) 0%, rgba(236, 244, 252, 0.9) 60%, rgba(230, 242, 232, 0.84) 100%);
 }
 .event-card h4 { margin-bottom: 8px; }
+
+.user-break-banner {
+  align-items: center;
+  background: linear-gradient(135deg, rgba(255, 247, 237, 0.98), rgba(254, 243, 199, 0.92));
+  border-color: rgba(245, 158, 11, 0.58);
+  box-shadow: 0 14px 34px rgba(146, 64, 14, 0.12);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.user-break-banner.is-passive {
+  background: linear-gradient(135deg, rgba(241, 245, 249, 0.98), rgba(226, 232, 240, 0.92));
+  border-color: rgba(100, 116, 139, 0.58);
+}
+
+.user-break-title {
+  color: #92400e;
+  font-size: 1.05rem;
+  font-weight: 900;
+  margin-bottom: 4px;
+}
+
+.admin-activity-card {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.9), rgba(239, 246, 255, 0.86));
+}
+
+.member-activity-filter-card {
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.member-activity-actions {
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  padding-top: 10px;
+}
+
+@media (max-width: 720px) {
+  .user-break-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .event-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1940,6 +1983,11 @@ textarea {
   padding: 6px 10px;
 }
 
+.participant-chip.is-guest {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(255, 251, 235, 0.92);
+}
+
 .participant-position {
   color: var(--muted);
   font-weight: 700;
@@ -1947,6 +1995,32 @@ textarea {
 
 .participant-name {
   font-weight: 600;
+}
+
+.participant-guest-invite {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.participant-guest-invite:hover {
+  color: var(--accent-strong);
+}
+
+.participant-guest-badge {
+  font-size: 0.72rem;
+  padding: 3px 7px;
+}
+
+.participant-host-note {
+  white-space: nowrap;
 }
 
 .checkbox-line {
@@ -2320,6 +2394,32 @@ hr {
   margin-bottom: 20px;
 }
 
+#userView .view-header {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.15fr) minmax(340px, 0.85fr);
+  gap: 24px;
+}
+
+#userView .view-header > div:first-child {
+  min-width: 0;
+}
+
+#userView .user-header-context {
+  max-width: 760px;
+}
+
+#userView .user-header-context .role-context-card {
+  width: 100%;
+}
+
+#userOverviewCards.compact-overview {
+  max-width: none;
+}
+
+#userOverviewCards.overview-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(120px, 1fr));
@@ -2355,6 +2455,61 @@ hr {
 .stat-card-button:disabled {
   opacity: 1;
   filter: none;
+}
+
+.team-draw-control-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.team-draw-strategy-selector {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: min(100%, 360px);
+}
+
+.team-draw-strategy-label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.team-draw-strategy-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.team-draw-strategy-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 8px 10px;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.team-draw-strategy-pill:hover {
+  border-color: rgba(59, 130, 246, 0.45);
+  transform: translateY(-1px);
+}
+
+.team-draw-strategy-pill.is-active {
+  border-color: rgba(22, 163, 74, 0.56);
+  background: linear-gradient(180deg, rgba(220, 252, 231, 0.96), rgba(187, 247, 208, 0.88));
+  color: #14532d;
 }
 
 .user-invite-alert-card {
@@ -2659,6 +2814,10 @@ hr {
     flex-direction: column;
   }
 
+  #userView .view-header {
+    grid-template-columns: 1fr;
+  }
+
   .overview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2667,6 +2826,20 @@ hr {
 @media (max-width: 720px) {
   .overview-grid {
     grid-template-columns: 1fr;
+  }
+
+  #userOverviewCards.overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .team-draw-control-row,
+  .team-draw-strategy-selector {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .team-draw-strategy-pills {
+    justify-content: flex-start;
   }
 
   .context-strip {
@@ -4160,4 +4333,8 @@ hr {
   .auth-version-note span {
     white-space: normal;
   }
+}
+div:has(> #eventLocation),
+label[for="eventLocation"] {
+  display: none;
 }

@@ -23,10 +23,14 @@ const state = {
   adminEvents: [],
   teamSkillSettings: null,
   rankSettingsSaving: false,
+  goalkeeperSettingsSaving: false,
   financeSettingsSaving: false,
+  adminGuideSettingsSaving: false,
+  userSkillSettingsSaving: false,
   rulesSettingsSaving: false,
   rulesAcceptanceSaving: false,
   teamDrawPreview: null,
+  teamDrawStrategy: localStorage.getItem('foci_team_draw_strategy') || 'optimized',
   savedEventDraw: null,
   savedEventDrawEventId: null,
   adminSavedEventDraw: null,
@@ -57,6 +61,7 @@ const state = {
   adminWorkspace: 'home',
   tournamentWorkspace: 'home',
   adminTeamSection: 'invites',
+  memberActivityFilter: 'all',
   adminEventsSection: 'upcoming',
   adminFinanceSection: 'settlement',
   adminEventFormSection: 'basics',
@@ -108,6 +113,14 @@ const REGISTRATION_PATH_OPTIONS = Object.freeze([
 const ACTIVE_REGISTRATION_PATHS = new Set([
   'team_sport_organizer',
   'invited_participant'
+]);
+
+const TEAM_DRAW_STRATEGY_OPTIONS = Object.freeze([
+  { value: 'random', label: 'Random' },
+  { value: 'sum_balance', label: 'Szum alapú' },
+  { value: 'counter_pair_balance', label: 'Ellenpár alapú' },
+  { value: 'role_balance', label: 'Role balance' },
+  { value: 'optimized', label: 'Optimalizált próbálgatás' }
 ]);
 
 function getTeamStorageKeyForUser(userId) {
@@ -361,12 +374,16 @@ const els = {
   adminFinanceSettlementCard: document.getElementById('adminFinanceSettlementCard'),
   adminEventEditorCard: document.getElementById('adminEventEditorCard'),
   adminStatisticsContent: document.getElementById('adminStatisticsContent'),
+  userHeaderContext: document.getElementById('userHeaderContext'),
+  userBreakBanner: document.getElementById('userBreakBanner'),
   userOverviewCards: document.getElementById('userOverviewCards'),
   nextEventHero: document.getElementById('nextEventHero'),
   userTeamDrawPreview: document.getElementById('userTeamDrawPreview'),
   userFinanceModule: document.getElementById('userFinanceModule'),
   userRankModule: document.getElementById('userRankModule'),
   userWeatherModule: document.getElementById('userWeatherModule'),
+  userSkillCard: document.getElementById('userSkillCard'),
+  userSkillModule: document.getElementById('userSkillModule'),
 
   loginForm: document.getElementById('loginForm'),
   registerForm: document.getElementById('registerForm'),
@@ -1395,12 +1412,36 @@ function isRankModuleEnabled() {
   return false;
 }
 
+function isGoalkeeperModuleEnabled() {
+  if (state.teamSkillSettings?.goalkeeper_module_enabled != null) {
+    return state.teamSkillSettings.goalkeeper_module_enabled !== false;
+  }
+
+  if (state.currentTeam?.module_settings?.goalkeeper?.enabled != null) {
+    return state.currentTeam.module_settings.goalkeeper.enabled !== false;
+  }
+
+  if (state.currentTeam?.goalkeeper_module_enabled != null) {
+    return state.currentTeam.goalkeeper_module_enabled !== false;
+  }
+
+  return true;
+}
+
 function isFinanceModuleEnabled(team = state.currentTeam) {
   if (team?.module_settings?.finance?.enabled != null) {
     return team.module_settings.finance.enabled === true;
   }
 
   return team?.cash_module_enabled === true;
+}
+
+function isAdminGuideModuleEnabled(team = state.currentTeam) {
+  if (team?.module_settings?.adminGuide?.enabled != null) {
+    return team.module_settings.adminGuide.enabled === true;
+  }
+
+  return team?.admin_guide_module_enabled === true;
 }
 
 function isEventRankModuleEnabled(event = null) {
@@ -1450,6 +1491,15 @@ function syncCurrentTeamModuleState(patch = {}) {
     };
   }
 
+  if (Object.prototype.hasOwnProperty.call(patch, 'goalkeeperModuleEnabled')) {
+    const enabled = Boolean(patch.goalkeeperModuleEnabled);
+    nextTeam.goalkeeper_module_enabled = enabled;
+    nextModuleSettings.goalkeeper = {
+      ...(currentModuleSettings.goalkeeper || {}),
+      enabled
+    };
+  }
+
   if (Object.prototype.hasOwnProperty.call(patch, 'cashModuleEnabled')) {
     const enabled = Boolean(patch.cashModuleEnabled);
     nextTeam.cash_module_enabled = enabled;
@@ -1464,6 +1514,15 @@ function syncCurrentTeamModuleState(patch = {}) {
     nextTeam.discipline_module_enabled = enabled;
     nextModuleSettings.discipline = {
       ...(currentModuleSettings.discipline || {}),
+      enabled
+    };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'adminGuideModuleEnabled')) {
+    const enabled = Boolean(patch.adminGuideModuleEnabled);
+    nextTeam.admin_guide_module_enabled = enabled;
+    nextModuleSettings.adminGuide = {
+      ...(currentModuleSettings.adminGuide || {}),
       enabled
     };
   }
@@ -1570,6 +1629,90 @@ function getMemberRankProfile(member) {
 
 function getCurrentTeamMember() {
   return state.teamMembers.find(member => member.user_id === state.user?.id) || null;
+}
+
+function isMemberOnBreak(member, referenceDate = new Date()) {
+  if (!member?.break_until || member.membership_status !== 'active') return false;
+  const breakUntil = new Date(member.break_until);
+  const reference = new Date(referenceDate);
+  if (Number.isNaN(breakUntil.getTime()) || Number.isNaN(reference.getTime())) return false;
+  return breakUntil > reference;
+}
+
+function isMemberPassive(member) {
+  return Boolean(member?.passive_since);
+}
+
+function isMemberNotifyable(member) {
+  return member?.membership_status === 'active'
+    && !isMemberOnBreak(member)
+    && !isMemberPassive(member);
+}
+
+function getMemberActivityStatus(member) {
+  if (isMemberPassive(member)) {
+    return {
+      key: 'passive',
+      label: 'Passzív',
+      badgeClass: 'badge-muted'
+    };
+  }
+
+  if (isMemberOnBreak(member)) {
+    return {
+      key: 'break',
+      label: `Szabin ${formatDateTime(member.break_until)}-ig`,
+      badgeClass: 'badge-warning'
+    };
+  }
+
+  return {
+    key: 'active',
+    label: 'Aktív',
+    badgeClass: 'badge-success'
+  };
+}
+
+function getTeamBreakActivityStats(members = state.teamMembers) {
+  const activeMembers = (members || []).filter(member => member.membership_status === 'active');
+  const breakMembers = activeMembers.filter(member => isMemberOnBreak(member));
+  const passiveMembers = activeMembers.filter(member => isMemberPassive(member));
+  const notifyableMembers = activeMembers.filter(member => isMemberNotifyable(member));
+  const totalActive = activeMembers.length;
+  const onBreak = breakMembers.length;
+  const passive = passiveMembers.length;
+  const notifyable = notifyableMembers.length;
+  const effectivelyActive = notifyable;
+  const breakRatio = totalActive > 0 ? Math.round((onBreak / totalActive) * 100) : 0;
+  const passiveRatio = totalActive > 0 ? Math.round((passive / totalActive) * 100) : 0;
+
+  return {
+    totalActive,
+    onBreak,
+    passive,
+    notifyable,
+    effectivelyActive,
+    breakRatio,
+    passiveRatio
+  };
+}
+
+function syncTeamMemberInState(updatedMember) {
+  if (!updatedMember?.user_id) return;
+
+  state.teamMembers = (state.teamMembers || []).map(member => {
+    const sameMember = updatedMember.member_id && String(member.member_id || '') === String(updatedMember.member_id);
+    const sameUser = String(member.user_id || '') === String(updatedMember.user_id);
+    if (!sameMember && !sameUser) return member;
+
+    return {
+      ...member,
+      ...updatedMember,
+      goalkeeper_score: updatedMember.goalkeeper_score ?? updatedMember.goalkeeper_skill ?? member.goalkeeper_score,
+      defense_score: updatedMember.defense_score ?? updatedMember.defense_skill ?? member.defense_score,
+      attack_score: updatedMember.attack_score ?? updatedMember.attack_skill ?? member.attack_score
+    };
+  });
 }
 
 function getTeamDrawMode() {
@@ -2729,7 +2872,9 @@ function getAdminEventFormSectionLabel(section) {
 function getAdminEventFormStepState() {
   const title = document.getElementById('eventTitle')?.value?.trim() || '';
   const startAt = document.getElementById('eventStartAt')?.value?.trim() || '';
-  const location = document.getElementById('eventLocation')?.value?.trim() || '';
+  const location = document.getElementById('eventLocationAddress')?.value?.trim()
+    || document.getElementById('eventLocation')?.value?.trim()
+    || '';
   const minPlayers = Number(document.getElementById('eventMinPlayers')?.value || 0);
   const playersOnField = Number(document.getElementById('eventPlayersOnField')?.value || 0);
   const rulesText = document.getElementById('eventRulesText')?.value?.trim() || '';
@@ -3012,6 +3157,7 @@ function resetUnifiedAdminEventForm() {
   if (locationAddressInput) {
     locationAddressInput.value = '';
   }
+  document.getElementById('eventLocation').value = '';
   document.getElementById('eventStatus').value = 'published';
   document.getElementById('eventPricingMode').value = EVENT_PRICING_MODES.FREE;
   document.getElementById('eventPerPlayerFee').value = '0';
@@ -3038,10 +3184,10 @@ function populateUnifiedAdminEventForm(event) {
   document.getElementById('eventTitle').value = event.title || '';
   document.getElementById('eventDescription').value = event.description || '';
   document.getElementById('eventStartAt').value = toDateTimeLocalInput(event.start_at);
-  document.getElementById('eventLocation').value = event.location_name || '';
+  document.getElementById('eventLocation').value = event.location_name || event.location_address || '';
   const locationAddressInput = document.getElementById('eventLocationAddress');
   if (locationAddressInput) {
-    locationAddressInput.value = event.location_address || '';
+    locationAddressInput.value = event.location_address || event.location_name || '';
   }
   document.getElementById('eventMinPlayers').value = event.min_players ?? '';
   document.getElementById('eventPlayersOnField').value = event.players_on_field_total ?? '';
@@ -3423,12 +3569,22 @@ function clearAuth() {
   if (els.teamMembersAdminList) els.teamMembersAdminList.innerHTML = '';
   if (els.selectedEventMeta) els.selectedEventMeta.innerHTML = '';
   if (els.adminOverviewCards) els.adminOverviewCards.innerHTML = '';
+  if (els.userHeaderContext) els.userHeaderContext.innerHTML = '';
+  if (els.userBreakBanner) {
+    els.userBreakBanner.innerHTML = '';
+    els.userBreakBanner.hidden = true;
+  }
   if (els.userOverviewCards) els.userOverviewCards.innerHTML = '';
   if (els.nextEventHero) els.nextEventHero.innerHTML = '';
   if (els.userTeamDrawPreview) els.userTeamDrawPreview.innerHTML = '';
   if (els.userRankModule) els.userRankModule.innerHTML = '';
   if (els.userFinanceModule) els.userFinanceModule.innerHTML = '';
   if (els.userWeatherModule) els.userWeatherModule.innerHTML = '';
+  if (els.userSkillModule) els.userSkillModule.innerHTML = '';
+  if (els.userSkillCard) {
+    els.userSkillCard.hidden = true;
+    els.userSkillCard.classList.add('hidden');
+  }
   state.platformSummary = null;
 
   if (els.teamIdInput) els.teamIdInput.value = '';
@@ -3585,10 +3741,20 @@ function clearCurrentTeamContext({ clearStored = false } = {}) {
     );
   }
   if (els.selectedEventMeta) els.selectedEventMeta.innerHTML = '';
+  if (els.userHeaderContext) els.userHeaderContext.innerHTML = '';
+  if (els.userBreakBanner) {
+    els.userBreakBanner.innerHTML = '';
+    els.userBreakBanner.hidden = true;
+  }
   if (els.nextEventHero) els.nextEventHero.innerHTML = '';
   if (els.userTeamDrawPreview) els.userTeamDrawPreview.innerHTML = '';
   if (els.userRankModule) els.userRankModule.innerHTML = '';
   if (els.userFinanceModule) els.userFinanceModule.innerHTML = '';
+  if (els.userSkillModule) els.userSkillModule.innerHTML = '';
+  if (els.userSkillCard) {
+    els.userSkillCard.hidden = true;
+    els.userSkillCard.classList.add('hidden');
+  }
   renderUserRulesView();
 
   renderAdminOverview();
@@ -3758,6 +3924,29 @@ function buildMapsSearchUrlForQuery(query) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(normalized)}`;
 }
 
+function normalizeLocationText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function getEventNavigationLocation(event = {}) {
+  return String(event?.location_address || event?.location_name || '').trim();
+}
+
+function getEventDisplayLocation(event = {}) {
+  const name = String(event?.location_name || '').trim();
+  const address = String(event?.location_address || '').trim();
+
+  if (name && address && normalizeLocationText(name) !== normalizeLocationText(address)) {
+    return `${name} · ${address}`;
+  }
+
+  return address || name || '';
+}
+
+function hasLikelyPostalCode(value) {
+  return /\b\d{4}\b/.test(String(value || ''));
+}
+
 function setLocationAssistStatus(message, tone = 'muted') {
   const element = document.getElementById('eventLocationAssistStatus');
   if (!element) return;
@@ -3830,10 +4019,8 @@ function bindEventLocationAutocomplete() {
     if (place?.formatted_address) {
       addressInput.value = place.formatted_address;
     }
-    if (place?.name && !locationInput.value.trim()) {
-      locationInput.value = place.name;
-    }
-    setLocationAssistStatus('Google cimvalasztas aktiv. Valassz egy talalatot a listabol.', 'success');
+    locationInput.value = (place?.name || place?.formatted_address || addressInput.value || '').trim();
+    setLocationAssistStatus('Google címválasztás aktív. Válassz egy találatot a listából.', 'success');
   });
 
   addressInput.dataset.mapsAutocompleteBound = 'true';
@@ -4415,7 +4602,10 @@ async function fetchEventWeather(event) {
     });
 
     if (!result?.available || !result.weather) {
-      throw new Error(result?.message || 'Ehhez az eseményhez most nincs elérhető időjárási adat.');
+      const error = new Error(result?.message || 'Ehhez az eseményhez most nincs elérhető időjárási adat.');
+      error.reason = result?.reason || 'forecast_not_found';
+      error.weatherMessage = result?.message || '';
+      throw error;
     }
 
     const weatherMeta = getWeatherCodeMeta(result.weather.weatherCode);
@@ -5092,7 +5282,7 @@ function renderTeamCashLedgerSummary(events = []) {
       id: event.id,
       title: event.title || 'Névtelen esemény',
       startAt: event.start_at,
-      locationName: event.location_name || '-',
+      locationName: getEventDisplayLocation(event) || '-',
       baseTotal,
       feeTotal,
       actualPaidTotal,
@@ -5706,7 +5896,8 @@ function renderParticipantList(items = [], options = {}) {
     emptyText = 'Nincs adat.',
     compact = false,
     maxVisible = null,
-    numbered = false
+    numbered = false,
+    allowGuestInvite = false
   } = options;
 
   if (!Array.isArray(items) || !items.length) {
@@ -5717,12 +5908,22 @@ function renderParticipantList(items = [], options = {}) {
 
   return `
     <div class="participant-list ${compact ? 'compact' : ''}">
-      ${visibleItems.map((item, index) => `
-        <div class="participant-chip ${compact ? 'compact' : ''}">
-          ${numbered ? `<span class="participant-position">${escapeHtml(formatParticipantPosition(index))}</span>` : ''}
-          <span class="participant-name">${escapeHtml(item.name || 'Ismeretlen játékos')}</span>
-        </div>
-      `).join('')}
+      ${visibleItems.map((item, index) => {
+        const isGuest = Boolean(item.is_guest);
+        const displayName = item.name || (isGuest ? 'Névtelen vendég' : 'Ismeretlen játékos');
+        return `
+          <div class="participant-chip ${compact ? 'compact' : ''} ${isGuest ? 'is-guest' : ''}">
+            ${numbered ? `<span class="participant-position">${escapeHtml(formatParticipantPosition(index))}</span>` : ''}
+            ${
+              isGuest && allowGuestInvite
+                ? `<button class="participant-name participant-guest-invite" type="button" data-invite-guest-name="${escapeAttribute(displayName)}">+1 ${escapeHtml(displayName)}</button>`
+                : `<span class="participant-name">${isGuest ? '+1 ' : ''}${escapeHtml(displayName)}</span>`
+            }
+            ${isGuest ? '<span class="badge badge-muted participant-guest-badge">vendég</span>' : ''}
+            ${isGuest && item.host_name ? `<span class="small muted participant-host-note">hozta: ${escapeHtml(item.host_name)}</span>` : ''}
+          </div>
+        `;
+      }).join('')}
     </div>
   `;
 }
@@ -5754,7 +5955,8 @@ function renderEventParticipantPreview(event, options = {}) {
         ${renderParticipantList(going, {
           emptyText: 'Még nincs going jelentkező.',
           compact,
-          numbered: true
+          numbered: true,
+          allowGuestInvite: role === 'admin' && canManageInvites()
         })}
       </div>
       <div class="participant-preview-section">
@@ -5762,7 +5964,8 @@ function renderEventParticipantPreview(event, options = {}) {
         ${renderParticipantList(waiting, {
           emptyText: 'Nincs várólista.',
           compact,
-          numbered: true
+          numbered: true,
+          allowGuestInvite: role === 'admin' && canManageInvites()
         })}
       </div>
       ${showRankWaiting ? `
@@ -6108,7 +6311,7 @@ function ensureCountdownTicker() {
 }
 
 function buildMapsUrl(event) {
-  const raw = event?.location_address || event?.location_name || '';
+  const raw = getEventNavigationLocation(event);
   if (!raw) return '';
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(raw)}`;
 }
@@ -6253,7 +6456,7 @@ function buildGoogleCalendarUrl(event) {
     text: event?.title || 'Foci esemény',
     dates: `${formatCalendarDate(start)}/${formatCalendarDate(end)}`,
     details,
-    location: event?.location_name || ''
+    location: getEventNavigationLocation(event)
   });
 
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
@@ -6282,7 +6485,7 @@ function buildIcsDownloadUrl(event) {
     `DTSTART:${formatIcsDate(start)}`,
     `DTEND:${formatIcsDate(end)}`,
     `SUMMARY:${String(event.title || 'Foci esemény').replace(/\n/g, ' ')}`,
-    `LOCATION:${String(event.location_name || event.location_address || '').replace(/\n/g, ' ')}`,
+    `LOCATION:${String(getEventNavigationLocation(event)).replace(/\n/g, ' ')}`,
     `DESCRIPTION:${String(event.description || '').replace(/\n/g, '\\n')}`,
     'END:VEVENT',
     'END:VCALENDAR'
@@ -6530,6 +6733,7 @@ function renderUserRulesView() {
 function renderMyEventActionButtons(event) {
   const actions = [];
   const status = event.my_registration_status;
+  const guestRegistration = getActiveGuestRegistration(event);
 
   if (canAttemptEventRegistration(event)) {
     actions.push(`<button class="btn" type="button" data-register-event-id="${event.id}">Jelentkezem</button>`);
@@ -6538,6 +6742,12 @@ function renderMyEventActionButtons(event) {
   }
 
   if (status === 'going' || status === 'waiting_list' || status === 'waiting_list_rank') {
+    if (guestRegistration) {
+      actions.push(`<span class="badge badge-muted">+1 vendég: ${escapeHtml(guestRegistration.guest_name || 'név nélkül')}</span>`);
+      actions.push(`<button class="btn btn-secondary" type="button" data-cancel-guest-event-id="${event.id}" data-cancel-guest-registration-id="${guestRegistration.id}">Vendég lemondása</button>`);
+    } else {
+      actions.push(`<button class="btn btn-secondary" type="button" data-add-guest-event-id="${event.id}">+1 fő</button>`);
+    }
     actions.push(`<button class="btn btn-danger" type="button" data-cancel-event-id="${event.id}">Lemondom</button>`);
   }
 
@@ -6545,6 +6755,15 @@ function renderMyEventActionButtons(event) {
   actions.push(renderIcsExportLink(event));
   actions.push(`<button class="btn btn-secondary" type="button" data-open-event-id="${event.id}">Fókuszba teszem</button>`);
   return actions.filter(Boolean).join('');
+}
+
+function getActiveGuestRegistration(event) {
+  const guest = event?.my_guest_registration || null;
+  if (!guest || !['going', 'waiting_list'].includes(guest.registration_status)) {
+    return null;
+  }
+
+  return guest;
 }
 
 function renderEventAccordionBody(event) {
@@ -6561,8 +6780,12 @@ function renderEventAccordionBody(event) {
       <div class="grid two-col inner-grid event-detail-grid">
         <div class="detail-box">
           <div class="detail-label">Pálya / helyszín</div>
-          <div class="detail-value">${escapeHtml(event.location_name || '-')}</div>
-          <div class="small muted">${escapeHtml(event.location_address || 'Nincs pontos cím megadva.')}</div>
+          <div class="detail-value">${escapeHtml(getEventDisplayLocation(event) || '-')}</div>
+          ${
+            normalizeLocationText(getEventDisplayLocation(event)) !== normalizeLocationText(getEventNavigationLocation(event))
+              ? `<div class="small muted">${escapeHtml(getEventNavigationLocation(event) || 'Nincs pontos cím megadva.')}</div>`
+              : ''
+          }
         </div>
         <div class="detail-box">
           <div class="detail-label">Saját státusz</div>
@@ -6647,7 +6870,7 @@ ${renderRankRegistrationNotice(hydratedEvent.registration_window, { compact: tru
       ${renderEventParticipantPreview(hydratedEvent, { role: 'user', compact: true })}
 
       <div class="row between wrap gap top-space align-center">
-        <div class="small muted">Helyszín: ${escapeHtml(event.location_name || '-')} · ${escapeHtml(event.location_address || 'nincs pontos cím')}</div>
+        <div class="small muted">Helyszín: ${escapeHtml(getEventDisplayLocation(hydratedEvent) || '-')}</div>
         <div class="row gap wrap event-actions-inline">
           ${renderMyEventActionButtons(hydratedEvent)}
           ${renderMapsLink(hydratedEvent)}
@@ -6726,7 +6949,51 @@ function renderUserOverview() {
     </button>
   `).join('');
 
-  els.userOverviewCards.innerHTML = `${renderTeamRoleContextCard({ surface: 'user' })}${overviewCards}`;
+  if (els.userHeaderContext) {
+    els.userHeaderContext.innerHTML = renderTeamRoleContextCard({ surface: 'user' });
+  }
+  renderUserBreakBanner();
+  els.userOverviewCards.innerHTML = overviewCards;
+}
+
+function renderUserBreakBanner() {
+  if (!els.userBreakBanner) return;
+
+  const currentMember = getCurrentTeamMember();
+  const onBreak = isMemberOnBreak(currentMember);
+  const passive = isMemberPassive(currentMember);
+  if (!onBreak && !passive) {
+    els.userBreakBanner.innerHTML = '';
+    els.userBreakBanner.hidden = true;
+    return;
+  }
+
+  const rankNote = isRankModuleEnabled()
+    ? '<div class="small top-space">Ez idő alatt nem veszítesz rangpozíciót.</div>'
+    : '';
+  const title = passive
+    ? 'Passzív státuszban vagy ebben a csapatban'
+    : 'Szabin vagy ebben a csapatban';
+  const description = passive
+    ? 'Nem kapsz automatikus eseményértesítéseket. Visszatérhetsz aktívnak, ha újra szeretnél részt venni.'
+    : `${formatDateTime(currentMember.break_until)}-ig nem kapsz eseményértesítéseket.`;
+
+  els.userBreakBanner.hidden = false;
+  els.userBreakBanner.innerHTML = `
+    <div class="event-card user-break-banner ${passive ? 'is-passive' : ''}">
+      <div>
+        <div class="user-break-title">${escapeHtml(title)}</div>
+        <div class="small">${escapeHtml(description)}</div>
+        ${rankNote}
+        <div class="small" hidden>
+          ${escapeHtml(formatDateTime(currentMember.break_until))}-ig nem kapsz eseményértesítéseket, és nem számítasz aktív jelentkezőnek.
+        </div>
+      </div>
+      <button class="btn btn-secondary" type="button" data-user-break-action="end">
+        Visszatérek aktívnak
+      </button>
+    </div>
+  `;
 }
 
 function clearPendingInvitePulseTimer() {
@@ -6867,6 +7134,104 @@ async function jumpToRulesAcceptance() {
   switchView('rulesView');
   renderUserRulesView();
   els.userRulesContent?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+}
+
+function renderUserSkillModule() {
+  if (!els.userSkillModule) return;
+
+  const skillCard = els.userSkillCard || els.userSkillModule.closest('.card');
+  const currentMember = getCurrentTeamMember();
+  const canShowSkillBlock = Boolean(
+    state.user
+    && state.currentTeam
+    && currentMember?.membership_status === 'active'
+    && isTeamSkillModuleEnabled()
+  );
+
+  if (skillCard) {
+    skillCard.hidden = !canShowSkillBlock;
+    skillCard.classList.toggle('hidden', !canShowSkillBlock);
+  }
+
+  if (!canShowSkillBlock) {
+    els.userSkillModule.innerHTML = '';
+    return;
+  }
+
+  const goalkeeperScore = Number(currentMember.goalkeeper_score ?? currentMember.goalkeeper_skill ?? 0);
+  const defenseScore = Number(currentMember.defense_score ?? currentMember.defense_skill ?? 5);
+  const attackScore = Number(currentMember.attack_score ?? currentMember.attack_skill ?? 5);
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
+
+  els.userSkillModule.innerHTML = `
+    <div class="event-card">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Saját skill értékeim</strong>
+          <div class="small muted top-space">
+            Ezeket az értékeket a skill alapú csapatsorsolás használja. Az admin oldali modulkapcsolót továbbra is csak a csapatkapitány kezeli.
+          </div>
+        </div>
+        <span class="badge badge-success">SKILL MODUL ON</span>
+      </div>
+
+      <label class="module-switch top-space" for="userIsGoalkeeperToggle">
+        <span>
+          <span class="module-switch-label">Kapus vagyok</span>
+          <span class="module-switch-description">
+            ${goalkeeperModuleEnabled
+              ? 'A kapus jelölés beleszámít a csapatgenerálás kapuslogikájába.'
+              : 'A kapus modul OFF, ezért ez most információként látszik, de a sorsolás nem követel két kapust.'}
+          </span>
+        </span>
+        <span class="module-switch-control">
+          <input
+            id="userIsGoalkeeperToggle"
+            type="checkbox"
+            data-user-skill-goalkeeper-toggle
+            ${currentMember.is_goalkeeper ? 'checked' : ''}
+            ${state.userSkillSettingsSaving ? 'disabled' : ''}
+          >
+          <span class="module-switch-track" aria-hidden="true"></span>
+        </span>
+      </label>
+
+      ${[
+        ['Kapus skill', 'goalkeeper', goalkeeperScore],
+        ['Védő skill', 'defense', defenseScore],
+        ['Támadó skill', 'attack', attackScore]
+      ].map(([label, key, value]) => `
+        <div class="top-space row gap align-center">
+          <span class="small muted skill-slider-label">${escapeHtml(label)}</span>
+          <input
+            type="range"
+            min="0"
+            max="10"
+            step="1"
+            data-user-skill-input="${escapeAttribute(key)}"
+            value="${escapeHtml(String(value))}"
+            ${state.userSkillSettingsSaving ? 'disabled' : ''}
+            oninput="this.nextElementSibling.textContent = this.value"
+          >
+          <span class="small muted">${escapeHtml(String(value))}</span>
+        </div>
+      `).join('')}
+
+      <div class="row gap wrap align-center top-space">
+        <button
+          class="btn"
+          type="button"
+          data-user-skill-action="save"
+          ${state.userSkillSettingsSaving ? 'disabled' : ''}
+        >
+          Skill értékeim mentése
+        </button>
+        <span class="small muted">
+          ${state.userSkillSettingsSaving ? 'Mentés folyamatban...' : 'A mentés után az admin taglistában is ezek az értékek látszanak.'}
+        </span>
+      </div>
+    </div>
+  `;
 }
 
 function renderUserRankModule() {
@@ -7245,11 +7610,12 @@ async function hydrateEventWeatherWidget(widgetId, event, options = {}) {
       </div>
     `;
   } catch (error) {
+    const message = error?.weatherMessage || error?.message || 'Az időjárás szolgáltató most nem elérhető. Próbáld meg később.';
     element.innerHTML = `
       <div class="weather-placeholder-icon">🌤️</div>
       <div class="weather-widget-content">
         <div class="rank-hero-title">Időjárás most még nem elérhető</div>
-        <div class="small muted">${escapeHtml(error.message)}</div>
+        <div class="small muted">${escapeHtml(message)}</div>
         <div class="small muted">A helyszín az eseményből jön: ${escapeHtml(getEventWeatherQuery(event) || '-')}</div>
       </div>
     `;
@@ -7321,18 +7687,20 @@ function getAdminTeamSectionProgressState() {
   const activeMembers = onboarding.activeMembersCount;
   const pendingInvites = onboarding.pendingInviteCount;
   const activeGoalkeepers = onboarding.activeGoalkeepersCount;
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
   const hasFocusEvent = Boolean(onboarding.focusEvent);
   const hasDraw = Boolean(state.adminSavedEventDraw || state.teamDrawPreview);
+  const goalkeepersDone = !goalkeeperModuleEnabled || activeGoalkeepers >= 2;
 
   return {
     invitesDone: activeMembers > 1 && pendingInvites === 0,
     membersDone: activeMembers > 1,
-    advancedDone: activeGoalkeepers >= 2,
+    advancedDone: goalkeepersDone,
     drawDone: hasFocusEvent && hasDraw,
     completedCount: [
       activeMembers > 1 && pendingInvites === 0,
       activeMembers > 1,
-      activeGoalkeepers >= 2,
+      goalkeepersDone,
       hasFocusEvent && hasDraw
     ].filter(Boolean).length
   };
@@ -7586,6 +7954,7 @@ function getSmartAdminTeamSection() {
   const activeMembers = onboarding.activeMembersCount;
   const pendingInvites = onboarding.pendingInviteCount;
   const activeGoalkeepers = onboarding.activeGoalkeepersCount;
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
   const drawReadyEvents = onboarding.drawReadyEvents;
   const adminFocusEvent = onboarding.focusEvent;
 
@@ -7593,7 +7962,7 @@ function getSmartAdminTeamSection() {
     return 'invites';
   }
 
-  if (activeGoalkeepers < 2) {
+  if (goalkeeperModuleEnabled && activeGoalkeepers < 2) {
     return 'advanced';
   }
 
@@ -7886,7 +8255,7 @@ function getAdminSuggestedNextStep() {
     };
   }
 
-  if (onboarding.activeGoalkeepersCount < 2) {
+  if (isGoalkeeperModuleEnabled() && onboarding.activeGoalkeepersCount < 2) {
     return {
       title: 'Jelölj ki legalább két kapust.',
       description: 'Csapatleosztást csak akkor tudsz készíteni, ha a going kerethez van legalább két kapusnak jelölt játékos.',
@@ -8190,7 +8559,7 @@ function renderAdminHomeFocusEventPanel(events = []) {
       <div class="admin-guide-title top-space">${escapeHtml(nextEvent.title || 'Névtelen esemény')}</div>
       <div class="small muted">${escapeHtml(formatDateTime(nextEvent.start_at))}</div>
       <div class="small muted">Hátralévő idő: ${renderCountdown(nextEvent.start_at)}</div>
-      <div class="small muted">${escapeHtml(nextEvent.location_name || 'Nincs helyszín')}</div>
+      <div class="small muted">${escapeHtml(getEventDisplayLocation(nextEvent) || 'Nincs helyszín')}</div>
       <div class="grid two-col inner-grid top-space">
         <div class="detail-box">
           <div class="detail-label">Jelentkezett</div>
@@ -9036,6 +9405,7 @@ function renderAdminAvailableTournamentsPanel() {
             `
             : emptyState('Még nincs listázva torna.', 'Állíts be szűrőket, vagy hagyd üresen a mezőket, majd kattints a MUTAT gombra.')
         }
+        </div>
       </div>
     </div>
   `;
@@ -9538,7 +9908,7 @@ function renderAdminFinancePanel() {
         </div>
         <div class="small muted top-space">${escapeHtml(adminFocusEvent.title || 'Névtelen esemény')}</div>
         <div class="small muted">${escapeHtml(formatDateTime(adminFocusEvent.start_at))}</div>
-        <div class="small muted">${escapeHtml(adminFocusEvent.location_name || 'Nincs helyszín')}</div>
+        <div class="small muted">${escapeHtml(getEventDisplayLocation(adminFocusEvent) || 'Nincs helyszín')}</div>
       </div>
   `;
 
@@ -11654,7 +12024,7 @@ function renderMyEvents(events) {
         </div>
 
         <div class="small muted top-space">Kezdés: ${escapeHtml(formatDateTime(event.start_at))}</div>
-        <div class="small muted">Helyszín: ${escapeHtml(event.location_name || '-')}</div>
+        <div class="small muted">Helyszín: ${escapeHtml(getEventDisplayLocation(event) || '-')}</div>
 
         <div class="event-actions top-space">
           ${renderMyEventActionButtons(event)}
@@ -11694,6 +12064,8 @@ async function handleDashboardClicks(event) {
   const openEventAction = event.target.closest('[data-open-event-id]');
   const registerAction = event.target.closest('[data-register-event-id]');
   const registerLimitAction = event.target.closest('[data-register-limit-event-id]');
+  const addGuestAction = event.target.closest('[data-add-guest-event-id]');
+  const cancelGuestAction = event.target.closest('[data-cancel-guest-registration-id]');
   const cancelAction = event.target.closest('[data-cancel-event-id]');
 
   const teamId = teamAction?.dataset.myTeamId || '';
@@ -11701,6 +12073,9 @@ async function handleDashboardClicks(event) {
   const openEventTeamId = openEventAction?.dataset.openEventTeamId || '';
   const registerEventId = registerAction?.dataset.registerEventId || '';
   const registerLimitEventId = registerLimitAction?.dataset.registerLimitEventId || '';
+  const addGuestEventId = addGuestAction?.dataset.addGuestEventId || '';
+  const cancelGuestEventId = cancelGuestAction?.dataset.cancelGuestEventId || '';
+  const cancelGuestRegistrationId = cancelGuestAction?.dataset.cancelGuestRegistrationId || '';
   const cancelEventId = cancelAction?.dataset.cancelEventId || '';
 
   if (teamId) {
@@ -11727,6 +12102,16 @@ async function handleDashboardClicks(event) {
     return;
   }
 
+  if (addGuestEventId) {
+    await addGuestRegistration(addGuestEventId);
+    return;
+  }
+
+  if (cancelGuestEventId && cancelGuestRegistrationId) {
+    await cancelGuestRegistration(cancelGuestEventId, cancelGuestRegistrationId);
+    return;
+  }
+
   if (eventId) {
     const knownEvent = state.myEvents.find(item => String(item.id) === String(eventId))
       || state.userTeamEvents.find(item => String(item.id) === String(eventId))
@@ -11738,6 +12123,41 @@ async function handleDashboardClicks(event) {
     }
 
     await openEventForUser(eventId);
+  }
+}
+
+async function handleUserSkillModuleClick(event) {
+  const action = event.target.closest('[data-user-skill-action]')?.dataset.userSkillAction || '';
+
+  if (action === 'save') {
+    await saveMySkillSettings();
+  }
+}
+
+async function endMyTeamBreakFromBanner() {
+  clearMessage();
+
+  if (!state.currentTeamId || !state.currentTeam) {
+    showMessage('Előbb válassz aktív csapatot.', 'error');
+    return;
+  }
+
+  try {
+    const result = await api(`/teams/${state.currentTeamId}/me/break`, {
+      method: 'DELETE'
+    });
+
+    if (result.member) {
+      syncTeamMemberInState(result.member);
+    }
+
+    renderUserOverview();
+    renderTeamSummary(state.currentTeam);
+    renderTeamMembersAdmin(state.teamMembers);
+    await loadTeam(state.currentTeamId);
+    showMessage(result.message || 'Újra aktív vagy ebben a csapatban.', 'success');
+  } catch (error) {
+    showMessage(error.message, 'error');
   }
 }
 
@@ -11780,8 +12200,9 @@ async function loadTeam(teamId) {
     renderTeamSummary(result.team);
     renderUserRulesView();
     renderUserTeamDrawPreview();
-      renderUserRankModule();
-      renderUserFinanceModule();
+    renderUserSkillModule();
+    renderUserRankModule();
+    renderUserFinanceModule();
     renderTeamMembersAdmin(state.teamMembers);
     renderAdminOverview();
     applyRoleAwareUi();
@@ -11807,6 +12228,7 @@ async function loadTeam(teamId) {
     if (state.currentTeam) {
       renderTeamSummary(state.currentTeam);
     }
+    renderUserSkillModule();
     renderMyTeams(state.myTeams);
     syncTeamSelectors();
     showMessage('Csapat betöltve.', 'success');
@@ -11895,6 +12317,12 @@ function renderTeamDrawPreviewCard() {
   const withinTolerance = Boolean(draw.withinTolerance);
   const generationMode = draw.settings?.generationMode || (draw.settings?.skillBalancingEnabled ? 'skill' : 'random');
   const isRandomMode = generationMode === 'random';
+  const explanationBullets = Array.isArray(draw.explanation?.bullets)
+    ? draw.explanation.bullets.slice(0, 4)
+    : [];
+  const strategyLabel = isRandomMode
+    ? 'Gyors random leosztás'
+    : 'Automatikus kiegyensúlyozott leosztás';
 
   function renderTeamColumn(title, shirtEmoji, members, total, teamClassName) {
     return `
@@ -11927,7 +12355,7 @@ function renderTeamDrawPreviewCard() {
         <strong>Csapatsorsolás preview</strong>
         <div class="row gap wrap align-center">
           <span class="badge ${isRandomMode ? 'badge-warning' : 'badge-draft'}">
-            ${isRandomMode ? 'random mód' : 'skill mód'}
+            ${escapeHtml(strategyLabel)}
           </span>
           <span class="${withinTolerance ? 'badge badge-success' : 'badge badge-warning'}">
             ${withinTolerance ? 'tolerancián belül' : 'tolerancián kívül'}
@@ -11949,13 +12377,47 @@ function renderTeamDrawPreviewCard() {
       <div class="small muted top-space">
         ${isRandomMode
           ? 'A skill modul ki van kapcsolva, ezért ez a leosztás 5-5-5 semleges alapállapotból, random módon készült.'
-          : `Skill balance: aktív · tolerance: ${escapeHtml(String(draw.settings?.skillBalanceTolerancePercent ?? 15))}%`}
+          : `Automatikus kiegyensúlyozás aktív · eltérés cél: max. ${escapeHtml(String(draw.settings?.skillBalanceTolerancePercent ?? 15))}%`}
       </div>
+
+      ${explanationBullets.length ? `
+        <div class="event-card soft top-space">
+          <strong>Miért így osztottam?</strong>
+          <ul class="compact-list top-space">
+            ${explanationBullets.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+          </ul>
+        </div>
+      ` : ''}
 
       <div class="grid two-col inner-grid top-space">
         ${renderTeamColumn('Fehér csapat', '⚪', draw.teamA || [], draw.totals?.teamA ?? 0, 'team-preview-white')}
         ${renderTeamColumn('Piros csapat', '🔴', draw.teamB || [], draw.totals?.teamB ?? 0, 'team-preview-red')}
       </div>
+    </div>
+  `;
+}
+
+function renderTeamDrawStrategySelector() {
+  const currentStrategy = TEAM_DRAW_STRATEGY_OPTIONS.some(option => option.value === state.teamDrawStrategy)
+    ? state.teamDrawStrategy
+    : 'optimized';
+
+  return `
+    <div class="team-draw-strategy-selector" aria-label="Leosztási mód választó">
+      <div class="team-draw-strategy-label">Leosztási mód</div>
+      <div class="team-draw-strategy-pills" role="group" aria-label="Leosztási mód">
+        ${TEAM_DRAW_STRATEGY_OPTIONS.map(option => `
+          <button
+            class="team-draw-strategy-pill ${currentStrategy === option.value ? 'is-active' : ''}"
+            type="button"
+            data-team-draw-strategy="${escapeHtml(option.value)}"
+            aria-pressed="${currentStrategy === option.value ? 'true' : 'false'}"
+          >
+            ${escapeHtml(option.label)}
+          </button>
+        `).join('')}
+      </div>
+      ${getTeamDrawMode() === 'random' ? '<div class="small muted top-space">Skill modul OFF mellett a leosztás random módban fut.</div>' : ''}
     </div>
   `;
 }
@@ -12061,7 +12523,8 @@ function renderTeamDrawAdminSection(adminFocusEvent) {
           ? 'Itt csak a következő leosztási feladatod látszik: preview készítés, ellenőrzés és mentés.'
           : 'Előbb válassz egy közelgő eseményt az Események menüben. Utána itt jelenik meg a csapatgenerálás egyszerűsített vezérlése.'}
       </div>
-      <div class="row gap wrap top-space">
+      <div class="team-draw-control-row top-space">
+        <div class="row gap wrap">
         <button
           class="btn"
           type="button"
@@ -12084,6 +12547,8 @@ function renderTeamDrawAdminSection(adminFocusEvent) {
             `
             : ''
         }
+        </div>
+        ${renderTeamDrawStrategySelector()}
       </div>
     </div>
     ${
@@ -12097,7 +12562,7 @@ function renderTeamDrawAdminSection(adminFocusEvent) {
             <div class="small muted top-space">${escapeHtml(adminFocusEvent.title || 'Névtelen esemény')}</div>
             <div class="small muted">${escapeHtml(formatDateTime(adminFocusEvent.start_at))}</div>
             <div class="small muted">Hátralévő idő: ${renderCountdown(adminFocusEvent.start_at)}</div>
-            <div class="small muted">${escapeHtml(adminFocusEvent.location_name || 'Nincs helyszín')}</div>
+            <div class="small muted">${escapeHtml(getEventDisplayLocation(adminFocusEvent) || 'Nincs helyszín')}</div>
           </div>
         `
         : ''
@@ -12180,6 +12645,7 @@ function getTeamWorkspaceGuideModel() {
   const activeMembers = onboarding.activeMembersCount;
   const pendingInvites = onboarding.pendingInviteCount;
   const activeGoalkeepers = onboarding.activeGoalkeepersCount;
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
   const hasDrawFocus = Boolean(onboarding.focusEvent || state.teamDrawPreview || state.adminSavedEventDraw);
 
   if (!state.currentTeam || activeMembers <= 1 || pendingInvites > 0) {
@@ -12194,7 +12660,7 @@ function getTeamWorkspaceGuideModel() {
     };
   }
 
-  if (activeGoalkeepers < 2) {
+  if (goalkeeperModuleEnabled && activeGoalkeepers < 2) {
     return {
       title: 'Előbb jelölj ki legalább két kapust.',
       description: 'A csapatsorsolás csak akkor lesz stabil, ha a keretben megvannak a kapusok is.',
@@ -12236,6 +12702,7 @@ function getTeamWorkspaceFlowSteps() {
   const activeMembers = onboarding.activeMembersCount;
   const pendingInvites = onboarding.pendingInviteCount;
   const activeGoalkeepers = onboarding.activeGoalkeepersCount;
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
   const adminFocusEvent = onboarding.focusEvent;
   const hasSavedDraw = Boolean(state.adminSavedEventDraw || state.teamDrawPreview);
   const currentTeamSection = getSmartAdminTeamSection();
@@ -12256,8 +12723,8 @@ function getTeamWorkspaceFlowSteps() {
     {
       key: 'goalkeepers',
       label: '2. Kapusok',
-      hint: `${activeGoalkeepers}/2 kijelölve`,
-      done: activeGoalkeepers >= 2,
+      hint: goalkeeperModuleEnabled ? `${activeGoalkeepers}/2 kijelölve` : 'Kapus modul kikapcsolva',
+      done: !goalkeeperModuleEnabled || activeGoalkeepers >= 2,
       workspace: 'team',
       section: 'members'
     },
@@ -12380,6 +12847,7 @@ function renderTeamSimpleProgress(onboarding) {
   const activeMembers = onboarding.activeMembersCount;
   const pendingInvites = onboarding.pendingInviteCount;
   const activeGoalkeepers = onboarding.activeGoalkeepersCount;
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
   const hasFocusEvent = Boolean(onboarding.focusEvent);
   const hasDraw = Boolean(state.adminSavedEventDraw || state.teamDrawPreview);
   const rows = [
@@ -12394,8 +12862,8 @@ function renderTeamSimpleProgress(onboarding) {
     },
     {
       label: 'Kapusok rendben',
-      done: activeGoalkeepers >= 2,
-      hint: `${activeGoalkeepers}/2 kijelölve`
+      done: !goalkeeperModuleEnabled || activeGoalkeepers >= 2,
+      hint: goalkeeperModuleEnabled ? `${activeGoalkeepers}/2 kijelölve` : 'Kapus modul kikapcsolva'
     },
     {
       label: 'Sorsolásra kész',
@@ -12498,6 +12966,11 @@ function renderTeamModuleOverview(team = state.currentTeam) {
       description: 'A csapatleosztásnál használt ügyességi kiegyensúlyozás.'
     },
     {
+      title: 'Kapus modul',
+      enabled: moduleSettings.goalkeeper?.enabled ?? isGoalkeeperModuleEnabled(),
+      description: 'ON állapotban a csapatgeneráláshoz legalább 2 kapusnak jelölt játékos kell.'
+    },
+    {
       title: 'Rang modul',
       enabled: moduleSettings.rank?.enabled ?? isRankModuleEnabled(),
       description: 'Jelentkezési prioritás és rangosított játékosstátusz.'
@@ -12516,6 +12989,11 @@ function renderTeamModuleOverview(team = state.currentTeam) {
       title: 'Fegyelmi modul',
       enabled: moduleSettings.discipline?.enabled ?? Boolean(team?.discipline_module_enabled),
       description: 'Sárga/piros lapos fegyelmi logika. A részletes működés külön lépésben érkezik.'
+    },
+    {
+      title: 'Admin iránytű',
+      enabled: moduleSettings.adminGuide?.enabled ?? isAdminGuideModuleEnabled(team),
+      description: 'Segítő mód a csapatadmin nyitóoldalán: következő lépés, checklist és folyamatvezető.'
     }
   ];
 
@@ -12587,23 +13065,70 @@ function renderTeamFinanceModuleSettings(team = state.currentTeam) {
   `;
 }
 
+function renderTeamAdminGuideModuleSettings(team = state.currentTeam) {
+  if (!team) return '';
+
+  const adminGuideEnabled = isAdminGuideModuleEnabled(team);
+  return `
+    <div class="event-card top-space">
+      <div class="row between align-center wrap gap">
+        <div>
+          <strong>Admin iránytű / Segítő mód</strong>
+          <div class="small muted top-space">
+            ${adminGuideEnabled
+              ? 'Bekapcsolva: a csapatadmin nyitóoldalon látszik a következő lépés, a checklist és a folyamatvezető.'
+              : 'Kikapcsolva: a csapatadmin nyitóoldal tisztább, a folyamatvezető kártyák rejtve vannak.'}
+          </div>
+        </div>
+        <span class="badge ${adminGuideEnabled ? 'badge-success' : 'badge-muted'}">${adminGuideEnabled ? 'SEGÍTŐ MÓD ON' : 'SEGÍTŐ MÓD OFF'}</span>
+      </div>
+
+      <label class="module-switch top-space ${state.adminGuideSettingsSaving ? 'is-saving' : ''}" for="teamAdminGuideModuleEnabledToggle">
+        <span>
+          <span class="module-switch-label">Admin iránytű ON / OFF</span>
+          <span class="module-switch-description">Ha OFF, nem jelenik meg a “Most ezzel foglalkozz”, az “Itt tart a csapat” és a “Polcra tett csapatfolyamat” blokk.</span>
+        </span>
+        <span class="module-switch-control">
+          <input
+            id="teamAdminGuideModuleEnabledToggle"
+            type="checkbox"
+            data-admin-guide-module-enabled
+            ${adminGuideEnabled ? 'checked' : ''}
+            ${state.adminGuideSettingsSaving ? 'disabled' : ''}
+          >
+          <span class="module-switch-track" aria-hidden="true"></span>
+        </span>
+      </label>
+
+      <div class="small muted top-space">
+        ${state.adminGuideSettingsSaving
+          ? 'Az admin iránytű állapota mentés alatt van...'
+          : 'Ez csak a csapatadmin iránytűt kapcsolja, más esemény-, pénzügyi vagy admin guide elemet nem érint.'}
+      </div>
+    </div>
+  `;
+}
+
 function renderTeamSummary(team) {
   if (!els.teamSummary) return;
 
   renderTeamRulesAdmin(team);
   const onboarding = buildAdminOnboardingState();
   const skillModuleEnabled = isTeamSkillModuleEnabled();
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
   const rankModuleEnabled = isRankModuleEnabled();
   const drawMode = getTeamDrawMode();
   const adminFocusEvent = getAdminWorkspaceFocusEvent();
   const activeGoalkeeperCount = countActiveGoalkeepers(state.teamMembers);
   const activeMembersCount = onboarding.activeMembersCount;
   const pendingInviteCount = onboarding.pendingInviteCount;
+  const breakActivityStats = getTeamBreakActivityStats(state.teamMembers);
   const teamGuide = getTeamWorkspaceGuideModel();
+  const adminGuideEnabled = isAdminGuideModuleEnabled(team);
   const summaryHtml = `
     <div id="adminTeamProgressSummary" class="event-form-progress-summary bottom-space"></div>
-    ${renderTeamPrimaryActionCard(teamGuide)}
-    ${renderTeamSimpleProgress(onboarding)}
+    ${adminGuideEnabled ? renderTeamPrimaryActionCard(teamGuide) : ''}
+    ${adminGuideEnabled ? renderTeamSimpleProgress(onboarding) : ''}
 
     <div class="event-card admin-home-sidecard top-space">
       <div class="row between align-center wrap gap">
@@ -12624,25 +13149,65 @@ function renderTeamSummary(team) {
         </div>
         <div class="detail-box">
           <div class="detail-label">Kapusnak jelölve</div>
-          <div class="detail-value">${escapeHtml(String(activeGoalkeeperCount))}/2</div>
+          <div class="detail-value">${goalkeeperModuleEnabled ? `${escapeHtml(String(activeGoalkeeperCount))}/2` : escapeHtml(String(activeGoalkeeperCount))}</div>
         </div>
         <div class="detail-box">
           <div class="detail-label">Fókusz esemény</div>
           <div class="detail-value">${escapeHtml(adminFocusEvent?.title || 'még nincs kijelölve')}</div>
         </div>
       </div>
+      <div class="event-card top-space admin-activity-card">
+        <div class="row between align-center wrap gap">
+          <strong>Aktivitási összkép</strong>
+          <span class="badge ${breakActivityStats.notifyable > 0 ? 'badge-success' : 'badge-warning'}">${escapeHtml(String(breakActivityStats.notifyable))} értesíthető</span>
+        </div>
+        <div class="grid two-col inner-grid top-space">
+          <div class="detail-box">
+            <div class="detail-label">Összes aktív tagság</div>
+            <div class="detail-value">${escapeHtml(String(breakActivityStats.totalActive))}</div>
+          </div>
+          <div class="detail-box">
+            <div class="detail-label">Szabin</div>
+            <div class="detail-value">${escapeHtml(String(breakActivityStats.onBreak))}</div>
+          </div>
+          <div class="detail-box">
+            <div class="detail-label">Ténylegesen aktív</div>
+            <div class="detail-value">${escapeHtml(String(breakActivityStats.effectivelyActive))}</div>
+          </div>
+          <div class="detail-box">
+            <div class="detail-label">Passzív</div>
+            <div class="detail-value">${escapeHtml(String(breakActivityStats.passive))}</div>
+          </div>
+          <div class="detail-box">
+            <div class="detail-label">Értesíthető tagok</div>
+            <div class="detail-value">${escapeHtml(String(breakActivityStats.notifyable))}</div>
+          </div>
+          <div class="detail-box">
+            <div class="detail-label">Szabin arány</div>
+            <div class="detail-value">${escapeHtml(String(breakActivityStats.breakRatio))}%</div>
+          </div>
+          <div class="detail-box">
+            <div class="detail-label">Passzív arány</div>
+            <div class="detail-value">${escapeHtml(String(breakActivityStats.passiveRatio))}%</div>
+          </div>
+        </div>
+      </div>
       <details class="admin-home-shelf top-space">
         <summary class="small muted">Polcra tett csapatinfók</summary>
         <div class="small muted top-space">Belső csapatazonosító: ${escapeHtml(team.id)}</div>
         <div class="small muted">A kiválasztott csapat jelenleg minden admin művelet célpontja.</div>
-        <div class="small muted">A sorsolás csak akkor fut le, ha a kiválasztott esemény going résztvevői között legalább 2 kapusnak jelölt játékos van.</div>
+        <div class="small muted">${goalkeeperModuleEnabled
+          ? 'A sorsolás csak akkor fut le, ha a kiválasztott esemény going résztvevői között legalább 2 kapusnak jelölt játékos van.'
+          : 'A kapus modul ki van kapcsolva, ezért a sorsolás kapushiány esetén is lefut.'}</div>
       </details>
     </div>
 
-    <details class="admin-home-shelf top-space">
-      <summary class="small muted">Polcra tett csapatfolyamat</summary>
-      ${renderTeamWorkspaceFlow()}
-    </details>
+    ${adminGuideEnabled ? `
+      <details class="admin-home-shelf top-space">
+        <summary class="small muted">Polcra tett csapatfolyamat</summary>
+        ${renderTeamWorkspaceFlow()}
+      </details>
+    ` : ''}
   `;
 
   const advancedHtml = `
@@ -12716,6 +13281,40 @@ function renderTeamSummary(team) {
 
           <div class="event-card top-space">
             <div class="row between align-center wrap gap">
+              <strong>Kapus modul</strong>
+              <span class="badge ${goalkeeperModuleEnabled ? 'badge-success' : 'badge-warning'}">${goalkeeperModuleEnabled ? 'KAPUS MODUL ON' : 'KAPUS MODUL OFF'}</span>
+            </div>
+
+            <label class="module-switch top-space ${state.goalkeeperSettingsSaving ? 'is-saving' : ''}" for="teamGoalkeeperModuleEnabledToggle">
+              <span>
+                <span class="module-switch-label">Kapus modul ON / OFF</span>
+                <span class="module-switch-description">
+                  ${goalkeeperModuleEnabled
+                    ? 'Bekapcsolva: a csapatgeneráláshoz a going keretben legalább 2 kapusnak jelölt játékos kell.'
+                    : 'Kikapcsolva: a generálás kapushiány esetén is lefut, a rendszer nem követel két kapust.'}
+                </span>
+              </span>
+              <span class="module-switch-control">
+                <input
+                  id="teamGoalkeeperModuleEnabledToggle"
+                  type="checkbox"
+                  data-goalkeeper-module-enabled
+                  ${state.teamSkillSettings.goalkeeper_module_enabled !== false ? 'checked' : ''}
+                  ${state.goalkeeperSettingsSaving ? 'disabled' : ''}
+                >
+                <span class="module-switch-track" aria-hidden="true"></span>
+              </span>
+            </label>
+
+            <div class="small muted top-space">
+              ${state.goalkeeperSettingsSaving
+                ? 'A kapus modul állapota mentés alatt van...'
+                : 'A kapusnak jelölés továbbra is megmarad a tagoknál, de OFF állapotban nem kötelező feltétel a csapatgeneráláshoz.'}
+            </div>
+          </div>
+
+          <div class="event-card top-space">
+            <div class="row between align-center wrap gap">
               <strong>Rangmodul</strong>
               <span class="badge ${rankModuleEnabled ? 'badge-success' : 'badge-warning'}">${rankModuleEnabled ? 'RANG MODUL ON' : 'RANG MODUL OFF'}</span>
             </div>
@@ -12761,7 +13360,7 @@ function renderTeamSummary(team) {
     const moduleControls = advancedHtml.trim()
       ? advancedHtml
       : emptyState('Még nincs modulbeállítás.', 'A modulkapcsolók akkor jelennek meg, ha a csapat be van töltve.');
-    els.teamModuleSettingsContent.innerHTML = `${renderTeamModuleOverview(team)}${moduleControls}${renderTeamFinanceModuleSettings(team)}`;
+    els.teamModuleSettingsContent.innerHTML = `${renderTeamModuleOverview(team)}${moduleControls}${renderTeamAdminGuideModuleSettings(team)}${renderTeamFinanceModuleSettings(team)}`;
   }
   if (els.teamAdvancedContent) {
     els.teamAdvancedContent.innerHTML = emptyState(
@@ -12837,6 +13436,7 @@ function renderTeamMembersAdmin(members) {
 
   const skillModuleEnabled = isTeamSkillModuleEnabled();
   const rankModuleEnabled = isRankModuleEnabled();
+  const goalkeeperModuleEnabled = isGoalkeeperModuleEnabled();
   const memberAdminScopeText = rankModuleEnabled
     ? 'Itt már a bent lévő embereket rendezheted: szerepkör, rang, vendég státusz, skill, kapitányváltás. Első használatnál inkább a Meghívások fülről érdemes indulni.'
     : 'Itt már a bent lévő embereket rendezheted: szerepkör, kapus jelölés, skill, kapitányváltás. A rangmodul kikapcsolva van, ezért ranghoz kapcsolódó mezők nem jelennek meg.';
@@ -12857,13 +13457,50 @@ function renderTeamMembersAdmin(members) {
     return;
   }
 
-  els.teamMembersAdminList.innerHTML = membersGuide + members.map(member => {
+  const filterOptions = [
+    { key: 'all', label: 'Összes' },
+    { key: 'active', label: 'Aktív' },
+    { key: 'break', label: 'Szabin' },
+    { key: 'passive', label: 'Passzív' },
+    { key: 'notifyable', label: 'Értesíthető' }
+  ];
+  const currentFilter = state.memberActivityFilter || 'all';
+  const filteredMembers = members.filter(member => {
+    const activity = getMemberActivityStatus(member);
+    if (currentFilter === 'all') return true;
+    if (currentFilter === 'notifyable') return isMemberNotifyable(member);
+    return activity.key === currentFilter;
+  });
+  const activityFiltersHtml = `
+    <div class="event-card top-space member-activity-filter-card">
+      <div class="small muted bottom-space">Aktivitás szűrés</div>
+      <div class="row gap wrap">
+        ${filterOptions.map(option => `
+          <button
+            class="btn ${currentFilter === option.key ? '' : 'btn-secondary'}"
+            type="button"
+            data-member-activity-filter="${escapeAttribute(option.key)}"
+          >
+            ${escapeHtml(option.label)}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  if (!filteredMembers.length) {
+    els.teamMembersAdminList.innerHTML = membersGuide + activityFiltersHtml + emptyState('Nincs találat ebben a szűrésben.', 'Válts másik aktivitási szűrőre.');
+    return;
+  }
+
+  els.teamMembersAdminList.innerHTML = membersGuide + activityFiltersHtml + filteredMembers.map(member => {
     const lockedCaptain = member.role === 'team_admin';
     const isMe = member.user_id === state.user?.id;
     const canTransferCaptain = canManageRoles() && state.teamRole === 'team_admin' && !lockedCaptain && member.membership_status === 'active';
     const canEditRole = canManageRoles() && member.membership_status === 'active';
     const rankProfile = getMemberRankProfile(member);
     const rulesAcceptance = getRulesAcceptanceState(member);
+    const activityStatus = getMemberActivityStatus(member);
 
     return `
       <div class="event-card">
@@ -12872,7 +13509,10 @@ function renderTeamMembersAdmin(members) {
             <strong>${escapeHtml(member.name)}</strong> ${isMe ? '<span class="badge badge-draft">te</span>' : ''}
             <div class="small muted">${escapeHtml(member.email)}</div>
           </div>
-        <span class="badge badge-muted">${escapeHtml(formatTeamRole(member.role))}</span>
+          <div class="row gap wrap align-center">
+            <span class="badge ${escapeHtml(activityStatus.badgeClass)}">${escapeHtml(activityStatus.label)}</span>
+            <span class="badge badge-muted">${escapeHtml(formatTeamRole(member.role))}</span>
+          </div>
         </div>
 
         <div class="small muted top-space">
@@ -12894,6 +13534,17 @@ function renderTeamMembersAdmin(members) {
           <span class="badge badge-muted">jelölt: ${escapeHtml(String(member.attendance_stats?.marked_count ?? 0))}</span>
           ${rulesAcceptance?.required ? renderRulesAcceptanceBadge(rulesAcceptance) : ''}
         </div>
+        <div class="row gap wrap top-space member-activity-actions">
+          ${activityStatus.key !== 'active'
+            ? `<button class="btn btn-secondary" type="button" data-member-action="activity-active" data-member-id="${member.member_id}">Aktívra állítom</button>`
+            : `<button class="btn btn-secondary" type="button" data-member-action="activity-passive" data-member-id="${member.member_id}">Passzívnak jelölöm</button>`}
+          ${isMemberOnBreak(member)
+            ? `<button class="btn btn-secondary" type="button" data-member-action="activity-clear-break" data-member-id="${member.member_id}">Szabi törlése</button>`
+            : ''}
+          ${isMemberOnBreak(member)
+            ? `<button class="btn btn-ghost" type="button" data-member-action="activity-extend-break" data-member-id="${member.member_id}">Szabi hosszabbítása 1 héttel</button>`
+            : ''}
+        </div>
         <div class="small muted">
           Skill: Védő ${escapeHtml(String(member.defense_score ?? 5))} ·
           Támadó ${escapeHtml(String(member.attack_score ?? 5))} ·
@@ -12912,7 +13563,9 @@ function renderTeamMembersAdmin(members) {
           </button>
         </div>
         <div class="small muted top-space">
-          A sorsoláshoz legalább 2 kapusnak jelölt játékos kell a going résztvevők között.
+          ${goalkeeperModuleEnabled
+            ? 'A sorsoláshoz legalább 2 kapusnak jelölt játékos kell a going résztvevők között.'
+            : 'A kapus modul ki van kapcsolva, ezért a generálás nem követel két kapust.'}
         </div>
         
         ${
@@ -13161,6 +13814,38 @@ async function handleTeamInviteAdminAction(event) {
   }
 }
 
+async function inviteGuestByName(guestName) {
+  clearMessage();
+
+  if (!canManageInvites() || !state.currentTeamId) {
+    showMessage('Vendég meghívásához csapatkapitány vagy helyettes jogosultság kell.', 'error');
+    return;
+  }
+
+  const displayName = String(guestName || '').trim() || 'vendég';
+  const email = String(window.prompt(`${displayName} email címe a meghívóhoz`) || '').trim();
+  if (!email) {
+    return;
+  }
+
+  try {
+    const result = await api(`/teams/${state.currentTeamId}/invites`, {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        role: 'member',
+        message: `${displayName} vendégként már szerepelt egy eseményen. Csatlakozz a csapathoz, hogy legközelebb saját profillal tudj jelentkezni.`
+      })
+    });
+
+    await Promise.all([loadTeamInvites(), loadMyInvites()]);
+    setAdminTeamSection('invites');
+    showMessage(result.message || 'Meghívó elküldve a vendégnek.', 'success');
+  } catch (error) {
+    showMessage(error.message, 'error');
+  }
+}
+
 async function handleMyInviteAction(event) {
   const action = event.target.dataset.myInviteAction;
   const inviteId = event.target.dataset.inviteId;
@@ -13195,9 +13880,10 @@ async function handleMyInviteAction(event) {
 async function handleSkillModuleToggleChange(event) {
   const skillToggle = event.target.closest('[data-skill-balance-enabled]');
   const rankToggle = event.target.closest('[data-rank-module-enabled]');
-  const toggle = skillToggle || rankToggle;
+  const goalkeeperToggle = event.target.closest('[data-goalkeeper-module-enabled]');
+  const toggle = skillToggle || rankToggle || goalkeeperToggle;
 
-  if (!toggle || !state.currentTeamId || !state.teamSkillSettings || state.skillSettingsSaving || state.rankSettingsSaving) {
+  if (!toggle || !state.currentTeamId || !state.teamSkillSettings || state.skillSettingsSaving || state.rankSettingsSaving || state.goalkeeperSettingsSaving) {
     return;
   }
 
@@ -13211,6 +13897,7 @@ async function handleSkillModuleToggleChange(event) {
       }
     : null;
   const isSkillToggle = Boolean(skillToggle);
+  const isGoalkeeperToggle = Boolean(goalkeeperToggle);
   const nextEnabled = Boolean(toggle.checked);
   const toleranceRaw =
     document.querySelector('[data-skill-balance-tolerance]')?.value ??
@@ -13220,6 +13907,8 @@ async function handleSkillModuleToggleChange(event) {
 
   if (isSkillToggle) {
     state.skillSettingsSaving = true;
+  } else if (isGoalkeeperToggle) {
+    state.goalkeeperSettingsSaving = true;
   } else {
     state.rankSettingsSaving = true;
   }
@@ -13227,12 +13916,14 @@ async function handleSkillModuleToggleChange(event) {
   state.teamSkillSettings = {
     ...state.teamSkillSettings,
     skill_balancing_enabled: isSkillToggle ? nextEnabled : state.teamSkillSettings.skill_balancing_enabled,
-    rank_module_enabled: isSkillToggle ? state.teamSkillSettings.rank_module_enabled : nextEnabled,
+    goalkeeper_module_enabled: isGoalkeeperToggle ? nextEnabled : (state.teamSkillSettings.goalkeeper_module_enabled !== false),
+    rank_module_enabled: !isSkillToggle && !isGoalkeeperToggle ? nextEnabled : state.teamSkillSettings.rank_module_enabled,
     skill_balance_tolerance_percent: nextTolerance
   };
   syncCurrentTeamModuleState({
     skillBalancingEnabled: state.teamSkillSettings.skill_balancing_enabled,
     skillBalanceTolerancePercent: nextTolerance,
+    goalkeeperModuleEnabled: state.teamSkillSettings.goalkeeper_module_enabled,
     rankModuleEnabled: state.teamSkillSettings.rank_module_enabled
   });
   state.teamDrawPreview = null;
@@ -13247,7 +13938,8 @@ async function handleSkillModuleToggleChange(event) {
       body: JSON.stringify({
         skillBalancingEnabled: isSkillToggle ? nextEnabled : state.teamSkillSettings.skill_balancing_enabled,
         skillBalanceTolerancePercent: nextTolerance,
-        rankModuleEnabled: isSkillToggle ? state.teamSkillSettings.rank_module_enabled : nextEnabled
+        goalkeeperModuleEnabled: isGoalkeeperToggle ? nextEnabled : state.teamSkillSettings.goalkeeper_module_enabled,
+        rankModuleEnabled: !isSkillToggle && !isGoalkeeperToggle ? nextEnabled : state.teamSkillSettings.rank_module_enabled
       })
     });
 
@@ -13255,6 +13947,7 @@ async function handleSkillModuleToggleChange(event) {
     syncCurrentTeamModuleState({
       skillBalancingEnabled: state.teamSkillSettings.skill_balancing_enabled,
       skillBalanceTolerancePercent: state.teamSkillSettings.skill_balance_tolerance_percent,
+      goalkeeperModuleEnabled: state.teamSkillSettings.goalkeeper_module_enabled,
       rankModuleEnabled: state.teamSkillSettings.rank_module_enabled
     });
     const toggleMessage = isSkillToggle
@@ -13264,7 +13957,12 @@ async function handleSkillModuleToggleChange(event) {
       : (nextEnabled
         ? 'RANG MODUL bekapcsolva. A csapattagoknál mostantól megjelenik és szerkeszthető a rangprofil.'
         : 'RANG MODUL kikapcsolva. A rangok megmaradnak, de a felületen most nem lesznek aktívak.');
-    showMessage(toggleMessage, 'success');
+    const successMessage = isGoalkeeperToggle
+      ? (nextEnabled
+        ? 'Kapus modul bekapcsolva. A csapatgeneráláshoz újra legalább 2 kapus kell.'
+        : 'Kapus modul kikapcsolva. A csapatgenerálás kapushiány esetén is lefut.')
+      : toggleMessage;
+    showMessage(successMessage, 'success');
   } catch (error) {
     state.teamSkillSettings = previousSettings;
     state.currentTeam = previousTeam;
@@ -13272,8 +13970,10 @@ async function handleSkillModuleToggleChange(event) {
   } finally {
     state.skillSettingsSaving = false;
     state.rankSettingsSaving = false;
+    state.goalkeeperSettingsSaving = false;
     renderTeamSummary(state.currentTeam);
     renderTeamMembersAdmin(state.teamMembers);
+    renderUserSkillModule();
     renderUserRankModule();
     applyRoleAwareUi();
   }
@@ -13330,7 +14030,65 @@ async function handleFinanceModuleToggleChange(event) {
   }
 }
 
+async function handleAdminGuideModuleToggleChange(event) {
+  const toggle = event.target.closest('[data-admin-guide-module-enabled]');
+  if (!toggle || !state.currentTeamId || state.adminGuideSettingsSaving) {
+    return;
+  }
+
+  clearMessage();
+
+  const previousTeam = state.currentTeam
+    ? {
+        ...state.currentTeam,
+        module_settings: state.currentTeam.module_settings ? { ...state.currentTeam.module_settings } : undefined
+      }
+    : null;
+  const nextEnabled = Boolean(toggle.checked);
+
+  state.adminGuideSettingsSaving = true;
+  syncCurrentTeamModuleState({ adminGuideModuleEnabled: nextEnabled });
+  renderTeamSummary(state.currentTeam);
+  applyRoleAwareUi();
+
+  try {
+    const result = await api(`/teams/${state.currentTeamId}/module-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        adminGuideModuleEnabled: nextEnabled
+      })
+    });
+
+    state.currentTeam = {
+      ...state.currentTeam,
+      ...(result.team || {})
+    };
+    const guideMessage = nextEnabled
+      ? 'Admin iránytű bekapcsolva. A csapatadmin segítő kártyák újra láthatók.'
+      : 'Admin iránytű kikapcsolva. A csapatadmin oldal tisztább nézetre váltott.';
+    showMessage(result.message || guideMessage, 'success');
+  } catch (error) {
+    state.currentTeam = previousTeam;
+    showMessage(error.message, 'error');
+  } finally {
+    state.adminGuideSettingsSaving = false;
+    renderTeamSummary(state.currentTeam);
+    applyRoleAwareUi();
+  }
+}
+
 async function handleTeamSummaryAction(event) {
+  const strategyButton = event.target.closest('[data-team-draw-strategy]');
+  if (strategyButton) {
+    const nextStrategy = strategyButton.dataset.teamDrawStrategy || 'optimized';
+    if (TEAM_DRAW_STRATEGY_OPTIONS.some(option => option.value === nextStrategy)) {
+      state.teamDrawStrategy = nextStrategy;
+      localStorage.setItem('foci_team_draw_strategy', nextStrategy);
+      renderTeamSummary(state.currentTeam);
+    }
+    return;
+  }
+
   const action = event.target.dataset.teamSummaryAction;
   if (!action) return;
 
@@ -13554,7 +14312,10 @@ async function handleTeamSummaryAction(event) {
 
       state.selectedAdminEvent = drawEvent;
       const result = await api(`/events/${drawEvent.id}/team-draw/preview`, {
-        method: 'POST'
+        method: 'POST',
+        body: JSON.stringify({
+          strategy: state.teamDrawStrategy || 'optimized'
+        })
       });
 
       state.teamDrawPreview = result.draw || null;
@@ -13815,6 +14576,13 @@ async function handleProfilePaymentQrChange(event) {
 }
 
 async function handleTeamMemberAdminAction(event) {
+  const filter = event.target.dataset.memberActivityFilter;
+  if (filter) {
+    state.memberActivityFilter = filter;
+    renderTeamMembersAdmin(state.teamMembers);
+    return;
+  }
+
   const action = event.target.dataset.memberAction;
   const memberId = event.target.dataset.memberId;
   const targetUserId = event.target.dataset.memberUserId;
@@ -13829,6 +14597,29 @@ async function handleTeamMemberAdminAction(event) {
   }
 
   try {
+    if (action === 'activity-active' || action === 'activity-passive' || action === 'activity-clear-break' || action === 'activity-extend-break') {
+      const body =
+        action === 'activity-active'
+          ? { status: 'active' }
+          : action === 'activity-passive'
+            ? { status: 'passive' }
+            : action === 'activity-clear-break'
+              ? { clearBreak: true }
+              : { extendBreak: true };
+
+      const result = await api(`/teams/${state.currentTeamId}/members/${memberId}/activity-status`, {
+        method: 'PATCH',
+        body: JSON.stringify(body)
+      });
+
+      if (result.member) {
+        syncTeamMemberInState(result.member);
+      }
+      await loadTeam(state.currentTeamId);
+      showMessage(result.message, 'success');
+      return;
+    }
+
     if (action === 'save-role') {
       const select = document.querySelector(`[data-member-role-select="${memberId}"]`);
       const role = select?.value;
@@ -14025,6 +14816,10 @@ async function handleCreateEvent(event) {
   const wasEditMode = state.adminEventFormMode === 'edit';
   const editingEventId = state.adminEditingEventId;
   const startAtInputValue = document.getElementById('eventStartAt').value.trim();
+  const visibleLocationValue = document.getElementById('eventLocationAddress')?.value.trim() || '';
+  const legacyLocationValue = document.getElementById('eventLocation')?.value.trim() || '';
+  const locationAddressValue = visibleLocationValue || legacyLocationValue;
+  const locationNameValue = legacyLocationValue || locationAddressValue;
 
   if (!isValidDateTimeLocalInput(startAtInputValue)) {
     showMessage('A kezdés érvénytelen dátum. Ellenőrizd az év, hónap, nap és idő értékét.', 'error');
@@ -14033,12 +14828,19 @@ async function handleCreateEvent(event) {
     return;
   }
 
+  if (!locationAddressValue || (visibleLocationValue && !hasLikelyPostalCode(visibleLocationValue))) {
+    showMessage('Adj meg teljes címet várossal és irányítószámmal.', 'error');
+    document.getElementById('eventLocationAddress')?.focus();
+    setAdminEventFormSection('basics');
+    return;
+  }
+
   const basePayload = {
     title: document.getElementById('eventTitle').value.trim(),
     description: document.getElementById('eventDescription').value.trim() || null,
     startAt: toIsoFromInput(startAtInputValue),
-    locationName: document.getElementById('eventLocation').value.trim(),
-    locationAddress: document.getElementById('eventLocationAddress')?.value.trim() || null,
+    locationName: locationNameValue,
+    locationAddress: locationAddressValue,
     minPlayers: Number(document.getElementById('eventMinPlayers').value),
     playersOnFieldTotal: Number(document.getElementById('eventPlayersOnField').value),
     substitutesEnabled,
@@ -14287,7 +15089,7 @@ function renderAdminEventGroup(title, events, options = {}) {
             ${renderEventReadinessPanel(event, { compact: true })}
             <div class="event-meta">
               <div><strong>Kezdés:</strong> ${escapeHtml(new Date(event.start_at).toLocaleString('hu-HU'))}</div>
-              <div><strong>Helyszín:</strong> ${escapeHtml(event.location_name || '-')}</div>
+              <div><strong>Helyszín:</strong> ${escapeHtml(getEventDisplayLocation(event) || '-')}</div>
               <div><strong>Jelentkezett:</strong> ${escapeHtml(event.going_count)}</div>
               <div><strong>Várólista:</strong> ${escapeHtml(event.waiting_count)}</div>
               <div><strong>Hátralévő idő:</strong> ${renderCountdown(event.start_at)}</div>
@@ -14678,6 +15480,7 @@ function renderUserEvents(events) {
   }
 
   const renderUserEventActionButtons = event => {
+    const guestRegistration = getActiveGuestRegistration(event);
     const actions = [
       `<button class="btn btn-secondary" type="button" data-user-open="${event.id}">Részletek</button>`
     ];
@@ -14689,6 +15492,12 @@ function renderUserEvents(events) {
     }
 
     if (['going', 'waiting_list', 'waiting_list_rank'].includes(event.my_registration_status)) {
+      if (guestRegistration) {
+        actions.push(`<span class="badge badge-muted">+1 vendég: ${escapeHtml(guestRegistration.guest_name || 'név nélkül')}</span>`);
+        actions.push(`<button class="btn btn-secondary" type="button" data-user-cancel-guest-event-id="${event.id}" data-user-cancel-guest-registration-id="${guestRegistration.id}">Vendég lemondása</button>`);
+      } else {
+        actions.push(`<button class="btn btn-secondary" type="button" data-user-add-guest="${event.id}">+1 fő</button>`);
+      }
       actions.push(`<button class="btn btn-danger" type="button" data-user-cancel="${event.id}">Lemondás</button>`);
     }
 
@@ -14726,7 +15535,7 @@ function renderUserEvents(events) {
       ${renderEventReadinessPanel(event, { compact: true })}
       <div class="event-meta">
         <div><strong>Kezdés:</strong> ${escapeHtml(new Date(event.start_at).toLocaleString('hu-HU'))}</div>
-        <div><strong>Helyszín:</strong> ${escapeHtml(event.location_name || '-')}</div>
+        <div><strong>Helyszín:</strong> ${escapeHtml(getEventDisplayLocation(event) || '-')}</div>
         <div><strong>Jelentkezett:</strong> ${escapeHtml(event.going_count)}</div>
         <div><strong>Szabad hely:</strong> ${escapeHtml(event.spots_left)}</div>
         <div><strong>Hátralévő idő:</strong> ${renderCountdown(event.start_at)}</div>
@@ -14770,6 +15579,21 @@ ${renderRankRegistrationNotice(event.registration_window, { compact: true, curre
   document.querySelectorAll('[data-user-cancel]').forEach(btn => {
     btn.addEventListener('click', async () => {
       await cancelRegistration(btn.dataset.userCancel);
+    });
+  });
+
+  document.querySelectorAll('[data-user-add-guest]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await addGuestRegistration(btn.dataset.userAddGuest);
+    });
+  });
+
+  document.querySelectorAll('[data-user-cancel-guest-registration-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await cancelGuestRegistration(
+        btn.dataset.userCancelGuestEventId,
+        btn.dataset.userCancelGuestRegistrationId
+      );
     });
   });
 }
@@ -14864,7 +15688,7 @@ function renderUserEventDetail(result) {
           : ''
       }
       <div><strong>Kezdés:</strong> ${escapeHtml(new Date(event.start_at).toLocaleString('hu-HU'))}</div>
-      <div><strong>Helyszín:</strong> ${escapeHtml(event.location_name || '-')}</div>
+      <div><strong>Helyszín:</strong> ${escapeHtml(getEventDisplayLocation(event) || '-')}</div>
       <div><strong>Szabályok:</strong> ${escapeHtml(event.rules_text || '-')}</div>
       ${renderEventWeatherModule(event, { widgetId: detailWeatherWidgetId })}
       ${renderUserPaymentSummary(enrichedEvent, { forceVisible: true, financeOverview: state.currentTeamFinance })}
@@ -14956,6 +15780,41 @@ async function registerForEvent(eventId) {
   }
 }
 
+async function addGuestRegistration(eventId) {
+  clearMessage();
+
+  if (!eventId) {
+    showMessage('Hiányzik az esemény azonosítója.', 'error');
+    return;
+  }
+
+  const rawGuestName = window.prompt('Vendég neve (például: Rudi)');
+  if (rawGuestName == null) {
+    return;
+  }
+
+  const guestName = rawGuestName.replace(/\s+/g, ' ').trim();
+  if (guestName.length < 2) {
+    showMessage('Adj meg legalább 2 karakteres vendégnevet.', 'error');
+    return;
+  }
+
+  try {
+    const result = await api(`/events/${eventId}/guests`, {
+      method: 'POST',
+      body: JSON.stringify({ guestName })
+    });
+
+    showMessage(result.message || 'Vendég rögzítve.', 'success');
+    await loadUserEvents();
+    await loadAdminEvents();
+    await loadMyEvents();
+    await openEventForUser(eventId);
+  } catch (error) {
+    showMessage(error.message, 'error');
+  }
+}
+
 async function acceptCurrentTeamRules() {
   clearMessage();
 
@@ -14997,11 +15856,86 @@ async function acceptCurrentTeamRules() {
   }
 }
 
+async function saveMySkillSettings() {
+  clearMessage();
+
+  if (!state.currentTeamId || !state.currentTeam) {
+    showMessage('Előbb válassz aktív csapatot.', 'error');
+    return;
+  }
+
+  if (!isTeamSkillModuleEnabled()) {
+    showMessage('A skill modul ennél a csapatnál nincs bekapcsolva.', 'error');
+    renderUserSkillModule();
+    return;
+  }
+
+  const currentMember = getCurrentTeamMember();
+  if (!currentMember || currentMember.membership_status !== 'active') {
+    showMessage('Csak aktív csapattagként módosíthatod a saját skill értékeidet.', 'error');
+    renderUserSkillModule();
+    return;
+  }
+
+  const readSkillValue = key => Number(document.querySelector(`[data-user-skill-input="${key}"]`)?.value ?? 0);
+  const payload = {
+    goalkeeperSkill: readSkillValue('goalkeeper'),
+    defenseSkill: readSkillValue('defense'),
+    attackSkill: readSkillValue('attack'),
+    isGoalkeeper: Boolean(document.querySelector('[data-user-skill-goalkeeper-toggle]')?.checked)
+  };
+
+  try {
+    state.userSkillSettingsSaving = true;
+    renderUserSkillModule();
+
+    const result = await api(`/teams/${state.currentTeamId}/me/skills`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+
+    syncTeamMemberInState(result.member);
+    renderUserSkillModule();
+    renderTeamMembersAdmin(state.teamMembers);
+    renderUserTeamDrawPreview();
+    renderTeamSummary(state.currentTeam);
+    showMessage(result.message || 'Saját skill értékeid mentve.', 'success');
+  } catch (error) {
+    showMessage(error.message, 'error');
+  } finally {
+    state.userSkillSettingsSaving = false;
+    renderUserSkillModule();
+  }
+}
+
 async function cancelRegistration(eventId) {
   clearMessage();
   try {
     const result = await api(`/events/${eventId}/cancel`, { method: 'POST' });
     showMessage(result.message, 'success');
+    await loadUserEvents();
+    await loadAdminEvents();
+    await loadMyEvents();
+    await openEventForUser(eventId);
+  } catch (error) {
+    showMessage(error.message, 'error');
+  }
+}
+
+async function cancelGuestRegistration(eventId, guestRegistrationId) {
+  clearMessage();
+
+  if (!eventId || !guestRegistrationId) {
+    showMessage('Hiányzik a vendégjelentkezés azonosítója.', 'error');
+    return;
+  }
+
+  try {
+    const result = await api(`/events/${eventId}/guests/${guestRegistrationId}/cancel`, {
+      method: 'POST'
+    });
+
+    showMessage(result.message || 'A vendég jelentkezése lemondva.', 'success');
     await loadUserEvents();
     await loadAdminEvents();
     await loadMyEvents();
@@ -15257,6 +16191,12 @@ function bindEvents() {
       return;
     }
 
+    const guestInviteAction = event.target.closest('[data-invite-guest-name]');
+    if (guestInviteAction) {
+      await inviteGuestByName(guestInviteAction.dataset.inviteGuestName);
+      return;
+    }
+
     const adminOpenAction = event.target.closest('[data-admin-open]');
     if (adminOpenAction) {
       await handleAdminOpenAction(adminOpenAction.dataset.adminOpen, {
@@ -15349,10 +16289,23 @@ function bindEvents() {
     els.teamModuleSettingsContent.addEventListener('click', handleTeamSummaryAction);
     els.teamModuleSettingsContent.addEventListener('change', handleSkillModuleToggleChange);
     els.teamModuleSettingsContent.addEventListener('change', handleFinanceModuleToggleChange);
+    els.teamModuleSettingsContent.addEventListener('change', handleAdminGuideModuleToggleChange);
   }
 
   if (els.teamRulesAdminContent) {
     els.teamRulesAdminContent.addEventListener('click', handleTeamSummaryAction);
+  }
+
+  if (els.userSkillModule) {
+    els.userSkillModule.addEventListener('click', handleUserSkillModuleClick);
+  }
+
+  if (els.userBreakBanner) {
+    els.userBreakBanner.addEventListener('click', async event => {
+      if (event.target.closest('[data-user-break-action="end"]')) {
+        await endMyTeamBreakFromBanner();
+      }
+    });
   }
 
   if (els.teamDrawContent) {

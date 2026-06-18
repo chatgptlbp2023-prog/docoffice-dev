@@ -38,7 +38,13 @@ function buildTeamModuleSettings(team = {}) {
   return {
     skill: {
       enabled: booleanOrDefault(team.skill_balancing_enabled, true),
-      tolerance_percent: Number(team.skill_balance_tolerance_percent ?? 15)
+      tolerance_percent: Number(team.skill_balance_tolerance_percent ?? 15),
+      draw_strategy: team.skill_balancing_enabled === false
+        ? 'random'
+        : String(team.draw_strategy || 'auto_balanced')
+    },
+    goalkeeper: {
+      enabled: booleanOrDefault(team.goalkeeper_module_enabled, true)
     },
     rank: {
       enabled: booleanOrDefault(team.rank_module_enabled, false)
@@ -53,6 +59,9 @@ function buildTeamModuleSettings(team = {}) {
     },
     discipline: {
       enabled: booleanOrDefault(team.discipline_module_enabled, false)
+    },
+    adminGuide: {
+      enabled: booleanOrDefault(team.admin_guide_module_enabled, false)
     }
   };
 }

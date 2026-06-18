@@ -125,7 +125,12 @@ async function getEventNotificationContext(eventId) {
 
   const teamMembersResult = await pool.query(
     `
-    select u.id as user_id, u.name, lower(u.email) as email
+    select
+      u.id as user_id,
+      u.name,
+      lower(u.email) as email,
+      tm.break_until,
+      tm.passive_since
     from team_members tm
     join users u on u.id = tm.user_id
     where tm.team_id = $1
@@ -263,6 +268,18 @@ function buildActionButtonsHtml(actions = []) {
   `).join('');
 }
 
+function isTeamMemberOnBreak(member, referenceDate = new Date()) {
+  if (!member?.break_until) return false;
+  const breakUntil = new Date(member.break_until);
+  const reference = new Date(referenceDate);
+  if (Number.isNaN(breakUntil.getTime()) || Number.isNaN(reference.getTime())) return false;
+  return breakUntil > reference;
+}
+
+function isTeamMemberPassive(member) {
+  return Boolean(member?.passive_since);
+}
+
 function buildActiveRegistrationNames(context) {
   const seen = new Set();
   return (context?.registrations || [])
@@ -298,8 +315,15 @@ function buildEventCreatedEmail(context, recipient) {
     userId: recipient.userId,
     action: EVENT_EMAIL_ACTIONS.SKIP
   });
+  const vacationToken = buildEventEmailActionToken({
+    eventId: context.event.id,
+    userId: recipient.userId,
+    action: EVENT_EMAIL_ACTIONS.VACATION_ONE_WEEK
+  });
   const registerUrl = buildEventEmailActionUrl(registerToken, copy.appBaseUrl);
   const skipUrl = buildEventEmailActionUrl(skipToken, copy.appBaseUrl);
+  const vacationUrl = buildEventEmailActionUrl(vacationToken, copy.appBaseUrl);
+  const vacationExplanation = '1 hétig nem kapsz értesítéseket az eseményekről. Ha a csapatodban aktív a rangmodul, akkor nem veszítesz pozíciót.';
   const subject = `Uj esemeny: ${copy.eventTitle}`;
   const text = [
     'Szia!',
@@ -315,7 +339,10 @@ function buildEventCreatedEmail(context, recipient) {
     `Belepes a feluletre: ${copy.loginUrl}`,
     `Esemeny megnyitasa: ${copy.eventUrl}`,
     `Jelentkezem: ${registerUrl}`,
-    `Kihagyom: ${skipUrl}`
+    `Kihagyom: ${skipUrl}`,
+    '',
+    vacationExplanation,
+    `Szabin vagyok (1 hét): ${vacationUrl}`
   ].filter(Boolean).join('\n');
   const html = `
     <div style="font-family:Segoe UI,Arial,sans-serif;line-height:1.6;color:#1f2937;">
@@ -339,6 +366,12 @@ function buildEventCreatedEmail(context, recipient) {
         ${buildActionButtonsHtml([
           { label: 'Belepes a feluletre', href: copy.loginUrl, background: '#0f766e' },
           { label: 'Esemeny megnyitasa', href: copy.eventUrl, background: '#475569' }
+        ])}
+      </div>
+      <div style="margin:24px 0 0;padding:14px 16px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:14px;">
+        <p style="margin:0 0 10px;font-size:13px;color:#475569;">${escapeHtml(vacationExplanation)}</p>
+        ${buildActionButtonsHtml([
+          { label: 'Szabin vagyok (1 hét)', href: vacationUrl, background: '#64748b' }
         ])}
       </div>
     </div>
@@ -514,7 +547,9 @@ async function notifyEventCreated({ eventId, actorUserId = null }) {
   const context = await getEventNotificationContext(eventId);
   if (!context || context.event.status !== 'published') return null;
   if (context.notificationPreferences.notifyTeamOnCreate !== true) return null;
-  const recipients = uniqueRecipients(context.teamMembers, { excludeUserIds: [actorUserId] });
+  const recipients = uniqueRecipients(
+    context.teamMembers.filter(member => !isTeamMemberOnBreak(member) && !isTeamMemberPassive(member))
+  );
   if (!recipients.length) return null;
   return sendBulkEmails(
     recipients,

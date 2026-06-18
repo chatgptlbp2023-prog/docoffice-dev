@@ -28,7 +28,14 @@ describe('Frontend team draw UI', () => {
       state.teamDrawPreview = {
         withinTolerance: true,
         totals: { teamA: 100, teamB: 100, difference: 0, differencePercent: 0 },
-        settings: { generationMode: 'skill', skillBalancingEnabled: true },
+        settings: { generationMode: 'skill', strategy: 'auto_balanced', skillBalancingEnabled: true },
+        explanation: {
+          summary: 'Automatikusan kiegyensúlyozott leosztás készült.',
+          bullets: [
+            'A két csapat összereje közel azonos.',
+            'A legerősebb támadók nem kerültek egy oldalra.'
+          ]
+        },
         source_member_count: 2,
         teamA: [{ name: 'A jatekos', email: 'a@example.com', is_goalkeeper: true, overall_skill: 50 }],
         teamB: [{ name: 'B jatekos', email: 'b@example.com', is_goalkeeper: true, overall_skill: 50 }]
@@ -39,7 +46,79 @@ describe('Frontend team draw UI', () => {
     const teamDrawContent = document.getElementById('teamDrawContent');
     expect(teamDrawContent.textContent).toContain('Csapatsorsolás');
     expect(teamDrawContent.textContent).toContain('preview');
+    expect(teamDrawContent.textContent).toContain('Automatikus kiegyensúlyozott leosztás');
+    expect(teamDrawContent.textContent).toContain('Automatikus kiegyensúlyozás aktív');
+    expect(teamDrawContent.textContent).toContain('Miért így osztottam?');
+    expect(teamDrawContent.textContent).toContain('A legerősebb támadók nem kerültek egy oldalra.');
     expect(teamDrawContent.textContent).toContain('Leosztás mentése');
+  });
+
+  test('a csapatsorsolas panel strategy valasztoja request bodyban kuldi a kivalasztott modot', async () => {
+    const fetchMock = jest.fn(async url => {
+      const target = String(url);
+
+      if (target.includes('/events/evt-1/team-draw/preview')) {
+        return createJsonResponse({
+          message: 'Preview kesz.',
+          draw: {
+            event_id: 'evt-1',
+            source_member_count: 2,
+            settings: {
+              generationMode: 'skill',
+              strategy: 'counter_pair_balance',
+              skillBalancingEnabled: true
+            },
+            totals: { teamA: 30, teamB: 30, difference: 0, differencePercent: 0 },
+            teamA: [{ name: 'A jatekos', overall_skill: 30 }],
+            teamB: [{ name: 'B jatekos', overall_skill: 30 }],
+            withinTolerance: true
+          }
+        });
+      }
+
+      return createJsonResponse({});
+    });
+    const { window, document } = await bootFrontend({ fetchMock });
+
+    window.eval(`
+      state.token = 'token-1';
+      state.currentTeamId = 'team-1';
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC' };
+      state.teamRole = 'team_admin';
+      state.teamDrawStrategy = 'optimized';
+      state.teamSkillSettings = {
+        skill_balancing_enabled: true,
+        skill_balance_tolerance_percent: 15,
+        rank_module_enabled: true
+      };
+      state.selectedAdminEvent = {
+        id: 'evt-1',
+        title: 'Kovetkezo foci',
+        start_at: new Date(Date.now() + 3600000).toISOString(),
+        status: 'published'
+      };
+      renderTeamSummary(state.currentTeam);
+    `);
+
+    const teamDrawContent = document.getElementById('teamDrawContent');
+    expect(teamDrawContent.textContent).toContain('Leosztási mód');
+    expect(document.querySelector('[data-team-draw-strategy="optimized"]').classList.contains('is-active')).toBe(true);
+
+    document.querySelector('[data-team-draw-strategy="counter_pair_balance"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+
+    expect(window.eval('state.teamDrawStrategy')).toBe('counter_pair_balance');
+    expect(document.querySelector('[data-team-draw-strategy="counter_pair_balance"]').classList.contains('is-active')).toBe(true);
+
+    document.querySelector('[data-team-summary-action="preview-team-draw"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+    await flushMicrotasks();
+
+    const previewCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/events/evt-1/team-draw/preview'));
+    expect(previewCall).toBeTruthy();
+    expect(JSON.parse(previewCall[1].body)).toEqual({ strategy: 'counter_pair_balance' });
   });
 
   test('user oldalon a mentett csapatleosztas megjelenik a ket csapattal', async () => {

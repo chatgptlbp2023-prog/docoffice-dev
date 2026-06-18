@@ -185,7 +185,7 @@
                 <button class="subnav-btn active" type="button" data-admin-team-section="invites">Meghívások</button>
                 <button class="subnav-btn" type="button" data-admin-team-section="members">Tagok</button>
                 <button class="subnav-btn" type="button" data-admin-team-section="rules">Szabályzat</button>
-                <button class="subnav-btn" type="button" data-admin-team-section="draw">CsapatsorsolĂˇs</button>
+                <button class="subnav-btn" type="button" data-admin-team-section="draw">Csapatsorsolás</button>
                 <button class="subnav-btn" type="button" data-admin-team-section="advanced">Haladó beállítások</button>
               </div>
             </div>
@@ -328,21 +328,21 @@
                   <input id="eventStartAt" type="datetime-local" required />
                 </div>
                 <div>
-                  <label class="label" for="eventLocation">Helyszín</label>
-                  <input id="eventLocation" type="text" required />
+                  <label class="label" for="eventLocation">Helyszín kompatibilitási mező</label>
+                  <input id="eventLocation" type="hidden" />
                 </div>
               </div>
 
               <div class="grid two-col inner-grid">
                 <div>
-                  <label class="label" for="eventLocationAddress">Pontos cim</label>
-                  <input id="eventLocationAddress" type="text" inputmode="search" placeholder="pl. 1046 Budapest, Oceanarok 23" />
+                  <label class="label" for="eventLocationAddress">Helyszín / pontos cím</label>
+                  <input id="eventLocationAddress" type="text" inputmode="search" placeholder="pl. 1183 Budapest, Ferihegyi út 140" required />
                 </div>
                 <div class="stack">
                   <label class="label" for="eventOpenMapsSearchBtn">Google Maps segito</label>
                   <div class="row gap wrap align-center">
                     <button id="eventOpenMapsSearchBtn" class="btn btn-secondary" type="button" data-open-maps-search="event">Google Maps megnyitasa</button>
-                    <div id="eventLocationAssistStatus" class="small muted">A pontos cim segiti az utvonaltervet es az idojaras modult.</div>
+                    <div id="eventLocationAssistStatus" class="small muted">Teljes címet adj meg várossal és irányítószámmal. Ez kell az útvonalhoz és az időjáráshoz.</div>
                   </div>
                 </div>
               </div>
@@ -557,8 +557,8 @@
                   <input id="editStartAt" type="datetime-local" />
                 </div>
                 <div>
-                  <label class="label" for="editLocationName">Helyszín</label>
-                  <input id="editLocationName" type="text" />
+                  <label class="label" for="editLocationName">Helyszín / pontos cím</label>
+                  <input id="editLocationName" type="text" inputmode="search" placeholder="pl. 1183 Budapest, Ferihegyi út 140" />
                 </div>
               </div>
               <div class="grid three-col inner-grid">
@@ -623,9 +623,12 @@
           <div>
             <h2>Játékos nézet</h2>
             <p class="muted small">Itt most a következő focid van fókuszban. A cél, hogy egy pillanat alatt lásd: mikor játszol, hol, hányan vannak, és neked van-e még teendőd.</p>
+            <div id="userHeaderContext" class="user-header-context top-space"></div>
           </div>
           <div id="userOverviewCards" class="overview-grid compact-overview"></div>
         </div>
+
+        <div id="userBreakBanner" class="top-space"></div>
 
         <div class="card top-space" data-layout-item data-layout-key="user-my-events" data-default-col-span="12" data-default-row-span="2" data-min-col-span="6" data-max-col-span="12">
           <div class="row between align-center section-header-wrap">
@@ -657,6 +660,11 @@
             <div class="card secondary-user-card">
               <h2>Időjárás</h2>
               <div id="userWeatherModule" class="top-space"></div>
+            </div>
+
+            <div id="userSkillCard" class="card secondary-user-card hidden" hidden>
+              <h2>Saját skill értékeim</h2>
+              <div id="userSkillModule" class="top-space"></div>
             </div>
           </div>
 

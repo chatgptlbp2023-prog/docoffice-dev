@@ -3,6 +3,25 @@ const EVENT_TIMEZONE = 'Europe/Budapest';
 const MAX_HOURLY_FORECAST_DAYS = 5;
 const SEVERE_WEATHER_ICON_CODES = new Set([12, 13, 14, 15, 16, 17, 18, 24, 25, 26, 29, 41, 42]);
 
+const WEATHER_UNAVAILABLE_MESSAGES = Object.freeze({
+  missing_location: 'Az eseményhez nincs megadva használható helyszín.',
+  outside_forecast_window: 'Az órás előrejelzés az esemény előtt kb. 5 nappal lesz elérhető.',
+  past_event: 'Múltbeli eseményhez már nem kérünk időjárás-előrejelzést.',
+  missing_api_key: 'Az időjárás szolgáltatás nincs bekonfigurálva.',
+  geocode_failed: 'Ehhez a helyszínhez nem sikerült koordinátát találni. Adj meg várost és irányítószámot is.',
+  forecast_not_found: 'Ehhez az időponthoz nem találtunk órás előrejelzést.',
+  provider_error: 'Az időjárás szolgáltató most nem elérhető. Próbáld meg később.'
+});
+
+function buildWeatherUnavailable(reason, details = {}) {
+  return {
+    available: false,
+    reason,
+    message: WEATHER_UNAVAILABLE_MESSAGES[reason] || WEATHER_UNAVAILABLE_MESSAGES.provider_error,
+    ...details
+  };
+}
+
 const ACCUWEATHER_ICON_MAP = Object.freeze({
   1: { label: 'Derult', icon: '☀️' },
   2: { label: 'Tobbnyire napos', icon: '🌤️' },
@@ -59,7 +78,7 @@ function getAccuWeatherApiKey() {
   const apiKey = String(process.env.ACCUWEATHER_API_KEY || '').trim();
   if (!apiKey) {
     const error = new Error('Az AccuWeather API kulcs nincs beallitva.');
-    error.code = 'ACCUWEATHER_API_KEY_MISSING';
+    error.code = 'missing_api_key';
     throw error;
   }
   return apiKey;
@@ -96,6 +115,9 @@ function buildLocationQueryCandidates(query) {
     : `${normalized}, Hungary`;
 
   const candidates = [normalized, withCountry];
+  if (!normalized.includes(',') && !/\b\d{4}\b/.test(normalized)) {
+    candidates.push(`Budapest, ${normalized}, Hungary`);
+  }
   const match = normalized.match(/^([^,]+),\s*(\d{4})\s+(.+)$/u);
   if (match) {
     const [, city, postalCode, street] = match;
@@ -225,35 +247,58 @@ function findNearestForecastEntry(entries = [], targetIso) {
 
 async function fetchEventWeatherForecast(event) {
   if (!event?.start_at) {
-    return null;
+    return buildWeatherUnavailable('forecast_not_found');
   }
 
   const query = buildWeatherLocationQuery(event);
   if (!query) {
-    return null;
+    return buildWeatherUnavailable('missing_location');
   }
 
   const forecastWindow = getForecastWindowLabel(event.start_at);
   if (!forecastWindow) {
-    return null;
+    const eventMs = new Date(event.start_at).getTime();
+    const nowMs = Date.now();
+    return Number.isFinite(eventMs) && eventMs < nowMs
+      ? buildWeatherUnavailable('past_event')
+      : buildWeatherUnavailable('outside_forecast_window');
   }
 
-  const location = await geocodeLocation(query);
-  if (!location?.locationKey) {
-    return null;
-  }
-
-  const forecast = await fetchAccuWeatherJson(`/forecasts/v1/hourly/${forecastWindow}/${location.locationKey}`, {
-    searchParams: {
-      language: 'hu-hu',
-      metric: 'true',
-      details: 'true'
+  let location;
+  try {
+    location = await geocodeLocation(query);
+  } catch (error) {
+    if (error?.code === 'missing_api_key') {
+      return buildWeatherUnavailable('missing_api_key');
     }
-  });
+
+    return buildWeatherUnavailable('provider_error');
+  }
+
+  if (!location?.locationKey) {
+    return buildWeatherUnavailable('geocode_failed');
+  }
+
+  let forecast;
+  try {
+    forecast = await fetchAccuWeatherJson(`/forecasts/v1/hourly/${forecastWindow}/${location.locationKey}`, {
+      searchParams: {
+        language: 'hu-hu',
+        metric: 'true',
+        details: 'true'
+      }
+    });
+  } catch (error) {
+    if (error?.code === 'missing_api_key') {
+      return buildWeatherUnavailable('missing_api_key');
+    }
+
+    return buildWeatherUnavailable('provider_error');
+  }
 
   const nearestEntry = findNearestForecastEntry(forecast, event.start_at);
   if (!nearestEntry) {
-    return null;
+    return buildWeatherUnavailable('forecast_not_found');
   }
 
   const iconMeta = mapAccuWeatherIcon(
@@ -270,6 +315,7 @@ async function fetchEventWeatherForecast(event) {
   const temperature = Number(nearestEntry?.Temperature?.Value ?? 0);
 
   return {
+    available: true,
     provider: 'AccuWeather',
     locationLabel: location.label || query,
     forecastTime: nearestEntry.DateTime,

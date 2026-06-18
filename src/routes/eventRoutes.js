@@ -4,8 +4,10 @@ const {
   updateEvent,
   updateEventStatus,
   registerForEvent,
+  registerGuestForEvent,
   handleEventEmailAction,
   cancelEventRegistration,
+  cancelGuestRegistration,
   setEventAttendanceStatus,
   getEventById,
   getEventWeather,
@@ -21,6 +23,7 @@ const {
   validateCreateEvent,
   validateUpdateEvent,
   validateUpdateEventStatus,
+  validateRegisterEventGuest,
 } = require('../middleware/requestValidation');
 
 const router = express.Router();
@@ -83,10 +86,25 @@ router.post(
 );
 
 router.post(
+  '/events/:eventId/guests',
+  requireAuth,
+  isTeamMember,
+  validateRegisterEventGuest,
+  registerGuestForEvent
+);
+
+router.post(
   '/events/:eventId/cancel',
   requireAuth,
   isTeamMember,
   cancelEventRegistration
+);
+
+router.post(
+  '/events/:eventId/guests/:guestRegistrationId/cancel',
+  requireAuth,
+  isTeamMember,
+  cancelGuestRegistration
 );
 
 router.post(

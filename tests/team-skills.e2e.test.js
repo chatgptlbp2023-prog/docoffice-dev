@@ -21,6 +21,7 @@ describe('Team skills E2E', () => {
   let outsiderUserId;
   let teamId;
   let team_adminToken;
+  let memberToken;
   let outsiderToken;
   let memberRecordId;
   let eventId;
@@ -49,6 +50,33 @@ describe('Team skills E2E', () => {
 
     expect(res.status).toBe(200);
     return res.body.token;
+  }
+
+  async function addActiveMember({
+    name,
+    email,
+    isGoalkeeper = false,
+    goalkeeperScore = 0,
+    defenseScore = 5,
+    attackScore = 5
+  }) {
+    const userId = await createUser({ name, email });
+    const memberId = randomUUID();
+    created.members.push(memberId);
+
+    await pool.query(
+      `
+      insert into team_members (
+        id, team_id, user_id, role, membership_status,
+        joined_at, created_at, updated_at,
+        skills_enabled, is_goalkeeper, goalkeeper_score, defense_score, attack_score
+      )
+      values ($1, $2, $3, 'member', 'active', now(), now(), now(), true, $4, $5, $6, $7)
+      `,
+      [memberId, teamId, userId, isGoalkeeper, goalkeeperScore, defenseScore, attackScore]
+    );
+
+    return { userId, memberId };
   }
 
   beforeAll(async () => {
@@ -91,12 +119,36 @@ describe('Team skills E2E', () => {
       'migrations',
       '2026-05-28_team_module_settings.sql'
     );
+    const goalkeeperModuleMigrationPath = path.join(
+      __dirname,
+      '..',
+      'db',
+      'migrations',
+      '2026-06-05_goalkeeper_module.sql'
+    );
+    const drawStrategyMigrationPath = path.join(
+      __dirname,
+      '..',
+      'db',
+      'migrations',
+      '2026-06-12_team_draw_strategy.sql'
+    );
+    const guestRegistrationMigrationPath = path.join(
+      __dirname,
+      '..',
+      'db',
+      'migrations',
+      '2026-06-10_event_guest_registrations.sql'
+    );
 
     await pool.query(fs.readFileSync(skillsMigrationPath, 'utf8'));
     await pool.query(fs.readFileSync(drawMigrationPath, 'utf8'));
     await pool.query(fs.readFileSync(goalkeeperMigrationPath, 'utf8'));
     await pool.query(fs.readFileSync(cashMigrationPath, 'utf8'));
     await pool.query(fs.readFileSync(moduleSettingsMigrationPath, 'utf8'));
+    await pool.query(fs.readFileSync(goalkeeperModuleMigrationPath, 'utf8'));
+    await pool.query(fs.readFileSync(drawStrategyMigrationPath, 'utf8'));
+    await pool.query(fs.readFileSync(guestRegistrationMigrationPath, 'utf8'));
   });
 
   beforeEach(async () => {
@@ -164,6 +216,7 @@ describe('Team skills E2E', () => {
     );
 
     team_adminToken = await login(`team_admin_skills_${stamp}@example.com`);
+    memberToken = await login(`member_skills_${stamp}@example.com`);
     outsiderToken = await login(`outsider_skills_${stamp}@example.com`);
   });
 
@@ -197,18 +250,23 @@ describe('Team skills E2E', () => {
     expect(getRes.status).toBe(200);
     expect(getRes.body.settings.skill_balancing_enabled).toBe(true);
     expect(getRes.body.settings.skill_balance_tolerance_percent).toBe(15);
+    expect(getRes.body.settings.draw_strategy).toBe('auto_balanced');
+    expect(getRes.body.settings.goalkeeper_module_enabled).toBe(true);
 
     const patchRes = await request(app)
       .patch(`/api/teams/${teamId}/skill-settings`)
       .set('Authorization', `Bearer ${team_adminToken}`)
       .send({
         skillBalancingEnabled: false,
-        skillBalanceTolerancePercent: 12
+        skillBalanceTolerancePercent: 12,
+        goalkeeperModuleEnabled: false
       });
 
     expect(patchRes.status).toBe(200);
     expect(patchRes.body.settings.skill_balancing_enabled).toBe(false);
     expect(patchRes.body.settings.skill_balance_tolerance_percent).toBe(12);
+    expect(patchRes.body.settings.draw_strategy).toBe('random');
+    expect(patchRes.body.settings.goalkeeper_module_enabled).toBe(false);
   });
 
   test('team_admin can update team module settings', async () => {
@@ -216,13 +274,96 @@ describe('Team skills E2E', () => {
       .patch(`/api/teams/${teamId}/module-settings`)
       .set('Authorization', `Bearer ${team_adminToken}`)
       .send({
-        cashModuleEnabled: true
+        cashModuleEnabled: true,
+        adminGuideModuleEnabled: true
       });
 
     expect(patchRes.status).toBe(200);
     expect(patchRes.body.team.cash_module_enabled).toBe(true);
+    expect(patchRes.body.team.admin_guide_module_enabled).toBe(true);
     expect(patchRes.body.team.module_settings.finance.enabled).toBe(true);
+    expect(patchRes.body.team.module_settings.adminGuide.enabled).toBe(true);
+    expect(patchRes.body.team.module_settings.goalkeeper.enabled).toBe(true);
     expect(patchRes.body.team.module_settings.rank.enabled).toBe(false);
+  });
+
+  test('active member can update only own skill values through my skills endpoint', async () => {
+    const patchRes = await request(app)
+      .patch(`/api/teams/${teamId}/me/skills`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({
+        goalkeeperSkill: 7,
+        defenseSkill: 4,
+        attackSkill: 9,
+        isGoalkeeper: false
+      });
+
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.member.user_id).toBe(memberUserId);
+    expect(patchRes.body.member.member_id).toBe(memberRecordId);
+    expect(patchRes.body.member.goalkeeper_score).toBe(7);
+    expect(patchRes.body.member.defense_score).toBe(4);
+    expect(patchRes.body.member.attack_score).toBe(9);
+    expect(patchRes.body.member.is_goalkeeper).toBe(false);
+    expect(patchRes.body.member.role).toBe('member');
+    expect(patchRes.body.member.rank_value).toBeUndefined();
+
+    const dbRes = await pool.query(
+      `
+      select goalkeeper_score, defense_score, attack_score, is_goalkeeper
+      from team_members
+      where id = $1
+      `,
+      [memberRecordId]
+    );
+
+    expect(dbRes.rows[0]).toMatchObject({
+      goalkeeper_score: 7,
+      defense_score: 4,
+      attack_score: 9,
+      is_goalkeeper: false
+    });
+  });
+
+  test('my skills endpoint rejects memberId and disabled skill module', async () => {
+    const forbiddenFieldRes = await request(app)
+      .patch(`/api/teams/${teamId}/me/skills`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({
+        memberId: memberRecordId,
+        defenseSkill: 8
+    });
+
+    expect(forbiddenFieldRes.status).toBe(400);
+    expect(forbiddenFieldRes.body.message).toContain('memberId');
+
+    const outsiderRes = await request(app)
+      .patch(`/api/teams/${teamId}/me/skills`)
+      .set('Authorization', `Bearer ${outsiderToken}`)
+      .send({
+        defenseSkill: 8
+      });
+
+    expect(outsiderRes.status).toBe(403);
+
+    await pool.query(
+      `
+      update teams
+      set skill_balancing_enabled = false
+      where id = $1
+      `,
+      [teamId]
+    );
+
+    const disabledRes = await request(app)
+      .patch(`/api/teams/${teamId}/me/skills`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({
+        defenseSkill: 8
+      });
+
+    expect(disabledRes.status).toBe(400);
+    expect(disabledRes.body.message).toBe('A skill modul ennél a csapatnál nincs bekapcsolva.');
   });
 
 
@@ -243,6 +384,127 @@ describe('Team skills E2E', () => {
 
     expect(previewRes.status).toBe(400);
     expect(previewRes.body.message).toMatch(/Legalább 2 kapusnak jelölt játékos kell/);
+  });
+
+  test('goalkeeper module OFF allows draw below two goalkeepers', async () => {
+    const settingsRes = await request(app)
+      .patch(`/api/teams/${teamId}/skill-settings`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        goalkeeperModuleEnabled: false
+      });
+
+    expect(settingsRes.status).toBe(200);
+    expect(settingsRes.body.settings.goalkeeper_module_enabled).toBe(false);
+
+    const toggleRes = await request(app)
+      .patch(`/api/teams/${teamId}/members/${memberRecordId}/goalkeeper-role`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({
+        isGoalkeeper: false
+      });
+
+    expect(toggleRes.status).toBe(200);
+
+    const previewRes = await request(app)
+      .post(`/api/events/${eventId}/team-draw/preview`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.draw.settings.strategy).toBe('auto_balanced');
+    expect(previewRes.body.draw.settings.generationMode).toBe('skill');
+    expect(previewRes.body.draw.settings.goalkeeperModuleEnabled).toBe(false);
+    expect(previewRes.body.draw.source_member_count).toBe(2);
+
+    const saveRes = await request(app)
+      .post(`/api/events/${eventId}/team-draw/save`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({ draw: previewRes.body.draw });
+
+    expect(saveRes.status).toBe(200);
+    expect(saveRes.body.draw.status).toBe('saved');
+
+    const publishRes = await request(app)
+      .post(`/api/events/${eventId}/team-draw/publish`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(publishRes.status).toBe(200);
+    expect(publishRes.body.draw.status).toBe('published');
+  });
+
+  test('auto balanced draw splits strong attackers when a better alternative exists', async () => {
+    await addActiveMember({
+      name: 'Strong Attack 1',
+      email: `strong_attack_1_${Date.now()}@example.com`,
+      defenseScore: 2,
+      attackScore: 10
+    });
+    await addActiveMember({
+      name: 'Strong Attack 2',
+      email: `strong_attack_2_${Date.now()}@example.com`,
+      defenseScore: 2,
+      attackScore: 10
+    });
+    await addActiveMember({
+      name: 'Strong Defender 1',
+      email: `strong_def_1_${Date.now()}@example.com`,
+      defenseScore: 10,
+      attackScore: 3
+    });
+    await addActiveMember({
+      name: 'Strong Defender 2',
+      email: `strong_def_2_${Date.now()}@example.com`,
+      defenseScore: 10,
+      attackScore: 3
+    });
+
+    const previewRes = await request(app)
+      .post(`/api/teams/${teamId}/team-draw/preview`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.draw.settings.strategy).toBe('auto_balanced');
+
+    const teamAAttackers = previewRes.body.draw.teamA.filter(player => Number(player.attack_score) >= 8);
+    const teamBAttackers = previewRes.body.draw.teamB.filter(player => Number(player.attack_score) >= 8);
+
+    expect(teamAAttackers).toHaveLength(1);
+    expect(teamBAttackers).toHaveLength(1);
+    expect(previewRes.body.draw.explanation.bullets.join(' ')).toContain('legerősebb támadók');
+  });
+
+  test('preview accepts selected draw strategy when skill balancing is enabled', async () => {
+    const previewRes = await request(app)
+      .post(`/api/teams/${teamId}/team-draw/preview`)
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({ strategy: 'counter_pair_balance' });
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.draw.settings.generationMode).toBe('skill');
+    expect(previewRes.body.draw.settings.strategy).toBe('counter_pair_balance');
+  });
+
+  test('auto balanced draw keeps guest registrations within one player size difference', async () => {
+    await pool.query(
+      `
+      insert into event_guest_registrations (
+        id, event_id, team_id, host_user_id, guest_name, registration_status, registered_at, created_at, updated_at
+      )
+      values
+      ($1, $3, $4, $5, 'Vendeg Egy', 'going', now(), now(), now()),
+      ($2, $3, $4, $6, 'Vendeg Ketto', 'going', now(), now(), now())
+      `,
+      [randomUUID(), randomUUID(), eventId, teamId, team_adminUserId, memberUserId]
+    );
+
+    const previewRes = await request(app)
+      .post(`/api/events/${eventId}/team-draw/preview`)
+      .set('Authorization', `Bearer ${team_adminToken}`);
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.draw.source_member_count).toBe(4);
+    expect(Math.abs(previewRes.body.draw.teamA.length - previewRes.body.draw.teamB.length)).toBeLessThanOrEqual(1);
+    expect(previewRes.body.draw.teamA.concat(previewRes.body.draw.teamB).filter(player => player.is_guest)).toHaveLength(2);
   });
 
   test('goalkeeper role change marks a published draw stale for affected event', async () => {
@@ -323,11 +585,13 @@ describe('Team skills E2E', () => {
 
     const teamPreviewRes = await request(app)
       .post(`/api/teams/${teamId}/team-draw/preview`)
-      .set('Authorization', `Bearer ${team_adminToken}`);
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({ strategy: 'optimized' });
 
     expect(teamPreviewRes.status).toBe(200);
     expect(teamPreviewRes.body.draw.settings.skillBalancingEnabled).toBe(false);
     expect(teamPreviewRes.body.draw.settings.generationMode).toBe('random');
+    expect(teamPreviewRes.body.draw.settings.strategy).toBe('random');
     expect(teamPreviewRes.body.draw.source_member_count).toBe(2);
     expect(teamPreviewRes.body.draw.teamA[0].overall_skill).toBe(15);
     expect(teamPreviewRes.body.draw.teamB[0].overall_skill).toBe(15);
@@ -336,11 +600,13 @@ describe('Team skills E2E', () => {
 
     const eventPreviewRes = await request(app)
       .post(`/api/events/${eventId}/team-draw/preview`)
-      .set('Authorization', `Bearer ${team_adminToken}`);
+      .set('Authorization', `Bearer ${team_adminToken}`)
+      .send({ strategy: 'optimized' });
 
     expect(eventPreviewRes.status).toBe(200);
     expect(eventPreviewRes.body.draw.settings.skillBalancingEnabled).toBe(false);
     expect(eventPreviewRes.body.draw.settings.generationMode).toBe('random');
+    expect(eventPreviewRes.body.draw.settings.strategy).toBe('random');
     expect(eventPreviewRes.body.draw.source_member_count).toBe(2);
 
     const saveRes = await request(app)
@@ -350,6 +616,7 @@ describe('Team skills E2E', () => {
     expect(saveRes.status).toBe(200);
     expect(saveRes.body.draw.status).toBe('saved');
     expect(saveRes.body.draw.settings.generationMode).toBe('random');
+    expect(saveRes.body.draw.settings.strategy).toBe('random');
 
     const publishRes = await request(app)
       .post(`/api/events/${eventId}/team-draw/publish`)

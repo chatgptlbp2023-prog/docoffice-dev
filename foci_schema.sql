@@ -346,9 +346,14 @@ CREATE TABLE public.teams (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     skill_balancing_enabled boolean DEFAULT true NOT NULL,
     skill_balance_tolerance_percent integer DEFAULT 15 NOT NULL,
+    draw_strategy text DEFAULT 'auto_balanced'::text NOT NULL,
+    goalkeeper_module_enabled boolean DEFAULT true NOT NULL,
     rank_module_enabled boolean DEFAULT false NOT NULL,
     cash_module_enabled boolean DEFAULT false NOT NULL,
+    discipline_module_enabled boolean DEFAULT false NOT NULL,
+    admin_guide_module_enabled boolean DEFAULT false NOT NULL,
     CONSTRAINT chk_teams_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT teams_draw_strategy_check CHECK ((draw_strategy = ANY (ARRAY['auto_balanced'::text, 'random'::text, 'sum_balance'::text]))),
     CONSTRAINT teams_skill_balance_tolerance_percent_check CHECK (((skill_balance_tolerance_percent >= 0) AND (skill_balance_tolerance_percent <= 100)))
 );
 
@@ -963,4 +968,3 @@ ALTER TABLE ONLY public.teams
 --
 
 \unrestrict k3eq2m5ioEuKtygj9W6wVUxfSvDFpmmgbj68cRwrHaSRzmTSJ9pYBUcAbRkhEIm
-

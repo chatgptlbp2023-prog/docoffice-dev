@@ -929,10 +929,19 @@ async function updateEvent({ eventId, data }) {
 
     const activeGoingCountResult = await client.query(
       `
-      select count(*)::int as going_count
-      from event_registrations
-      where event_id = $1
-        and registration_status = 'going'
+      select
+        (
+          select count(*)::int
+          from event_registrations
+          where event_id = $1
+            and registration_status = 'going'
+        ) +
+        (
+          select count(*)::int
+          from event_guest_registrations
+          where event_id = $1
+            and registration_status = 'going'
+        ) as going_count
       `,
       [eventId]
     );
@@ -1086,6 +1095,12 @@ async function getEventById(eventId, userId = null) {
       my_reg.registered_at as my_registered_at,
       my_reg.cancelled_at as my_cancelled_at,
       my_reg.promoted_at as my_promoted_at,
+      my_guest.id as my_guest_registration_id,
+      my_guest.guest_name as my_guest_name,
+      my_guest.registration_status as my_guest_registration_status,
+      my_guest.registered_at as my_guest_registered_at,
+      my_guest.cancelled_at as my_guest_cancelled_at,
+      my_guest.promoted_at as my_guest_promoted_at,
       rules.rules_version as my_rules_accepted_version,
       rules.accepted_at as my_rules_accepted_at,
       coalesce(my_reg_stats.cancelled_count, 0)::int as my_cancelled_count
@@ -1114,6 +1129,27 @@ async function getEventById(eventId, userId = null) {
       limit 1
     ) my_reg on true
     left join lateral (
+      select
+        egr.id,
+        egr.guest_name,
+        egr.registration_status,
+        egr.registered_at,
+        egr.cancelled_at,
+        egr.promoted_at
+      from event_guest_registrations egr
+      where egr.event_id = e.id
+        and egr.host_user_id = $2
+      order by
+        case egr.registration_status
+          when 'going' then 1
+          when 'waiting_list' then 2
+          when 'cancelled' then 3
+          else 4
+        end,
+        egr.registered_at desc
+      limit 1
+    ) my_guest on true
+    left join lateral (
       select count(*)::int as cancelled_count
       from event_registrations reg
       where reg.event_id = e.id
@@ -1141,6 +1177,17 @@ async function getEventById(eventId, userId = null) {
     ...eventResult.rows[0],
     my_cancelled_count: Number(eventResult.rows[0].my_cancelled_count || 0),
     registration_limit_reached: Number(eventResult.rows[0].my_cancelled_count || 0) >= 2,
+    my_guest_registration: eventResult.rows[0].my_guest_registration_id
+      ? {
+          id: eventResult.rows[0].my_guest_registration_id,
+          guest_name: eventResult.rows[0].my_guest_name,
+          registration_status: eventResult.rows[0].my_guest_registration_status,
+          registered_at: eventResult.rows[0].my_guest_registered_at,
+          cancelled_at: eventResult.rows[0].my_guest_cancelled_at,
+          promoted_at: eventResult.rows[0].my_guest_promoted_at,
+          is_guest: true
+        }
+      : null,
     rules_acceptance: buildRulesAcceptanceState(
       eventResult.rows[0],
       {
@@ -1156,6 +1203,10 @@ async function getEventById(eventId, userId = null) {
     `
     select
       er.id as registration_id,
+      false as is_guest,
+      null::uuid as guest_registration_id,
+      null::uuid as host_user_id,
+      null::text as host_name,
       er.user_id,
       u.name,
       u.email,
@@ -1208,7 +1259,50 @@ async function getEventById(eventId, userId = null) {
     [eventId, event.team_id, event.start_at]
   );
 
-  const allRegistrations = registrationsResult.rows;
+  const guestRegistrationsResult = await pool.query(
+    `
+    select
+      egr.id as registration_id,
+      true as is_guest,
+      egr.id as guest_registration_id,
+      egr.host_user_id,
+      host.name as host_name,
+      null::uuid as user_id,
+      egr.guest_name as name,
+      null::text as email,
+      null::text as payment_provider,
+      null::text as payment_username,
+      null::text as payment_qr_data_url,
+      egr.registration_status,
+      egr.registered_at,
+      egr.cancelled_at,
+      egr.promoted_at,
+      null::text as attendance_status,
+      null::text as attendance_note,
+      null::int as attendance_payment_amount,
+      null::timestamptz as attendance_payment_recorded_at,
+      null::timestamptz as attendance_marked_at,
+      null::uuid as attendance_marked_by_user_id,
+      null::int as finance_expected_base_amount,
+      null::int as finance_expected_fee_amount,
+      null::int as finance_expected_total_amount,
+      0::int as finance_balance_before_event,
+      null::int as finance_settlement_target_amount,
+      null::int as finance_actual_paid_amount,
+      null::int as finance_event_delta_amount,
+      null::int as finance_balance_after_event
+    from event_guest_registrations egr
+    join users host on host.id = egr.host_user_id
+    where egr.event_id = $1
+    order by egr.registered_at asc
+    `,
+    [eventId]
+  );
+
+  const allRegistrations = [
+    ...registrationsResult.rows,
+    ...guestRegistrationsResult.rows
+  ].sort((a, b) => new Date(a.registered_at).getTime() - new Date(b.registered_at).getTime());
   const going = allRegistrations.filter(
     r => r.registration_status === 'going'
   );
@@ -1232,15 +1326,32 @@ async function getEventById(eventId, userId = null) {
     event.my_promoted_at = myLatestRegistration.promoted_at;
   }
 
+  const myGuestRegistration = userId
+    ? allRegistrations.find(r => r.is_guest && r.host_user_id === userId && r.registration_status !== 'cancelled')
+      || allRegistrations.find(r => r.is_guest && r.host_user_id === userId && r.registration_status === 'cancelled')
+    : null;
+  if (myGuestRegistration) {
+    event.my_guest_registration = {
+      id: myGuestRegistration.guest_registration_id,
+      guest_name: myGuestRegistration.name,
+      registration_status: myGuestRegistration.registration_status,
+      registered_at: myGuestRegistration.registered_at,
+      cancelled_at: myGuestRegistration.cancelled_at,
+      promoted_at: myGuestRegistration.promoted_at,
+      is_guest: true
+    };
+  }
+
   const goingCount = going.length;
   const waitingCount = waitingList.length;
   const rankWaitingCount = rankWaitingList.length;
   const cancelledCount = cancelled.length;
+  const realGoing = going.filter(item => !item.is_guest);
   const attendanceSummary = {
-    presentCount: going.filter(item => item.attendance_status === 'present').length,
-    noShowCount: going.filter(item => item.attendance_status === 'no_show').length,
-    unmarkedCount: going.filter(item => !item.attendance_status).length,
-    totalPaidAmount: going.reduce((sum, item) => sum + Number(item.attendance_payment_amount || 0), 0)
+    presentCount: realGoing.filter(item => item.attendance_status === 'present').length,
+    noShowCount: realGoing.filter(item => item.attendance_status === 'no_show').length,
+    unmarkedCount: realGoing.filter(item => !item.attendance_status).length,
+    totalPaidAmount: realGoing.reduce((sum, item) => sum + Number(item.attendance_payment_amount || 0), 0)
   };
   const maxPlayers = event.max_players;
   const spotsLeft = Math.max(maxPlayers - goingCount, 0);
@@ -1249,21 +1360,21 @@ async function getEventById(eventId, userId = null) {
     drawStatus: event.draw_status
   });
   const financeSummary = {
-    expectedBaseTotalAmount: going.reduce((sum, item) => sum + Number(item.finance_expected_base_amount || 0), 0),
-    expectedFeeTotalAmount: going.reduce((sum, item) => sum + Number(item.finance_expected_fee_amount || 0), 0),
-    expectedTotalAmount: going.reduce((sum, item) => sum + Number(item.finance_expected_total_amount || 0), 0),
-    settlementTargetTotalAmount: going.reduce((sum, item) => {
+    expectedBaseTotalAmount: realGoing.reduce((sum, item) => sum + Number(item.finance_expected_base_amount || 0), 0),
+    expectedFeeTotalAmount: realGoing.reduce((sum, item) => sum + Number(item.finance_expected_fee_amount || 0), 0),
+    expectedTotalAmount: realGoing.reduce((sum, item) => sum + Number(item.finance_expected_total_amount || 0), 0),
+    settlementTargetTotalAmount: realGoing.reduce((sum, item) => {
       const payment = Number(item.finance_settlement_target_amount);
       if (Number.isFinite(payment)) return sum + payment;
       const balanceBefore = Number(item.finance_balance_before_event || 0);
       return sum + Math.max(Number(paymentSummary.final_amount_per_person || 0) - balanceBefore, 0);
     }, 0),
-    actualPaidTotalAmount: going.reduce(
+    actualPaidTotalAmount: realGoing.reduce(
       (sum, item) =>
         sum + Number((item.finance_actual_paid_amount ?? item.attendance_payment_amount) || 0),
       0
     ),
-    eventDeltaTotalAmount: going.reduce((sum, item) => {
+    eventDeltaTotalAmount: realGoing.reduce((sum, item) => {
       const delta = Number(item.finance_event_delta_amount);
       if (Number.isFinite(delta)) return sum + delta;
       return (
@@ -1373,13 +1484,19 @@ async function getEventsByTeamId(teamId, userId = null) {
       my_reg.registered_at as my_registered_at,
       my_reg.cancelled_at as my_cancelled_at,
       my_reg.promoted_at as my_promoted_at,
+      my_guest.id as my_guest_registration_id,
+      my_guest.guest_name as my_guest_name,
+      my_guest.registration_status as my_guest_registration_status,
+      my_guest.registered_at as my_guest_registered_at,
+      my_guest.cancelled_at as my_guest_cancelled_at,
+      my_guest.promoted_at as my_guest_promoted_at,
       rules.rules_version as my_rules_accepted_version,
       rules.accepted_at as my_rules_accepted_at,
       coalesce(my_reg_stats.cancelled_count, 0)::int as my_cancelled_count,
-      coalesce(sum(case when er.registration_status = 'going' then 1 else 0 end), 0)::int as going_count,
-      coalesce(sum(case when er.registration_status = 'waiting_list' then 1 else 0 end), 0)::int as waiting_count,
-      coalesce(sum(case when er.registration_status = 'waiting_list_rank' then 1 else 0 end), 0)::int as rank_waiting_count,
-      coalesce(sum(case when er.registration_status = 'cancelled' then 1 else 0 end), 0)::int as cancelled_count
+      coalesce(stats.going_count, 0)::int as going_count,
+      coalesce(stats.waiting_count, 0)::int as waiting_count,
+      coalesce(stats.rank_waiting_count, 0)::int as rank_waiting_count,
+      coalesce(stats.cancelled_count, 0)::int as cancelled_count
     from events e
     join teams t on t.id = e.team_id
     left join event_team_draws etd on etd.event_id = e.id
@@ -1405,6 +1522,27 @@ async function getEventsByTeamId(teamId, userId = null) {
       limit 1
     ) my_reg on true
     left join lateral (
+      select
+        egr.id,
+        egr.guest_name,
+        egr.registration_status,
+        egr.registered_at,
+        egr.cancelled_at,
+        egr.promoted_at
+      from event_guest_registrations egr
+      where egr.event_id = e.id
+        and egr.host_user_id = $2
+      order by
+        case egr.registration_status
+          when 'going' then 1
+          when 'waiting_list' then 2
+          when 'cancelled' then 3
+          else 4
+        end,
+        egr.registered_at desc
+      limit 1
+    ) my_guest on true
+    left join lateral (
       select count(*)::int as cancelled_count
       from event_registrations reg
       where reg.event_id = e.id
@@ -1419,20 +1557,52 @@ async function getEventsByTeamId(teamId, userId = null) {
       order by tra.accepted_at desc
       limit 1
     ) rules on true
-    left join event_registrations er on er.event_id = e.id
+    left join lateral (
+      select
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'going'
+        ) +
+        (
+          select count(*)::int
+          from event_guest_registrations egr
+          where egr.event_id = e.id
+            and egr.registration_status = 'going'
+        ) as going_count,
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'waiting_list'
+        ) +
+        (
+          select count(*)::int
+          from event_guest_registrations egr
+          where egr.event_id = e.id
+            and egr.registration_status = 'waiting_list'
+        ) as waiting_count,
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'waiting_list_rank'
+        ) as rank_waiting_count,
+        (
+          select count(*)::int
+          from event_registrations er
+          where er.event_id = e.id
+            and er.registration_status = 'cancelled'
+        ) +
+        (
+          select count(*)::int
+          from event_guest_registrations egr
+          where egr.event_id = e.id
+            and egr.registration_status = 'cancelled'
+        ) as cancelled_count
+    ) stats on true
     where e.team_id = $1
-    group by
-      e.id,
-      t.id,
-      etd.id,
-      es.id,
-      my_reg.registration_status,
-      my_reg.registered_at,
-      my_reg.cancelled_at,
-      my_reg.promoted_at,
-      rules.rules_version,
-      rules.accepted_at,
-      my_reg_stats.cancelled_count
     order by e.start_at asc
     `,
     [teamId, userId]
@@ -1522,10 +1692,10 @@ async function getEventsByTeamId(teamId, userId = null) {
       minPlayers: event.min_players
     });
     const attendanceSummary = attendanceSummaryByEventId.get(event.id) || {
-      going_count_basis: event.going_count,
+      going_count_basis: 0,
       present_count: 0,
       no_show_count: 0,
-      unmarked_count: event.going_count,
+      unmarked_count: 0,
       total_paid_amount: 0
     };
     const financeSummary = financeSummaryByEventId.get(event.id) || {
@@ -1562,6 +1732,17 @@ async function getEventsByTeamId(teamId, userId = null) {
       ...item,
       my_cancelled_count: Number(item.my_cancelled_count || 0),
       registration_limit_reached: Number(item.my_cancelled_count || 0) >= 2,
+      my_guest_registration: item.my_guest_registration_id
+        ? {
+            id: item.my_guest_registration_id,
+            guest_name: item.my_guest_name,
+            registration_status: item.my_guest_registration_status,
+            registered_at: item.my_guest_registered_at,
+            cancelled_at: item.my_guest_cancelled_at,
+            promoted_at: item.my_guest_promoted_at,
+            is_guest: true
+          }
+        : null,
       holidayWarning: buildHolidayWarning(new Date(item.start_at)),
       spots_left: Math.max(item.max_players - item.going_count, 0),
       is_registration_open: isRegistrationOpen(item),

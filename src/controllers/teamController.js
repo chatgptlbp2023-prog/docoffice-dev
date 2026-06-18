@@ -1,5 +1,38 @@
 const teamService = require('../services/teamService');
 const teamRulesService = require('../services/teamRulesService');
+const teamBreakActionService = require('../services/teamBreakActionService');
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderActionResultPage({ title, message, tone = 'success' }) {
+  const background = tone === 'error' ? '#fef2f2' : '#f0fdf4';
+  const border = tone === 'error' ? '#fecaca' : '#bbf7d0';
+  const accent = tone === 'error' ? '#b91c1c' : '#166534';
+
+  return `
+    <!DOCTYPE html>
+    <html lang="hu">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>${escapeHtml(title)}</title>
+      </head>
+      <body style="margin:0;font-family:Segoe UI,Arial,sans-serif;background:${background};color:#111827;">
+        <main style="max-width:560px;margin:64px auto;padding:28px;border:1px solid ${border};border-radius:18px;background:#ffffff;box-shadow:0 18px 45px rgba(15,23,42,0.08);">
+          <h1 style="margin:0 0 14px;color:${accent};font-size:28px;">${escapeHtml(title)}</h1>
+          <p style="font-size:16px;line-height:1.6;margin:0;">${escapeHtml(message)}</p>
+        </main>
+      </body>
+    </html>
+  `;
+}
 
 function handleServiceError(res, error, logLabel, fallbackMessage) {
   if (error && error.statusCode) {
@@ -198,7 +231,8 @@ async function updateTeamModuleSettings(req, res) {
     const result = await teamService.updateTeamModuleSettings({
       teamId: req.params.teamId,
       cashModuleEnabled: req.body.cashModuleEnabled,
-      disciplineModuleEnabled: req.body.disciplineModuleEnabled
+      disciplineModuleEnabled: req.body.disciplineModuleEnabled,
+      adminGuideModuleEnabled: req.body.adminGuideModuleEnabled
     });
 
     return res.status(200).json({
@@ -236,6 +270,104 @@ async function acceptTeamRules(req, res) {
   }
 }
 
+async function startMyTeamBreak(req, res) {
+  try {
+    const result = await teamService.startMyTeamBreak({
+      teamId: req.params.teamId,
+      userId: req.user.id
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Szabi inditasi hiba:',
+      'Szerverhiba szabi inditasa kozben.'
+    );
+  }
+}
+
+async function endMyTeamBreak(req, res) {
+  try {
+    const result = await teamService.endMyTeamBreak({
+      teamId: req.params.teamId,
+      userId: req.user.id
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Szabi lezarasi hiba:',
+      'Szerverhiba szabi lezarasa kozben.'
+    );
+  }
+}
+
+async function updateTeamMemberActivityStatus(req, res) {
+  try {
+    const result = await teamService.updateTeamMemberActivityStatus({
+      teamId: req.params.teamId,
+      memberId: req.params.memberId,
+      status: req.body.status || null,
+      clearBreak: req.body.clearBreak === true,
+      extendBreak: req.body.extendBreak === true
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Csapattag aktivitasi allapot hiba:',
+      'Szerverhiba csapattag aktivitasi allapot modositasa kozben.'
+    );
+  }
+}
+
+async function handleTeamBreakEmailAction(req, res) {
+  try {
+    const result = await teamBreakActionService.executeTeamBreakActionToken(req.params.token);
+    const titleByAction = {
+      extend_break_one_week: 'Szabi meghosszabbítva',
+      end_break: 'Visszatérés rögzítve'
+    };
+
+    return res
+      .status(200)
+      .type('html')
+      .send(
+        renderActionResultPage({
+          title: titleByAction[result.action] || 'Szabi művelet rögzítve',
+          message: result.message,
+          tone: result.ok === false ? 'error' : 'success'
+        })
+      );
+  } catch (error) {
+    return res
+      .status(error?.statusCode === 401 ? 401 : 200)
+      .type('html')
+      .send(
+        renderActionResultPage({
+          title: 'A művelet most nem sikerült',
+          message: error?.message || 'A szabi művelet most nem sikerült.',
+          tone: 'error'
+        })
+      );
+  }
+}
+
 module.exports = {
   createTeam,
   getTeamById,
@@ -246,5 +378,9 @@ module.exports = {
   addFinanceAdjustment,
   updateTeamRules,
   updateTeamModuleSettings,
-  acceptTeamRules
+  acceptTeamRules,
+  startMyTeamBreak,
+  endMyTeamBreak,
+  updateTeamMemberActivityStatus,
+  handleTeamBreakEmailAction
 };

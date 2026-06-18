@@ -281,6 +281,14 @@ beforeAll(() => runSqlWithDeadlockRetry(`
 `));
 
 beforeAll(() => runSqlWithDeadlockRetry(`
+  alter table team_members
+    add column if not exists break_started_at timestamptz null,
+    add column if not exists break_until timestamptz null,
+    add column if not exists break_extensions_count integer not null default 0,
+    add column if not exists break_reminder_sent_at timestamptz null,
+    add column if not exists passive_since timestamptz null,
+    add column if not exists passive_reason text null;
+
   create table if not exists event_email_action_log (
     id uuid primary key default gen_random_uuid(),
     event_id uuid not null references events(id) on delete cascade,
@@ -301,18 +309,35 @@ beforeAll(() => runSqlWithDeadlockRetry(`
   create index if not exists event_email_action_log_user_idx
     on event_email_action_log(user_id, acted_at desc);
 
-  do $$
-  begin
-    if not exists (
-      select 1
-      from pg_constraint
-      where conname = 'event_email_action_log_action_check'
-    ) then
-      alter table event_email_action_log
-        add constraint event_email_action_log_action_check
-        check (action in ('register', 'skip'));
-    end if;
-  end $$;
+  alter table event_email_action_log
+    drop constraint if exists event_email_action_log_action_check;
+
+  alter table event_email_action_log
+    add constraint event_email_action_log_action_check
+    check (action in ('register', 'skip', 'vacation_one_week'));
+
+  create table if not exists team_break_action_log (
+    id uuid primary key default gen_random_uuid(),
+    team_id uuid not null references teams(id) on delete cascade,
+    user_id uuid not null references users(id) on delete cascade,
+    action text not null,
+    status text not null,
+    message text null,
+    token_jti text null,
+    metadata jsonb not null default '{}'::jsonb,
+    acted_at timestamptz not null default now(),
+    created_at timestamptz not null default now()
+  );
+
+  create index if not exists team_break_action_log_team_user_idx
+    on team_break_action_log(team_id, user_id, acted_at desc);
+
+  alter table team_break_action_log
+    drop constraint if exists team_break_action_log_action_check;
+
+  alter table team_break_action_log
+    add constraint team_break_action_log_action_check
+    check (action in ('extend_break_one_week', 'end_break'));
 `));
 
 beforeAll(() => {
@@ -325,6 +350,30 @@ beforeAll(() => {
   );
   const rankWaitlistMigrationSql = fs.readFileSync(rankWaitlistMigrationPath, 'utf8');
   return pool.query(rankWaitlistMigrationSql);
+});
+
+beforeAll(() => {
+  const guestRegistrationsMigrationPath = path.join(
+    __dirname,
+    '..',
+    'db',
+    'migrations',
+    '2026-06-10_event_guest_registrations.sql'
+  );
+  const guestRegistrationsMigrationSql = fs.readFileSync(guestRegistrationsMigrationPath, 'utf8');
+  return pool.query(guestRegistrationsMigrationSql);
+});
+
+beforeAll(() => {
+  const adminGuideMigrationPath = path.join(
+    __dirname,
+    '..',
+    'db',
+    'migrations',
+    '2026-06-11_admin_guide_module.sql'
+  );
+  const adminGuideMigrationSql = fs.readFileSync(adminGuideMigrationPath, 'utf8');
+  return pool.query(adminGuideMigrationSql);
 });
 
 beforeAll(() => {

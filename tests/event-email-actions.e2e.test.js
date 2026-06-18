@@ -93,7 +93,7 @@ describe('Event email actions E2E', () => {
         id, team_id, created_by_user_id, title, description, start_at, location_name, min_players, max_players, status, published_at, created_at, updated_at
       )
       values (
-        $1, $2, $3, 'Email gombos esemény', 'Email action teszt', '2026-06-10T18:00:00.000Z', 'Teszt pálya', 5, 10, 'published', now(), now(), now()
+        $1, $2, $3, 'Email gombos esemény', 'Email action teszt', now() + interval '2 days', 'Teszt pálya', 5, 10, 'published', now(), now(), now()
       )
       `,
       [eventId, teamId, adminId]
@@ -165,7 +165,7 @@ describe('Event email actions E2E', () => {
         id, team_id, created_by_user_id, title, description, start_at, location_name, min_players, max_players, status, published_at, created_at, updated_at
       )
       values (
-        $1, $2, $3, 'Email varolistas esemeny', 'Email action varolista teszt', '2026-06-10T18:00:00.000Z', 'Teszt palya', 1, 1, 'published', now(), now(), now()
+        $1, $2, $3, 'Email varolistas esemeny', 'Email action varolista teszt', now() + interval '2 days', 'Teszt palya', 1, 1, 'published', now(), now(), now()
       )
       `,
       [eventId, teamId, adminId]
@@ -249,7 +249,7 @@ describe('Event email actions E2E', () => {
         id, team_id, created_by_user_id, title, description, start_at, location_name, min_players, max_players, status, published_at, created_at, updated_at
       )
       values (
-        $1, $2, $3, 'Email szabaly esemĂ©ny', 'Email rules action teszt', '2026-06-12T18:00:00.000Z', 'Teszt pĂˇlya', 5, 10, 'published', now(), now(), now()
+        $1, $2, $3, 'Email szabaly esemĂ©ny', 'Email rules action teszt', now() + interval '2 days', 'Teszt pĂˇlya', 5, 10, 'published', now(), now(), now()
       )
       `,
       [eventId, teamId, adminId]
@@ -330,7 +330,7 @@ describe('Event email actions E2E', () => {
         id, team_id, created_by_user_id, title, description, start_at, location_name, min_players, max_players, status, published_at, created_at, updated_at
       )
       values (
-        $1, $2, $3, 'Skip esemény', 'Skip action teszt', '2026-06-11T18:00:00.000Z', 'Rank pálya', 5, 10, 'published', now(), now(), now()
+        $1, $2, $3, 'Skip esemény', 'Skip action teszt', now() + interval '2 days', 'Rank pálya', 5, 10, 'published', now(), now(), now()
       )
       `,
       [eventId, teamId, adminId]
@@ -387,5 +387,98 @@ describe('Event email actions E2E', () => {
         status: 'recorded_for_rank'
       })
     );
+  });
+
+  test('Szabin vagyok email action egy hetes szabadsagot rogzit a csapattagsagon', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser({ name: 'Vacation Admin', email: `vacation_admin_${runId}@example.com` });
+    const memberId = await createUser({ name: 'Vacation Member', email: `vacation_member_${runId}@example.com` });
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, rank_module_enabled, created_at, updated_at)
+      values ($1, $2, $3, 'active', true, now(), now())
+      `,
+      [teamId, 'Szabi Action FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, memberId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Szabi action esemeny', 'Vacation action teszt', now() + interval '2 days', 'Teszt palya', 5, 10, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (id, event_id, notification_preferences)
+      values ($1, $2, '{"notifyTeamOnCreate":true}'::jsonb)
+      `,
+      [randomUUID(), eventId]
+    );
+
+    const token = buildEventEmailActionToken({
+      eventId,
+      userId: memberId,
+      action: EVENT_EMAIL_ACTIONS.VACATION_ONE_WEEK
+    });
+
+    const beforeClick = Date.now();
+    const response = await request(app)
+      .get(`/api/event-email-actions/${encodeURIComponent(token)}`)
+      .redirects(0);
+    const afterClick = Date.now();
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('Szabads');
+    expect(response.text).toContain('1 hétig szabin vagy ebben a csapatban');
+
+    const memberResult = await pool.query(
+      `
+      select membership_status, break_started_at, break_until, break_extensions_count
+      from team_members
+      where team_id = $1
+        and user_id = $2
+      `,
+      [teamId, memberId]
+    );
+
+    expect(memberResult.rows).toHaveLength(1);
+    expect(memberResult.rows[0].membership_status).toBe('active');
+    expect(memberResult.rows[0].break_started_at).toBeTruthy();
+    expect(memberResult.rows[0].break_until).toBeTruthy();
+    expect(memberResult.rows[0].break_extensions_count).toBe(1);
+
+    const breakUntilMs = new Date(memberResult.rows[0].break_until).getTime();
+    expect(breakUntilMs).toBeGreaterThanOrEqual(beforeClick + (6 * 24 * 60 * 60 * 1000));
+    expect(breakUntilMs).toBeLessThanOrEqual(afterClick + (8 * 24 * 60 * 60 * 1000));
+
+    const logResult = await pool.query(
+      `
+      select action, status, metadata
+      from event_email_action_log
+      where event_id = $1
+        and user_id = $2
+      order by created_at desc
+      limit 1
+      `,
+      [eventId, memberId]
+    );
+
+    expect(logResult.rows[0].action).toBe('vacation_one_week');
+    expect(logResult.rows[0].status).toBe('recorded');
+    expect(logResult.rows[0].metadata.rankModuleEnabled).toBe(true);
   });
 });

@@ -39,6 +39,7 @@ async function updateSkillSettings(req, res) {
       teamId: req.params.teamId,
       skillBalancingEnabled: req.body.skillBalancingEnabled,
       skillBalanceTolerancePercent: req.body.skillBalanceTolerancePercent,
+      goalkeeperModuleEnabled: req.body.goalkeeperModuleEnabled,
       rankModuleEnabled: req.body.rankModuleEnabled
     });
 
@@ -115,10 +116,33 @@ async function updateMemberSkills(req, res) {
   }
 }
 
+async function updateMySkills(req, res) {
+  try {
+    const result = await teamSkillService.updateMySkills({
+      teamId: req.params.teamId,
+      userId: req.user.id,
+      goalkeeperSkill: req.body.goalkeeperSkill,
+      defenseSkill: req.body.defenseSkill,
+      attackSkill: req.body.attackSkill,
+      isGoalkeeper: req.body.isGoalkeeper
+    });
+
+    return res.status(200).json({ ok: true, ...result });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Saját skill mentési hiba:',
+      'Szerverhiba a saját skill adatok mentése közben.'
+    );
+  }
+}
+
 async function previewBalancedTeams(req, res) {
   try {
     const result = await teamSkillService.previewBalancedTeams({
-      teamId: req.params.teamId
+      teamId: req.params.teamId,
+      strategy: req.body?.strategy
     });
 
     return res.status(200).json({ ok: true, ...result });
@@ -135,7 +159,8 @@ async function previewBalancedTeams(req, res) {
 async function previewEventBalancedTeams(req, res) {
   try {
     const result = await teamSkillService.previewEventBalancedTeams({
-      eventId: req.params.eventId
+      eventId: req.params.eventId,
+      strategy: req.body?.strategy
     });
 
     return res.status(200).json({ ok: true, ...result });
@@ -217,6 +242,7 @@ module.exports = {
   updateMemberRank,
   updateMemberGoalkeeperRole,
   updateMemberSkills,
+  updateMySkills,
   previewBalancedTeams,
   previewEventBalancedTeams,
   saveEventTeamDraw,

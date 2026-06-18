@@ -248,9 +248,24 @@ pool.query(`
   alter table teams
     add column if not exists skill_balancing_enabled boolean not null default true,
     add column if not exists skill_balance_tolerance_percent integer not null default 15,
+    add column if not exists draw_strategy text not null default 'auto_balanced',
     add column if not exists rank_module_enabled boolean not null default false,
     add column if not exists cash_module_enabled boolean not null default false,
-    add column if not exists discipline_module_enabled boolean not null default false;
+    add column if not exists discipline_module_enabled boolean not null default false,
+    add column if not exists admin_guide_module_enabled boolean not null default false;
+
+  do $$
+  begin
+    if not exists (
+      select 1
+      from pg_constraint
+      where conname = 'teams_draw_strategy_check'
+    ) then
+      alter table teams
+        add constraint teams_draw_strategy_check
+        check (draw_strategy in ('auto_balanced', 'random', 'sum_balance'));
+    end if;
+  end $$;
 
   alter table teams
     add column if not exists rules_module_enabled boolean not null default false,
@@ -344,6 +359,14 @@ pool.query(`
 });
 
 pool.query(`
+  alter table team_members
+    add column if not exists break_started_at timestamptz null,
+    add column if not exists break_until timestamptz null,
+    add column if not exists break_extensions_count integer not null default 0,
+    add column if not exists break_reminder_sent_at timestamptz null,
+    add column if not exists passive_since timestamptz null,
+    add column if not exists passive_reason text null;
+
   create table if not exists event_email_action_log (
     id uuid primary key default gen_random_uuid(),
     event_id uuid not null references events(id) on delete cascade,
@@ -364,18 +387,35 @@ pool.query(`
   create index if not exists event_email_action_log_user_idx
     on event_email_action_log(user_id, acted_at desc);
 
-  do $$
-  begin
-    if not exists (
-      select 1
-      from pg_constraint
-      where conname = 'event_email_action_log_action_check'
-    ) then
-      alter table event_email_action_log
-        add constraint event_email_action_log_action_check
-        check (action in ('register', 'skip'));
-    end if;
-  end $$;
+  alter table event_email_action_log
+    drop constraint if exists event_email_action_log_action_check;
+
+  alter table event_email_action_log
+    add constraint event_email_action_log_action_check
+    check (action in ('register', 'skip', 'vacation_one_week'));
+
+  create table if not exists team_break_action_log (
+    id uuid primary key default gen_random_uuid(),
+    team_id uuid not null references teams(id) on delete cascade,
+    user_id uuid not null references users(id) on delete cascade,
+    action text not null,
+    status text not null,
+    message text null,
+    token_jti text null,
+    metadata jsonb not null default '{}'::jsonb,
+    acted_at timestamptz not null default now(),
+    created_at timestamptz not null default now()
+  );
+
+  create index if not exists team_break_action_log_team_user_idx
+    on team_break_action_log(team_id, user_id, acted_at desc);
+
+  alter table team_break_action_log
+    drop constraint if exists team_break_action_log_action_check;
+
+  alter table team_break_action_log
+    add constraint team_break_action_log_action_check
+    check (action in ('extend_break_one_week', 'end_break'));
 `).catch(error => {
   console.error('Schema ensure hiba:', error);
 });
@@ -450,6 +490,48 @@ pool.query(`
         check (registration_status in ('going', 'waiting_list', 'waiting_list_rank', 'cancelled'));
     end if;
   end $$;
+
+  create table if not exists event_guest_registrations (
+    id uuid primary key default gen_random_uuid(),
+    event_id uuid not null references events(id) on delete cascade,
+    team_id uuid not null references teams(id) on delete cascade,
+    host_user_id uuid not null references users(id) on delete cascade,
+    guest_name text not null,
+    registration_status varchar(20) not null,
+    registered_at timestamptz not null default now(),
+    cancelled_at timestamptz null,
+    promoted_at timestamptz null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint event_guest_registrations_status_check
+      check (registration_status in ('going', 'waiting_list', 'cancelled')),
+    constraint event_guest_registrations_guest_name_check
+      check (length(trim(guest_name)) between 2 and 120),
+    constraint event_guest_registrations_cancelled_at_check
+      check (
+        (registration_status = 'cancelled' and cancelled_at is not null)
+        or registration_status <> 'cancelled'
+      )
+  );
+
+  create unique index if not exists ux_event_guest_registrations_active_host
+    on event_guest_registrations(event_id, host_user_id)
+    where registration_status in ('going', 'waiting_list');
+
+  create index if not exists idx_event_guest_registrations_event_id
+    on event_guest_registrations(event_id);
+
+  create index if not exists idx_event_guest_registrations_team_id
+    on event_guest_registrations(team_id);
+
+  create index if not exists idx_event_guest_registrations_host_user_id
+    on event_guest_registrations(host_user_id);
+
+  create index if not exists idx_event_guest_registrations_status
+    on event_guest_registrations(registration_status);
+
+  create index if not exists idx_event_guest_registrations_registered_at
+    on event_guest_registrations(registered_at);
   `).catch(error => {
     console.error('Schema ensure hiba:', error);
   });
