@@ -249,6 +249,7 @@ pool.query(`
     add column if not exists skill_balancing_enabled boolean not null default true,
     add column if not exists skill_balance_tolerance_percent integer not null default 15,
     add column if not exists draw_strategy text not null default 'auto_balanced',
+    add column if not exists goalkeeper_module_enabled boolean not null default true,
     add column if not exists rank_module_enabled boolean not null default false,
     add column if not exists cash_module_enabled boolean not null default false,
     add column if not exists discipline_module_enabled boolean not null default false,
