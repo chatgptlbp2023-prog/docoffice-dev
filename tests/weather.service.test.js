@@ -14,6 +14,7 @@ describe('weatherService', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     delete process.env.ACCUWEATHER_API_KEY;
+    delete process.env.WEATHER_PROVIDER;
     jest.restoreAllMocks();
   });
 
@@ -97,8 +98,68 @@ describe('weatherService', () => {
     jest.useRealTimers();
   });
 
+  test('Open-Meteo provider API kulcs nelkul ad oras elorejelzest', async () => {
+    delete process.env.ACCUWEATHER_API_KEY;
+    process.env.WEATHER_PROVIDER = 'open_meteo';
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-05-13T10:00:00.000Z'));
+
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          results: [{
+            name: 'Budapest',
+            admin1: 'Budapest',
+            country: 'Hungary',
+            country_code: 'HU',
+            latitude: 47.4979,
+            longitude: 19.0402
+          }]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          hourly: {
+            time: ['2026-05-13T17:00', '2026-05-13T18:00', '2026-05-13T19:00'],
+            temperature_2m: [20.1, 19.2, 18.7],
+            precipitation_probability: [20, 75, 80],
+            weather_code: [2, 95, 96],
+            wind_speed_10m: [11.4, 28.6, 36.1]
+          }
+        })
+      });
+
+    const weather = await fetchEventWeatherForecast({
+      id: 'evt-open-meteo',
+      start_at: '2026-05-13T18:00:00.000Z',
+      location_address: 'Budapest, 1046 Oceanarok 23'
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    expect(global.fetch.mock.calls[0][0]).toContain('geocoding-api.open-meteo.com');
+    expect(global.fetch.mock.calls[2][0]).toContain('api.open-meteo.com');
+    expect(weather).toMatchObject({
+      provider: 'Open-Meteo',
+      providerKey: 'open_meteo',
+      locationLabel: 'Budapest, Budapest, Hungary',
+      weatherCode: 95,
+      weatherLabel: 'Zivatar',
+      weatherIcon: '\u26c8\ufe0f',
+      precipitationProbability: 75
+    });
+
+    jest.useRealTimers();
+  });
+
   test('strukturalt okot ad, ha hianyzik az API kulcs', async () => {
     delete process.env.ACCUWEATHER_API_KEY;
+    process.env.WEATHER_PROVIDER = 'accuweather';
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-05-13T10:00:00.000Z'));
 

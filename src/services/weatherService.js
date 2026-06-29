@@ -1,7 +1,10 @@
 const ACCUWEATHER_BASE_URL = 'https://dataservice.accuweather.com';
+const OPEN_METEO_FORECAST_BASE_URL = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_GEOCODING_BASE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 const EVENT_TIMEZONE = 'Europe/Budapest';
 const MAX_HOURLY_FORECAST_DAYS = 5;
 const SEVERE_WEATHER_ICON_CODES = new Set([12, 13, 14, 15, 16, 17, 18, 24, 25, 26, 29, 41, 42]);
+const OPEN_METEO_SEVERE_WEATHER_CODES = new Set([95, 96, 99]);
 
 const WEATHER_UNAVAILABLE_MESSAGES = Object.freeze({
   missing_location: 'Az eseményhez nincs megadva használható helyszín.',
@@ -65,6 +68,37 @@ const ACCUWEATHER_ICON_MAP = Object.freeze({
   44: { label: 'Reszben felhos, ejjeli havas zapor', icon: '🌨️' }
 });
 
+const OPEN_METEO_WEATHER_CODE_MAP = Object.freeze({
+  0: { label: 'Derult', icon: '\u2600\ufe0f' },
+  1: { label: 'Tobbnyire derult', icon: '\ud83c\udf24\ufe0f' },
+  2: { label: 'Reszben felhos', icon: '\u26c5' },
+  3: { label: 'Borult', icon: '\u2601\ufe0f' },
+  45: { label: 'Kod', icon: '\ud83c\udf2b\ufe0f' },
+  48: { label: 'Zuzmaras kod', icon: '\ud83c\udf2b\ufe0f' },
+  51: { label: 'Gyenge szitalas', icon: '\ud83c\udf26\ufe0f' },
+  53: { label: 'Szitalas', icon: '\ud83c\udf26\ufe0f' },
+  55: { label: 'Eros szitalas', icon: '\ud83c\udf26\ufe0f' },
+  56: { label: 'Onos szitalas', icon: '\ud83e\uddca' },
+  57: { label: 'Eros onos szitalas', icon: '\ud83e\uddca' },
+  61: { label: 'Gyenge eso', icon: '\ud83c\udf27\ufe0f' },
+  63: { label: 'Eso', icon: '\ud83c\udf27\ufe0f' },
+  65: { label: 'Eros eso', icon: '\ud83c\udf27\ufe0f' },
+  66: { label: 'Onos eso', icon: '\ud83e\uddca' },
+  67: { label: 'Eros onos eso', icon: '\ud83e\uddca' },
+  71: { label: 'Gyenge havazas', icon: '\u2744\ufe0f' },
+  73: { label: 'Havazas', icon: '\u2744\ufe0f' },
+  75: { label: 'Eros havazas', icon: '\u2744\ufe0f' },
+  77: { label: 'Hodara', icon: '\u2744\ufe0f' },
+  80: { label: 'Gyenge zapor', icon: '\ud83c\udf26\ufe0f' },
+  81: { label: 'Zapor', icon: '\ud83c\udf26\ufe0f' },
+  82: { label: 'Eros zapor', icon: '\ud83c\udf26\ufe0f' },
+  85: { label: 'Hozapor', icon: '\ud83c\udf28\ufe0f' },
+  86: { label: 'Eros hozapor', icon: '\ud83c\udf28\ufe0f' },
+  95: { label: 'Zivatar', icon: '\u26c8\ufe0f' },
+  96: { label: 'Zivatar jegesovel', icon: '\u26c8\ufe0f' },
+  99: { label: 'Eros zivatar jegesovel', icon: '\u26c8\ufe0f' }
+});
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -82,6 +116,24 @@ function getAccuWeatherApiKey() {
     throw error;
   }
   return apiKey;
+}
+
+function normalizeWeatherProvider(value) {
+  const normalized = String(value || '').trim().toLowerCase().replaceAll('-', '_');
+  if (['open_meteo', 'openmeteo'].includes(normalized)) return 'open_meteo';
+  if (['accuweather', 'accu_weather', 'accu'].includes(normalized)) return 'accuweather';
+  return '';
+}
+
+function getConfiguredWeatherProvider() {
+  const explicitProvider = normalizeWeatherProvider(process.env.WEATHER_PROVIDER);
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+
+  return String(process.env.ACCUWEATHER_API_KEY || '').trim()
+    ? 'accuweather'
+    : 'open_meteo';
 }
 
 function buildWeatherLocationQuery(event = {}) {
@@ -149,6 +201,24 @@ async function fetchAccuWeatherJson(path, { searchParams = {} } = {}) {
   return response.json();
 }
 
+async function fetchOpenMeteoJson(url, { searchParams = {} } = {}) {
+  const params = new URLSearchParams();
+  Object.entries(searchParams || {}).forEach(([key, value]) => {
+    if (value == null || value === '') return;
+    params.set(key, String(value));
+  });
+
+  const response = await fetch(`${url}?${params.toString()}`);
+  if (!response.ok) {
+    const error = new Error(`Open-Meteo HTTP ${response.status}`);
+    error.code = 'OPEN_METEO_HTTP_ERROR';
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json();
+}
+
 function pickBestLocation(results = []) {
   const list = Array.isArray(results) ? results : [];
   if (!list.length) {
@@ -191,6 +261,42 @@ async function geocodeLocation(query) {
   return null;
 }
 
+async function geocodeLocationOpenMeteo(query) {
+  const candidates = buildLocationQueryCandidates(query);
+
+  for (const candidate of candidates) {
+    const payload = await fetchOpenMeteoJson(OPEN_METEO_GEOCODING_BASE_URL, {
+      searchParams: {
+        name: candidate,
+        count: 5,
+        language: 'hu',
+        format: 'json'
+      }
+    });
+
+    const results = Array.isArray(payload?.results) ? payload.results : [];
+    const location = results.find(item => String(item?.country_code || '').toUpperCase() === 'HU')
+      || results[0]
+      || null;
+
+    if (!location) {
+      continue;
+    }
+
+    return {
+      latitude: Number(location.latitude ?? 0),
+      longitude: Number(location.longitude ?? 0),
+      label: [
+        location.name,
+        location.admin1,
+        location.country
+      ].filter(Boolean).join(', ')
+    };
+  }
+
+  return null;
+}
+
 function getForecastWindowLabel(eventStartAt, now = new Date()) {
   const eventMs = new Date(eventStartAt).getTime();
   const nowMs = now.getTime();
@@ -221,6 +327,13 @@ function mapAccuWeatherIcon(iconCode, fallbackText = '') {
   };
 }
 
+function mapOpenMeteoWeatherCode(code) {
+  return OPEN_METEO_WEATHER_CODE_MAP[Number(code)] || {
+    label: 'Ismeretlen idojaras',
+    icon: '\ud83c\udf24\ufe0f'
+  };
+}
+
 function findNearestForecastEntry(entries = [], targetIso) {
   const targetMs = new Date(targetIso).getTime();
   if (!Number.isFinite(targetMs) || !Array.isArray(entries) || !entries.length) {
@@ -245,25 +358,101 @@ function findNearestForecastEntry(entries = [], targetIso) {
   return nearestEntry;
 }
 
-async function fetchEventWeatherForecast(event) {
-  if (!event?.start_at) {
+function parseOpenMeteoTimeMs(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return Number.NaN;
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(normalized)) {
+    return new Date(normalized).getTime();
+  }
+  return new Date(`${normalized}Z`).getTime();
+}
+
+function findNearestOpenMeteoForecastEntry(hourly = {}, targetIso) {
+  const times = Array.isArray(hourly.time) ? hourly.time : [];
+  const targetMs = new Date(targetIso).getTime();
+  if (!Number.isFinite(targetMs) || !times.length) {
+    return null;
+  }
+
+  let nearestIndex = -1;
+  let nearestDiff = Number.POSITIVE_INFINITY;
+
+  times.forEach((time, index) => {
+    const candidateMs = parseOpenMeteoTimeMs(time);
+    if (!Number.isFinite(candidateMs)) {
+      return;
+    }
+    const diff = Math.abs(candidateMs - targetMs);
+    if (diff < nearestDiff) {
+      nearestDiff = diff;
+      nearestIndex = index;
+    }
+  });
+
+  if (nearestIndex < 0) {
+    return null;
+  }
+
+  return {
+    time: times[nearestIndex],
+    temperature: hourly.temperature_2m?.[nearestIndex],
+    precipitationProbability: hourly.precipitation_probability?.[nearestIndex],
+    weatherCode: hourly.weather_code?.[nearestIndex],
+    windSpeed: hourly.wind_speed_10m?.[nearestIndex]
+  };
+}
+
+async function fetchOpenMeteoForecastForEvent(event, query) {
+  let location;
+  try {
+    location = await geocodeLocationOpenMeteo(query);
+  } catch {
+    return buildWeatherUnavailable('provider_error');
+  }
+
+  if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) {
+    return buildWeatherUnavailable('geocode_failed');
+  }
+
+  let forecast;
+  try {
+    forecast = await fetchOpenMeteoJson(OPEN_METEO_FORECAST_BASE_URL, {
+      searchParams: {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        hourly: 'temperature_2m,precipitation_probability,weather_code,wind_speed_10m',
+        timezone: 'UTC',
+        forecast_days: MAX_HOURLY_FORECAST_DAYS
+      }
+    });
+  } catch {
+    return buildWeatherUnavailable('provider_error');
+  }
+
+  const nearestEntry = findNearestOpenMeteoForecastEntry(forecast?.hourly, event.start_at);
+  if (!nearestEntry) {
     return buildWeatherUnavailable('forecast_not_found');
   }
 
-  const query = buildWeatherLocationQuery(event);
-  if (!query) {
-    return buildWeatherUnavailable('missing_location');
-  }
+  const iconMeta = mapOpenMeteoWeatherCode(nearestEntry.weatherCode);
 
-  const forecastWindow = getForecastWindowLabel(event.start_at);
-  if (!forecastWindow) {
-    const eventMs = new Date(event.start_at).getTime();
-    const nowMs = Date.now();
-    return Number.isFinite(eventMs) && eventMs < nowMs
-      ? buildWeatherUnavailable('past_event')
-      : buildWeatherUnavailable('outside_forecast_window');
-  }
+  return {
+    available: true,
+    provider: 'Open-Meteo',
+    providerKey: 'open_meteo',
+    locationLabel: location.label || query,
+    forecastTime: nearestEntry.time,
+    temperature: Number(nearestEntry.temperature ?? 0),
+    precipitationProbability: Number(nearestEntry.precipitationProbability ?? 0),
+    windSpeed: Number(nearestEntry.windSpeed ?? 0),
+    weatherCode: Number(nearestEntry.weatherCode ?? 0),
+    weatherLabel: iconMeta.label,
+    weatherIcon: iconMeta.icon,
+    usedPreciseAddress: hasPreciseWeatherAddress(event)
+  };
+}
 
+async function fetchAccuWeatherForecastForEvent(event, query, forecastWindow) {
   let location;
   try {
     location = await geocodeLocation(query);
@@ -317,6 +506,7 @@ async function fetchEventWeatherForecast(event) {
   return {
     available: true,
     provider: 'AccuWeather',
+    providerKey: 'accuweather',
     locationLabel: location.label || query,
     forecastTime: nearestEntry.DateTime,
     temperature,
@@ -329,6 +519,33 @@ async function fetchEventWeatherForecast(event) {
   };
 }
 
+async function fetchEventWeatherForecast(event) {
+  if (!event?.start_at) {
+    return buildWeatherUnavailable('forecast_not_found');
+  }
+
+  const query = buildWeatherLocationQuery(event);
+  if (!query) {
+    return buildWeatherUnavailable('missing_location');
+  }
+
+  const forecastWindow = getForecastWindowLabel(event.start_at);
+  if (!forecastWindow) {
+    const eventMs = new Date(event.start_at).getTime();
+    const nowMs = Date.now();
+    return Number.isFinite(eventMs) && eventMs < nowMs
+      ? buildWeatherUnavailable('past_event')
+      : buildWeatherUnavailable('outside_forecast_window');
+  }
+
+  const provider = getConfiguredWeatherProvider();
+  if (provider === 'open_meteo') {
+    return fetchOpenMeteoForecastForEvent(event, query);
+  }
+
+  return fetchAccuWeatherForecastForEvent(event, query, forecastWindow);
+}
+
 function buildWeatherAlert(weather) {
   if (!weather) {
     return null;
@@ -336,7 +553,11 @@ function buildWeatherAlert(weather) {
 
   const alerts = [];
 
-  if (SEVERE_WEATHER_ICON_CODES.has(Number(weather.weatherCode))) {
+  const severeWeatherCodes = weather.providerKey === 'open_meteo'
+    ? OPEN_METEO_SEVERE_WEATHER_CODES
+    : SEVERE_WEATHER_ICON_CODES;
+
+  if (severeWeatherCodes.has(Number(weather.weatherCode))) {
     alerts.push(`A rendszer eros idojarasi kockazatot lat: ${weather.weatherLabel}.`);
   }
 
