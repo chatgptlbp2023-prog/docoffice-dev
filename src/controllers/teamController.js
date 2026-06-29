@@ -360,6 +360,26 @@ async function previewAdminEmailSend(req, res) {
   }
 }
 
+async function listManualAdminEmailTemplates(req, res) {
+  try {
+    const result = adminEmailService.listManualAdminEmailTemplates({
+      teamId: req.params.teamId
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Admin email sablonlista hiba:',
+      'Szerverhiba admin email sablonlista betoltese kozben.'
+    );
+  }
+}
+
 async function sendAdminEmail(req, res) {
   try {
     const result = await adminEmailService.sendAdminEmail({
@@ -495,6 +515,7 @@ module.exports = {
   endMyTeamBreak,
   updateTeamMemberActivityStatus,
   previewAdminEmailSend,
+  listManualAdminEmailTemplates,
   sendAdminEmail,
   listEmailCenterSchedules,
   listEmailCenterLogs,

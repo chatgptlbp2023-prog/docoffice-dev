@@ -2063,7 +2063,11 @@ describe('Frontend auth UI smoke tests', () => {
               recipient_name: 'Anna',
               status: 'sent',
               provider_message_id: 'provider-1',
-              updated_at: '2026-06-30T10:01:00.000Z'
+              updated_at: '2026-06-30T10:01:00.000Z',
+              action_type: 'skip',
+              action_status: 'recorded_for_rank',
+              action_message: 'Kihagyas rogzitve',
+              action_acted_at: '2026-06-30T10:03:00.000Z'
             },
             {
               recipient_email: 'bela@example.com',
@@ -2095,7 +2099,11 @@ describe('Frontend auth UI smoke tests', () => {
             sent_count: 10,
             skipped_count: 1,
             failed_count: 1,
-            total_count: 12
+            total_count: 12,
+            action_count: 1,
+            register_action_count: 0,
+            skip_action_count: 1,
+            vacation_action_count: 0
           }]
         });
       }
@@ -2130,6 +2138,7 @@ describe('Frontend auth UI smoke tests', () => {
     expect(emailCenterPanel.textContent).toContain('10 elkuldve');
     expect(emailCenterPanel.textContent).toContain('1 kihagyva');
     expect(emailCenterPanel.textContent).toContain('1 hiba');
+    expect(emailCenterPanel.textContent).toContain('1 interakcio');
 
     emailCenterPanel.querySelector('[data-email-center-group="batch-1"]').dispatchEvent(
       new window.MouseEvent('click', { bubbles: true })
@@ -2138,6 +2147,10 @@ describe('Frontend auth UI smoke tests', () => {
 
     expect(emailCenterPanel.textContent).toContain('anna@example.com');
     expect(emailCenterPanel.textContent).toContain('bela@example.com');
+    expect(emailCenterPanel.textContent).toContain('Interakcio:');
+    expect(emailCenterPanel.textContent).toContain('Kihagyom');
+    expect(emailCenterPanel.textContent).toContain('recorded_for_rank');
+    expect(emailCenterPanel.textContent).toContain('Interakcio: meg nincs');
     expect(emailCenterPanel.textContent).toContain('szabin van');
     expect(emailCenterPanel.textContent).toContain('SMTP timeout');
     expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/email-center/logs/batch-1/recipients'))).toBe(true);

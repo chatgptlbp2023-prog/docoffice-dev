@@ -26,6 +26,28 @@ describe('Admin email center', () => {
       const sql = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', fileName), 'utf8');
       await pool.query(sql);
     }
+
+    await pool.query(`
+      create table if not exists event_email_action_log (
+        id uuid primary key default gen_random_uuid(),
+        event_id uuid not null references events(id) on delete cascade,
+        team_id uuid not null references teams(id) on delete cascade,
+        user_id uuid not null references users(id) on delete cascade,
+        action text not null,
+        status text not null,
+        message text null,
+        token_jti text null,
+        metadata jsonb not null default '{}'::jsonb,
+        acted_at timestamptz not null default now(),
+        created_at timestamptz not null default now()
+      );
+
+      create index if not exists event_email_action_log_event_idx
+        on event_email_action_log(event_id, acted_at desc);
+
+      create index if not exists event_email_action_log_user_idx
+        on event_email_action_log(user_id, acted_at desc);
+    `);
   });
 
   async function createUser({ name, email }) {
@@ -105,6 +127,7 @@ describe('Admin email center', () => {
 
   afterEach(async () => {
     if (created.events.length > 0) {
+      await pool.query(`delete from event_email_action_log where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from email_delivery_logs where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from event_notification_schedules where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from events where id = any($1::uuid[])`, [created.events]);
@@ -138,7 +161,9 @@ describe('Admin email center', () => {
     const failedId = await createUser({ name: 'Failed', email: failedEmail });
     const teamId = await createTeam({ adminId });
     const eventId = await createEvent({ teamId, adminId });
+    const otherActionEventId = await createEvent({ teamId, adminId, title: 'Other action event' });
     const batchId = randomUUID();
+    const capacityBatchId = randomUUID();
 
     await addMembership({ teamId, userId: adminId, role: 'team_admin' });
     await addMembership({ teamId, userId: memberId });
@@ -167,6 +192,31 @@ describe('Admin email center', () => {
       [teamId, eventId, batchId, memberId, memberEmail, skippedId, skippedEmail, failedId, failedEmail]
     );
 
+    await pool.query(
+      `
+      insert into email_delivery_logs (
+        team_id, event_id, delivery_batch_id, recipient_user_id, recipient_email,
+        template, status, provider_message_id, metadata
+      )
+      values (
+        $1, $2, $3, $4, $5, 'capacity_full', 'sent', 'provider-capacity-1', '{}'::jsonb
+      )
+      `,
+      [teamId, eventId, capacityBatchId, memberId, memberEmail]
+    );
+
+    await pool.query(
+      `
+      insert into event_email_action_log (
+        event_id, team_id, user_id, action, status, message, metadata, acted_at, created_at
+      )
+      values
+        ($1, $2, $3, 'skip', 'recorded_for_rank', 'Kihagyas rogzitve', '{"source":"email_center_test"}'::jsonb, now() - interval '1 minute', now() - interval '1 minute'),
+        ($4, $2, $5, 'register', 'ok', 'Masik esemeny action', '{}'::jsonb, now(), now())
+      `,
+      [eventId, teamId, memberId, otherActionEventId, failedId]
+    );
+
     const token = await login(adminEmail);
 
     const schedulesRes = await request(app)
@@ -185,19 +235,30 @@ describe('Admin email center', () => {
       .get(`/api/teams/${teamId}/email-center/logs`)
       .set('Authorization', `Bearer ${token}`);
     expect(logsRes.status).toBe(200);
-    expect(logsRes.body.logs).toHaveLength(1);
-    expect(logsRes.body.logs[0]).toEqual(expect.objectContaining({
+    expect(logsRes.body.logs).toHaveLength(2);
+    const eventCreatedLog = logsRes.body.logs.find(row => row.template === 'event_created');
+    const capacityLog = logsRes.body.logs.find(row => row.template === 'capacity_full');
+    expect(eventCreatedLog).toEqual(expect.objectContaining({
       group_id: batchId,
       template: 'event_created',
       event_id: eventId,
       sent_count: 1,
       skipped_count: 1,
       failed_count: 1,
-      total_count: 3
+      total_count: 3,
+      action_count: 1,
+      skip_action_count: 1
+    }));
+    expect(capacityLog).toEqual(expect.objectContaining({
+      group_id: capacityBatchId,
+      template: 'capacity_full',
+      event_id: eventId,
+      sent_count: 1,
+      total_count: 1
     }));
 
     const recipientsRes = await request(app)
-      .get(`/api/teams/${teamId}/email-center/logs/${logsRes.body.logs[0].group_id}/recipients`)
+      .get(`/api/teams/${teamId}/email-center/logs/${eventCreatedLog.group_id}/recipients`)
       .set('Authorization', `Bearer ${token}`);
     expect(recipientsRes.status).toBe(200);
     expect(recipientsRes.body.recipients).toEqual(expect.arrayContaining([
@@ -205,7 +266,10 @@ describe('Admin email center', () => {
         recipient_email: memberEmail,
         recipient_name: 'Member',
         status: 'sent',
-        provider_message_id: 'provider-1'
+        provider_message_id: 'provider-1',
+        action_type: 'skip',
+        action_status: 'recorded_for_rank',
+        action_message: 'Kihagyas rogzitve'
       }),
       expect.objectContaining({
         recipient_email: skippedEmail,
@@ -215,7 +279,8 @@ describe('Admin email center', () => {
       expect.objectContaining({
         recipient_email: failedEmail,
         status: 'failed',
-        error_message: 'SMTP timeout'
+        error_message: 'SMTP timeout',
+        action_type: null
       })
     ]));
   });

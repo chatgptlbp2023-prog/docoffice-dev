@@ -1068,14 +1068,11 @@ function validateAdminEmailSend(req, res, next) {
   }
 
   const template = normalizeString(req.body.template).toLowerCase();
-  if (template !== 'event_created') {
-    return badRequest(res, 'A template csak event_created lehet.');
+  if (!template) {
+    return badRequest(res, 'A template kotelezo.');
   }
 
   const eventId = normalizeString(req.body.eventId);
-  if (!eventId) {
-    return badRequest(res, 'Az eventId kotelezo.');
-  }
 
   req.body.template = template;
   req.body.eventId = eventId;

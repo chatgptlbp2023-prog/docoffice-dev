@@ -115,9 +115,19 @@ async function listEmailCenterLogs({
       select
         edl.*,
         e.title as event_title,
-        e.start_at as event_start_at
+        e.start_at as event_start_at,
+        latest_action.action as action_type
       from email_delivery_logs edl
       left join events e on e.id = edl.event_id
+      left join lateral (
+        select eal.action
+        from event_email_action_log eal
+        where eal.team_id = edl.team_id
+          and eal.event_id = edl.event_id
+          and eal.user_id = edl.recipient_user_id
+        order by eal.acted_at desc, eal.created_at desc
+        limit 1
+      ) latest_action on true
       where ${where.join(' and ')}
     ),
     grouped as (
@@ -134,7 +144,11 @@ async function listEmailCenterLogs({
         count(*) filter (where filtered.status = 'sent')::int as sent_count,
         count(*) filter (where filtered.status = 'skipped')::int as skipped_count,
         count(*) filter (where filtered.status = 'failed')::int as failed_count,
-        count(*) filter (where filtered.status = 'pending')::int as pending_count
+        count(*) filter (where filtered.status = 'pending')::int as pending_count,
+        count(*) filter (where filtered.action_type is not null)::int as action_count,
+        count(*) filter (where filtered.action_type = 'register')::int as register_action_count,
+        count(*) filter (where filtered.action_type = 'skip')::int as skip_action_count,
+        count(*) filter (where filtered.action_type = 'vacation_one_week')::int as vacation_action_count
       from filtered
       group by
         ${groupExpression},
@@ -157,7 +171,11 @@ async function listEmailCenterLogs({
       sent_count: Number(row.sent_count || 0),
       skipped_count: Number(row.skipped_count || 0),
       failed_count: Number(row.failed_count || 0),
-      pending_count: Number(row.pending_count || 0)
+      pending_count: Number(row.pending_count || 0),
+      action_count: Number(row.action_count || 0),
+      register_action_count: Number(row.register_action_count || 0),
+      skip_action_count: Number(row.skip_action_count || 0),
+      vacation_action_count: Number(row.vacation_action_count || 0)
     }))
   };
 }
@@ -186,12 +204,31 @@ async function listEmailCenterLogRecipients({ teamId, groupId }) {
       edl.metadata,
       edl.created_at,
       edl.updated_at,
+      latest_action.action as action_type,
+      latest_action.status as action_status,
+      latest_action.message as action_message,
+      latest_action.acted_at as action_acted_at,
+      latest_action.metadata as action_metadata,
       u.name as recipient_name,
       e.title as event_title,
       e.start_at as event_start_at
     from email_delivery_logs edl
     left join users u on u.id = edl.recipient_user_id
     left join events e on e.id = edl.event_id
+    left join lateral (
+      select
+        eal.action,
+        eal.status,
+        eal.message,
+        eal.acted_at,
+        eal.metadata
+      from event_email_action_log eal
+      where eal.team_id = edl.team_id
+        and eal.event_id = edl.event_id
+        and eal.user_id = edl.recipient_user_id
+      order by eal.acted_at desc, eal.created_at desc
+      limit 1
+    ) latest_action on true
     where edl.team_id = $1
       and ${groupExpression} = $2
     order by

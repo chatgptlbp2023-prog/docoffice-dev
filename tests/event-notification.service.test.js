@@ -2,11 +2,20 @@ jest.mock('../src/services/emailService', () => ({
   sendEmail: jest.fn()
 }));
 
+jest.mock('../src/services/weatherService', () => {
+  const actual = jest.requireActual('../src/services/weatherService');
+  return {
+    ...actual,
+    fetchEventWeatherForecast: jest.fn()
+  };
+});
+
 const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../src/config/db');
 const { sendEmail } = require('../src/services/emailService');
+const { fetchEventWeatherForecast } = require('../src/services/weatherService');
 const eventNotificationService = require('../src/services/eventNotificationService');
 const inviteService = require('../src/services/inviteService');
 
@@ -55,6 +64,10 @@ describe('Event notification service', () => {
   }
 
   async function getEventEmailLogs(eventId) {
+    return getTemplateEmailLogs(eventId, 'event_created');
+  }
+
+  async function getTemplateEmailLogs(eventId, template) {
     const result = await pool.query(
       `
       select
@@ -63,23 +76,31 @@ describe('Event notification service', () => {
         template,
         status,
         reason,
+        delivery_batch_id,
         provider_message_id,
         error_message,
         metadata
       from email_delivery_logs
       where event_id = $1
-        and template = 'event_created'
+        and template = $2
       order by recipient_email asc, created_at asc
       `,
-      [eventId]
+      [eventId, template]
     );
 
     return result.rows;
   }
 
+  function expectSingleDeliveryBatch(logs) {
+    expect(logs.length).toBeGreaterThan(0);
+    const batchIds = [...new Set(logs.map(row => row.delivery_batch_id).filter(Boolean))];
+    expect(batchIds).toHaveLength(1);
+  }
+
   beforeEach(() => {
     sendEmail.mockReset();
     sendEmail.mockResolvedValue({ status: 'sent', messageId: 'msg-1' });
+    fetchEventWeatherForecast.mockReset();
     process.env.APP_BASE_URL = 'https://app.example.com';
   });
 
@@ -587,6 +608,20 @@ describe('Event notification service', () => {
     expect(payload.html).toContain('Jelentkezem');
     expect(payload.html).toContain('Kihagyom');
     expect(payload.text).toContain('Esemeny: Szombati catchup');
+
+    const auditLogs = await getTemplateEmailLogs(enabledEventId, 'new_member_event_catchup');
+    expect(auditLogs).toHaveLength(1);
+    expect(auditLogs[0]).toEqual(expect.objectContaining({
+      recipient_user_id: newMemberId,
+      recipient_email: `late_member_${runId}@example.com`,
+      template: 'new_member_event_catchup',
+      status: 'sent',
+      provider_message_id: 'msg-1'
+    }));
+    expect(auditLogs[0].metadata).toEqual(expect.objectContaining({
+      catchupUserId: newMemberId
+    }));
+    expectSingleDeliveryBatch(auditLogs);
   });
 
   test('meghivo elfogadasakor a kesobb csatlakozo tag megkapja a mar letezo esemeny emailjet', async () => {
@@ -654,6 +689,17 @@ describe('Event notification service', () => {
     expect(payload.to).toBe(newMemberEmail);
     expect(payload.html).toContain('Meghivo utani meccs');
     expect(payload.html).toContain('Jelentkezem');
+
+    const auditLogs = await getTemplateEmailLogs(eventId, 'new_member_event_catchup');
+    expect(auditLogs).toHaveLength(1);
+    expect(auditLogs[0]).toEqual(expect.objectContaining({
+      recipient_user_id: newMemberId,
+      recipient_email: newMemberEmail,
+      template: 'new_member_event_catchup',
+      status: 'sent',
+      provider_message_id: 'msg-1'
+    }));
+    expectSingleDeliveryBatch(auditLogs);
   });
 
   test('uj jelentkezo level tartalmazza a mar jelentkezettek nevsorat', async () => {
@@ -729,6 +775,482 @@ describe('Event notification service', () => {
     expect(sentPayloads.some(payload => payload.html.includes('Mar jelentkeztek:'))).toBe(true);
     expect(sentPayloads.some(payload => payload.html.includes('Anna, Bela, Csaba'))).toBe(true);
     expect(sentPayloads.some(payload => payload.text.includes('Mar jelentkeztek: Anna, Bela, Csaba'))).toBe(true);
+
+    const auditLogs = await getTemplateEmailLogs(eventId, 'new_registration');
+    expect(auditLogs).toHaveLength(3);
+    expect(auditLogs.map(row => row.recipient_email).sort()).toEqual([
+      `anna_notify_${runId}@example.com`,
+      `bela_notify_${runId}@example.com`,
+      `captain_notify_${runId}@example.com`
+    ].sort());
+    expect(auditLogs.every(row => row.status === 'sent')).toBe(true);
+    expect(auditLogs.every(row => row.template === 'new_registration')).toBe(true);
+    expect(auditLogs[0].metadata).toEqual(expect.objectContaining({
+      actorUserId: registrantId,
+      registrationStatus: 'going'
+    }));
+    expectSingleDeliveryBatch(auditLogs);
+  });
+
+  test('bulk rendszer-email kuldesi hiba failed audit sort keszit', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_bulk_fail_${runId}@example.com`);
+    const memberId = await createUser('Anna', `anna_bulk_fail_${runId}@example.com`);
+    const registrantId = await createUser('Csaba', `csaba_bulk_fail_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Bulk Fail FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, memberId, 'member');
+    await addMembership(teamId, registrantId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Bulk fail meccs', 'Audit hiba teszt', now() + interval '2 days', 'Teszt palya', '1111 Budapest, Pelda utca 1.', 5, 12, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyAllOnNewRegistration":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, registered_at, created_at, updated_at
+      )
+      values ($1, $2, $3, $4, 'going', now(), now(), now())
+      `,
+      [randomUUID(), eventId, teamId, registrantId]
+    );
+
+    sendEmail.mockRejectedValueOnce(new Error('Bulk SMTP timeout'));
+
+    const result = await eventNotificationService.notifyRegistrationActivity({
+      eventId,
+      actorUserId: registrantId,
+      registrationStatus: 'going',
+      includeNewRegistrationNotification: true
+    });
+
+    expect(result.newRegistration.sentCount).toBe(1);
+    expect(result.newRegistration.failedCount).toBe(1);
+
+    const auditLogs = await getTemplateEmailLogs(eventId, 'new_registration');
+    expect(auditLogs).toHaveLength(2);
+    expect(auditLogs.map(row => row.status).sort()).toEqual(['failed', 'sent']);
+    expect(auditLogs.find(row => row.status === 'failed')).toEqual(expect.objectContaining({
+      error_message: 'Bulk SMTP timeout'
+    }));
+    expect(auditLogs.find(row => row.status === 'sent')).toEqual(expect.objectContaining({
+      provider_message_id: 'msg-1'
+    }));
+    expectSingleDeliveryBatch(auditLogs);
+  });
+
+  test('mar csak ket hely emailt csak a meg nem reagalt aktiv tagok kapnak', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_two_left_${runId}@example.com`);
+    const actorId = await createUser('Actor', `actor_two_left_${runId}@example.com`);
+    const goingId = await createUser('Going', `going_two_left_${runId}@example.com`);
+    const waitingId = await createUser('Waiting', `waiting_two_left_${runId}@example.com`);
+    const rankWaitingId = await createUser('Rank Waiting', `rank_waiting_two_left_${runId}@example.com`);
+    const skipActionId = await createUser('Skip Action', `skip_action_two_left_${runId}@example.com`);
+    const vacationActionId = await createUser('Vacation Action', `vacation_action_two_left_${runId}@example.com`);
+    const breakId = await createUser('Break', `break_two_left_${runId}@example.com`);
+    const passiveId = await createUser('Passive', `passive_two_left_${runId}@example.com`);
+    const targetId = await createUser('Target', `target_two_left_${runId}@example.com`);
+    const duplicateTargetId = await createUser('Duplicate Target', `TARGET_TWO_LEFT_${runId}@example.com`);
+    const otherEventActionId = await createUser('Other Event Action', `other_action_two_left_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    const otherEventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId, otherEventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Ket Hely FC', adminId]
+    );
+
+    for (const userId of [
+      adminId,
+      actorId,
+      goingId,
+      waitingId,
+      rankWaitingId,
+      skipActionId,
+      vacationActionId,
+      breakId,
+      passiveId,
+      targetId,
+      duplicateTargetId,
+      otherEventActionId
+    ]) {
+      await addMembership(teamId, userId, userId === adminId ? 'team_admin' : 'member');
+    }
+
+    await pool.query(
+      `
+      update team_members
+      set break_started_at = now() - interval '1 day',
+          break_until = now() + interval '6 days',
+          break_extensions_count = 1
+      where team_id = $1
+        and user_id = $2
+      `,
+      [teamId, breakId]
+    );
+
+    await pool.query(
+      `
+      update team_members
+      set passive_since = now() - interval '1 day',
+          passive_reason = 'teszt passziv'
+      where team_id = $1
+        and user_id = $2
+      `,
+      [teamId, passiveId]
+    );
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values
+        ($1, $3, $4, 'Ket helyes meccs', 'Ket hely email teszt', now() + interval '2 days', 'Teszt palya', '1111 Budapest, Pelda utca 1.', 4, 4, 'published', now(), now(), now()),
+        ($2, $3, $4, 'Masik action esemeny', 'Masik event', now() + interval '3 days', 'Teszt palya', '1111 Budapest, Pelda utca 1.', 4, 4, 'published', now(), now(), now())
+      `,
+      [eventId, otherEventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyAllWhenTwoSpotsLeft":true,"notifyAllOnNewRegistration":false,"notifyAllWhenFull":false}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, registered_at, created_at, updated_at
+      )
+      values
+        ($1, $5, $6, $7, 'going', now() - interval '12 minutes', now(), now()),
+        ($2, $5, $6, $8, 'going', now() - interval '10 minutes', now(), now()),
+        ($3, $5, $6, $9, 'waiting_list', now() - interval '6 minutes', now(), now()),
+        ($4, $5, $6, $10, 'waiting_list_rank', now() - interval '5 minutes', now(), now())
+      `,
+      [
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+        eventId,
+        teamId,
+        actorId,
+        goingId,
+        waitingId,
+        rankWaitingId
+      ]
+    );
+
+    await pool.query(
+      `
+      insert into event_email_action_log (
+        id, event_id, team_id, user_id, action, status, message, metadata, acted_at, created_at
+      )
+      values
+        ($1, $4, $5, $6, 'skip', 'recorded_for_rank', 'Kihagyas rogzitve', '{}'::jsonb, now() - interval '4 minutes', now() - interval '4 minutes'),
+        ($2, $4, $5, $7, 'vacation_one_week', 'break_started', 'Szabi rogzitve', '{}'::jsonb, now() - interval '3 minutes', now() - interval '3 minutes'),
+        ($3, $8, $5, $9, 'skip', 'recorded_for_rank', 'Masik event skip', '{}'::jsonb, now() - interval '2 minutes', now() - interval '2 minutes')
+      `,
+      [
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+        eventId,
+        teamId,
+        skipActionId,
+        vacationActionId,
+        otherEventId,
+        otherEventActionId
+      ]
+    );
+
+    const result = await eventNotificationService.notifyRegistrationActivity({
+      eventId,
+      actorUserId: actorId,
+      registrationStatus: 'going',
+      includeNewRegistrationNotification: false,
+      includeCapacityNotifications: true
+    });
+
+    expect(result.twoSpotsLeft.sentCount).toBe(3);
+    expect(sendEmail).toHaveBeenCalledTimes(3);
+
+    const recipients = sendEmail.mock.calls.map(call => call[0].to).sort();
+    expect(recipients).toEqual([
+      `captain_two_left_${runId}@example.com`,
+      `other_action_two_left_${runId}@example.com`,
+      `target_two_left_${runId}@example.com`
+    ].sort());
+    expect(recipients).not.toContain(`actor_two_left_${runId}@example.com`);
+    expect(recipients).not.toContain(`going_two_left_${runId}@example.com`);
+    expect(recipients).not.toContain(`waiting_two_left_${runId}@example.com`);
+    expect(recipients).not.toContain(`rank_waiting_two_left_${runId}@example.com`);
+    expect(recipients).not.toContain(`skip_action_two_left_${runId}@example.com`);
+    expect(recipients).not.toContain(`vacation_action_two_left_${runId}@example.com`);
+    expect(recipients).not.toContain(`break_two_left_${runId}@example.com`);
+    expect(recipients).not.toContain(`passive_two_left_${runId}@example.com`);
+    expect(recipients.filter(email => email === `target_two_left_${runId}@example.com`)).toHaveLength(1);
+
+    const sentPayloads = sendEmail.mock.calls.map(call => call[0]);
+    expect(sentPayloads.every(payload => payload.subject.includes('Mar csak 2 hely maradt'))).toBe(true);
+
+    const auditLogs = await getTemplateEmailLogs(eventId, 'capacity_two_spots_left');
+    expect(auditLogs).toHaveLength(3);
+    expect(auditLogs.map(row => row.recipient_email).sort()).toEqual(recipients.sort());
+    expect(auditLogs.every(row => row.status === 'sent')).toBe(true);
+    expect(auditLogs.every(row => row.template === 'capacity_two_spots_left')).toBe(true);
+    expect(auditLogs[0].metadata).toEqual(expect.objectContaining({
+      spotsLeft: 2
+    }));
+    expectSingleDeliveryBatch(auditLogs);
+  });
+
+  test('resztvevoi rendszer-email sablonok audit naploba kerulnek', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_system_${runId}@example.com`);
+    const firstMemberId = await createUser('Anna', `anna_system_${runId}@example.com`);
+    const secondMemberId = await createUser('Bela', `bela_system_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'System Email FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, firstMemberId, 'member');
+    await addMembership(teamId, secondMemberId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Rendszer email meccs', 'Audit teszt', now() + interval '3 days', 'System palya', '1111 Budapest, Pelda utca 1.', 4, 12, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyParticipantsOnEventUpdate":true,"notifyParticipantsOnEventCancel":true,"notifyTeamDrawPublished":true,"notifyWeatherAlerts":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, registered_at, cancelled_at, created_at, updated_at
+      )
+      values
+        ($1, $4, $5, $6, 'going', now() - interval '20 minutes', null, now(), now()),
+        ($2, $4, $5, $7, 'waiting_list', now() - interval '10 minutes', null, now(), now()),
+        ($3, $4, $5, $8, 'cancelled', now() - interval '5 minutes', now() - interval '4 minutes', now(), now())
+      `,
+      [
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+        eventId,
+        teamId,
+        firstMemberId,
+        secondMemberId,
+        adminId
+      ]
+    );
+
+    await eventNotificationService.notifyEventUpdated({
+      eventId,
+      previousEvent: {
+        start_at: '2026-01-01T10:00:00.000Z',
+        location_name: 'Regi palya',
+        location_address: '1111 Budapest, Regi utca 1.'
+      }
+    });
+    await eventNotificationService.notifyEventCancelled({ eventId });
+    await eventNotificationService.notifyTeamDrawPublished({ eventId, automated: true });
+
+    fetchEventWeatherForecast.mockResolvedValueOnce({
+      weatherCode: 12,
+      weatherLabel: 'Eso',
+      locationLabel: 'System palya',
+      temperature: 12,
+      precipitationProbability: 85,
+      windSpeed: 12
+    });
+    await eventNotificationService.notifyWeatherAlert({ eventId });
+
+    const activeRecipientEmails = [
+      `anna_system_${runId}@example.com`,
+      `bela_system_${runId}@example.com`
+    ].sort();
+    const cancelRecipientEmails = [
+      `anna_system_${runId}@example.com`,
+      `bela_system_${runId}@example.com`,
+      `captain_system_${runId}@example.com`
+    ].sort();
+
+    for (const template of ['event_updated', 'team_draw_published', 'weather_alert']) {
+      const auditLogs = await getTemplateEmailLogs(eventId, template);
+      expect(auditLogs).toHaveLength(2);
+      expect(auditLogs.map(row => row.recipient_email).sort()).toEqual(activeRecipientEmails);
+      expect(auditLogs.every(row => row.status === 'sent')).toBe(true);
+      expect(auditLogs.every(row => row.template === template)).toBe(true);
+      expectSingleDeliveryBatch(auditLogs);
+    }
+
+    const cancelAuditLogs = await getTemplateEmailLogs(eventId, 'event_cancelled');
+    expect(cancelAuditLogs).toHaveLength(3);
+    expect(cancelAuditLogs.map(row => row.recipient_email).sort()).toEqual(cancelRecipientEmails);
+    expect(cancelAuditLogs.every(row => row.status === 'sent')).toBe(true);
+    expect(cancelAuditLogs.every(row => row.template === 'event_cancelled')).toBe(true);
+    expectSingleDeliveryBatch(cancelAuditLogs);
+  });
+
+  test('varolistarol bekerulo jatekos emailje audit naploba kerul', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_waitlist_${runId}@example.com`);
+    const promotedId = await createUser('Promoted', `promoted_waitlist_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Waitlist FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+    await addMembership(teamId, promotedId, 'member');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Varolista meccs', 'Varolista email teszt', now() + interval '2 days', 'Teszt palya', '1111 Budapest, Pelda utca 1.', 4, 8, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyWaitlistPromotion":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, promoted_at, registered_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, $4, 'going', now(), now() - interval '10 minutes', now(), now()
+      )
+      `,
+      [randomUUID(), eventId, teamId, promotedId]
+    );
+
+    const result = await eventNotificationService.notifyRegistrationActivity({
+      eventId,
+      promotedUserId: promotedId,
+      includeNewRegistrationNotification: false,
+      includeCapacityNotifications: false
+    });
+
+    expect(result.waitlistPromotion.sentCount).toBe(1);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(sendEmail.mock.calls[0][0]).toEqual(expect.objectContaining({
+      to: `promoted_waitlist_${runId}@example.com`
+    }));
+
+    const auditLogs = await getTemplateEmailLogs(eventId, 'waitlist_promotion');
+    expect(auditLogs).toHaveLength(1);
+    expect(auditLogs[0]).toEqual(expect.objectContaining({
+      recipient_user_id: promotedId,
+      recipient_email: `promoted_waitlist_${runId}@example.com`,
+      template: 'waitlist_promotion',
+      status: 'sent',
+      provider_message_id: 'msg-1'
+    }));
+    expect(auditLogs[0].metadata).toEqual(expect.objectContaining({
+      promotedUserId: promotedId
+    }));
+    expectSingleDeliveryBatch(auditLogs);
   });
 
   test('betelt esemeny email a nem jelentkezett csapattagot varolistara osztonzi', async () => {
@@ -809,6 +1331,19 @@ describe('Event notification service', () => {
     expect(waitlistPayload.html).toContain('Várólistára jelentkezem');
     expect(waitlistPayload.html).toContain('https://app.example.com/api/event-email-actions/');
     expect(alreadyGoingPayload).toBeTruthy();
+    const auditLogs = await getTemplateEmailLogs(eventId, 'capacity_full');
+    expect(auditLogs).toHaveLength(3);
+    expect(auditLogs.map(row => row.recipient_email).sort()).toEqual([
+      `anna_full_${runId}@example.com`,
+      `captain_full_${runId}@example.com`,
+      `dani_full_${runId}@example.com`
+    ].sort());
+    expect(auditLogs.every(row => row.status === 'sent')).toBe(true);
+    expect(auditLogs.every(row => row.template === 'capacity_full')).toBe(true);
+    expect(auditLogs[0].metadata).toEqual(expect.objectContaining({
+      spotsLeft: 0
+    }));
+    expectSingleDeliveryBatch(auditLogs);
     expect(alreadyGoingPayload.html).not.toContain('Várólistára jelentkezem');
   });
 });

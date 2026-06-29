@@ -2,15 +2,26 @@ const AppError = require('../utils/appError');
 const { pool } = require('./dbService');
 const eventNotificationService = require('./eventNotificationService');
 const {
+  fetchEventWeatherForecast,
+  buildWeatherAlert,
+  hasPreciseWeatherAddress
+} = require('./weatherService');
+const {
   normalizeNotificationPreferences
 } = require('../utils/notificationPreferences');
+const {
+  EMAIL_TEMPLATE_KEYS,
+  getEmailTemplateDefinition,
+  getManualResendEmailTemplates,
+  normalizeTemplateKey
+} = require('../utils/emailTemplateCatalog');
 
-const ADMIN_EMAIL_TEMPLATES = Object.freeze({
-  EVENT_CREATED: 'event_created'
-});
+const ADMIN_EMAIL_TEMPLATES = EMAIL_TEMPLATE_KEYS;
+const ACTIVE_EVENT_REGISTRATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank'];
+const ALL_EVENT_NOTIFICATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank', 'cancelled'];
 
 function normalizeTemplate(template) {
-  return String(template || '').trim().toLowerCase();
+  return normalizeTemplateKey(template);
 }
 
 function isMemberOnBreak(member, referenceDate = new Date()) {
@@ -105,10 +116,45 @@ function summarizeRecipients(members = [], { referenceDate = new Date() } = {}) 
   };
 }
 
+function buildExcludedReasons(summary = {}) {
+  const reasons = {};
+  if (Number(summary.excludedBreakCount || 0) > 0) reasons.on_break = Number(summary.excludedBreakCount || 0);
+  if (Number(summary.excludedPassiveCount || 0) > 0) reasons.passive = Number(summary.excludedPassiveCount || 0);
+  if (Number(summary.excludedMissingEmailCount || 0) > 0) reasons.missing_email = Number(summary.excludedMissingEmailCount || 0);
+  if (Number(summary.excludedDuplicateEmailCount || 0) > 0) reasons.duplicate_email = Number(summary.excludedDuplicateEmailCount || 0);
+  return reasons;
+}
+
+function emptyRecipientSummary() {
+  return summarizeRecipients([]);
+}
+
+function appendReason(reasons, condition, message) {
+  if (condition) {
+    reasons.push(message);
+  }
+}
+
 async function loadEventEmailContext({ teamId, eventId, template }) {
   const normalizedTemplate = normalizeTemplate(template);
-  if (normalizedTemplate !== ADMIN_EMAIL_TEMPLATES.EVENT_CREATED) {
+  const templateDefinition = getEmailTemplateDefinition(normalizedTemplate);
+  if (!templateDefinition || templateDefinition.manualResendEnabled !== true) {
     throw new AppError(400, 'Ismeretlen vagy nem tamogatott email sablon.');
+  }
+
+  if (templateDefinition.requiresEvent && !eventId) {
+    throw new AppError(400, 'Az eventId kotelezo ehhez az email sablonhoz.');
+  }
+
+  if (!templateDefinition.requiresEvent) {
+    return {
+      template: normalizedTemplate,
+      templateDefinition,
+      event: null,
+      notificationPreferences: {},
+      members: [],
+      registrations: []
+    };
   }
 
   const eventResult = await pool.query(
@@ -122,9 +168,14 @@ async function loadEventEmailContext({ teamId, eventId, template }) {
       e.location_name,
       e.location_address,
       e.status,
+      e.max_players,
       es.notification_preferences
+      ,
+      etd.status as draw_status,
+      etd.published_at as draw_published_at
     from events e
     left join event_settings es on es.event_id = e.id
+    left join event_team_draws etd on etd.event_id = e.id
     where e.id = $1
       and e.team_id = $2
     limit 1
@@ -137,14 +188,7 @@ async function loadEventEmailContext({ teamId, eventId, template }) {
     throw new AppError(404, 'Az esemeny nem talalhato ennel a csapatnal.');
   }
 
-  if (event.status !== 'published') {
-    throw new AppError(400, 'Uj esemeny email csak published esemenyhez kuldheto.');
-  }
-
   const notificationPreferences = normalizeNotificationPreferences(event.notification_preferences);
-  if (notificationPreferences.notifyTeamOnCreate !== true) {
-    throw new AppError(400, 'Ennel az esemenynel az uj esemeny ertesites ki van kapcsolva.');
-  }
 
   const membersResult = await pool.query(
     `
@@ -163,43 +207,192 @@ async function loadEventEmailContext({ teamId, eventId, template }) {
     [teamId]
   );
 
+  const registrationsResult = await pool.query(
+    `
+    select
+      er.user_id,
+      u.name,
+      lower(u.email) as email,
+      er.registration_status,
+      tm.break_until,
+      tm.passive_since
+    from event_registrations er
+    join users u on u.id = er.user_id
+    left join team_members tm on tm.team_id = er.team_id
+      and tm.user_id = er.user_id
+    where er.event_id = $1
+    order by er.registered_at asc
+    `,
+    [eventId]
+  );
+
   return {
     template: normalizedTemplate,
+    templateDefinition,
     event,
     notificationPreferences,
-    members: membersResult.rows
+    members: membersResult.rows,
+    registrations: registrationsResult.rows
+  };
+}
+
+function getRecipientsForTemplate(context) {
+  switch (context.template) {
+    case ADMIN_EMAIL_TEMPLATES.EVENT_CREATED:
+    case ADMIN_EMAIL_TEMPLATES.EVENT_CREATED_SCHEDULED:
+      return summarizeRecipients(context.members);
+    case ADMIN_EMAIL_TEMPLATES.TEAM_DRAW_PUBLISHED:
+    case ADMIN_EMAIL_TEMPLATES.EVENT_UPDATED:
+    case ADMIN_EMAIL_TEMPLATES.WEATHER_ALERT:
+      return summarizeRecipients(
+        context.registrations.filter(item => ACTIVE_EVENT_REGISTRATION_STATUSES.includes(item.registration_status))
+      );
+    case ADMIN_EMAIL_TEMPLATES.EVENT_CANCELLED:
+      return summarizeRecipients(
+        context.registrations.filter(item => ALL_EVENT_NOTIFICATION_STATUSES.includes(item.registration_status))
+      );
+    default:
+      return emptyRecipientSummary();
+  }
+}
+
+async function buildSendability(context, recipientSummary) {
+  const reasons = [];
+  const event = context.event || {};
+  const prefs = context.notificationPreferences || {};
+
+  if (!context.templateDefinition.requiresEvent) {
+    return {
+      sendable: false,
+      reasons: [...(context.templateDefinition.sendabilityRules || [])]
+    };
+  }
+
+  appendReason(reasons, Number(recipientSummary.recipientCount || 0) <= 0, 'Nincs kikuldheto cimzett ehhez a sablonhoz.');
+
+  switch (context.template) {
+    case ADMIN_EMAIL_TEMPLATES.EVENT_CREATED:
+      appendReason(reasons, event.status !== 'published', 'Uj esemeny email csak published esemenyhez kuldheto.');
+      appendReason(reasons, prefs.notifyTeamOnCreate !== true, 'Ennel az esemenynel az uj esemeny ertesites ki van kapcsolva.');
+      break;
+    case ADMIN_EMAIL_TEMPLATES.EVENT_CREATED_SCHEDULED:
+      reasons.push('Az utemezett uj esemeny emailt az utemezo kezeli. Kezi ujrakuldeshez valaszd az Uj esemeny sablont.');
+      break;
+    case ADMIN_EMAIL_TEMPLATES.NEW_MEMBER_EVENT_CATCHUP:
+      reasons.push('Ehhez konkret uj tag kivalasztasa szukseges, amit ez a kezi felulet meg nem kezel.');
+      break;
+    case ADMIN_EMAIL_TEMPLATES.TEAM_DRAW_PUBLISHED:
+      appendReason(reasons, event.draw_status !== 'published', 'Ehhez az esemenyhez meg nincs kihirdetett csapatleosztas.');
+      appendReason(reasons, prefs.notifyTeamDrawPublished !== true, 'A csapatleosztas ertesites kapcsolo ki van kapcsolva.');
+      break;
+    case ADMIN_EMAIL_TEMPLATES.EVENT_UPDATED:
+      reasons.push('Kezi ujrakuldeshez nincs eleg korabbi idopont/helyszin adat a pontos osszehasonlitashoz.');
+      break;
+    case ADMIN_EMAIL_TEMPLATES.EVENT_CANCELLED:
+      appendReason(reasons, event.status !== 'cancelled', 'Torlesi email csak cancelled statuszu esemenyhez kuldheto.');
+      appendReason(reasons, prefs.notifyParticipantsOnEventCancel !== true, 'Az esemeny torlesi ertesites kapcsolo ki van kapcsolva.');
+      break;
+    case ADMIN_EMAIL_TEMPLATES.WEATHER_ALERT:
+      appendReason(reasons, prefs.notifyWeatherAlerts !== true, 'Az idojarasi ertesites kapcsolo ki van kapcsolva.');
+      appendReason(reasons, !hasPreciseWeatherAddress(event), 'Az idojarasi figyelmezteteshez pontos cim szukseges.');
+      if (!reasons.length) {
+        try {
+          const weather = await fetchEventWeatherForecast(event);
+          const alert = buildWeatherAlert(weather);
+          appendReason(reasons, !alert, 'Az aktualis elorejelzes alapjan nincs kikuldheto idojarasi figyelmeztetes.');
+        } catch (error) {
+          reasons.push(error.message || 'Az idojaras szolgaltatas most nem elerheto.');
+        }
+      }
+      break;
+    case ADMIN_EMAIL_TEMPLATES.TEAM_BREAK_REMINDER:
+      reasons.push('Ehhez konkret szabin levo tag kivalasztasa szukseges, amit ez a kezi felulet meg nem kezel.');
+      break;
+    default:
+      reasons.push('Ez a sablon nem kuldheto kezzel.');
+      break;
+  }
+
+  return {
+    sendable: reasons.length === 0,
+    reasons
+  };
+}
+
+function buildPreviewResponse(context, recipientSummary, sendability) {
+  const event = context.event;
+  const templateDefinition = context.templateDefinition;
+
+  return {
+    template: context.template,
+    templateLabel: templateDefinition.label,
+    description: templateDefinition.description,
+    recipientsDescription: templateDefinition.recipientsDescription,
+    triggerDescription: templateDefinition.triggerDescription,
+    contentDescription: templateDefinition.contentDescription,
+    sendability,
+    sendabilityRules: templateDefinition.sendabilityRules || [],
+    expectedRecipientCount: Number(recipientSummary.recipientCount || 0),
+    excludedRecipientCount: Number(recipientSummary.excludedCount || 0),
+    excludedReasons: buildExcludedReasons(recipientSummary),
+    event: event ? {
+      id: event.id,
+      title: event.title,
+      start_at: event.start_at,
+      location_name: event.location_name,
+      location_address: event.location_address,
+      status: event.status,
+      draw_status: event.draw_status || null
+    } : null,
+    recipientSummary
   };
 }
 
 async function previewAdminEmailSend({ teamId, template, eventId }) {
   const context = await loadEventEmailContext({ teamId, template, eventId });
-  const recipientSummary = summarizeRecipients(context.members);
-
-  return {
-    template: context.template,
-    event: {
-      id: context.event.id,
-      title: context.event.title,
-      start_at: context.event.start_at,
-      location_name: context.event.location_name,
-      location_address: context.event.location_address,
-      status: context.event.status
-    },
-    recipientSummary
-  };
+  const recipientSummary = getRecipientsForTemplate(context);
+  const sendability = await buildSendability(context, recipientSummary);
+  return buildPreviewResponse(context, recipientSummary, sendability);
 }
 
 async function sendAdminEmail({ teamId, template, eventId, actorUserId = null }) {
   const preview = await previewAdminEmailSend({ teamId, template, eventId });
 
-  if (preview.recipientSummary.recipientCount <= 0) {
-    throw new AppError(400, 'Nincs kikuldheto cimzett ehhez az emailhez.');
+  if (preview.sendability?.sendable !== true) {
+    const reason = (preview.sendability?.reasons || [])[0] || 'Ez az email sablon most nem kuldheto.';
+    throw new AppError(400, reason);
   }
 
-  const notificationResult = await eventNotificationService.notifyEventCreated({
-    eventId,
+  const auditMetadata = {
+    manualResend: true,
+    manualResendTemplate: preview.template,
     actorUserId
-  });
+  };
+
+  let notificationResult = null;
+  if (preview.template === ADMIN_EMAIL_TEMPLATES.EVENT_CREATED) {
+    notificationResult = await eventNotificationService.notifyEventCreated({
+      eventId,
+      actorUserId,
+      auditMetadata
+    });
+  } else if (preview.template === ADMIN_EMAIL_TEMPLATES.TEAM_DRAW_PUBLISHED) {
+    notificationResult = await eventNotificationService.notifyTeamDrawPublished({
+      eventId,
+      automated: false,
+      auditMetadata
+    });
+  } else if (preview.template === ADMIN_EMAIL_TEMPLATES.EVENT_CANCELLED) {
+    notificationResult = await eventNotificationService.notifyEventCancelled({
+      eventId,
+      auditMetadata
+    });
+  } else if (preview.template === ADMIN_EMAIL_TEMPLATES.WEATHER_ALERT) {
+    notificationResult = await eventNotificationService.notifyWeatherAlert({
+      eventId,
+      auditMetadata
+    });
+  }
 
   if (!notificationResult) {
     throw new AppError(400, 'Az email kikuldese nem indult el. Ellenorizd az esemeny allapotat es az ertesitesi beallitast.');
@@ -216,8 +409,15 @@ async function sendAdminEmail({ teamId, template, eventId, actorUserId = null })
   };
 }
 
+function listManualAdminEmailTemplates() {
+  return {
+    templates: getManualResendEmailTemplates()
+  };
+}
+
 module.exports = {
   ADMIN_EMAIL_TEMPLATES,
+  listManualAdminEmailTemplates,
   previewAdminEmailSend,
   sendAdminEmail
 };

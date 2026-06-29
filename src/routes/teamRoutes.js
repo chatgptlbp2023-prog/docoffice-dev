@@ -14,6 +14,7 @@ const {
   endMyTeamBreak,
   updateTeamMemberActivityStatus,
   previewAdminEmailSend,
+  listManualAdminEmailTemplates,
   sendAdminEmail,
   listEmailCenterSchedules,
   listEmailCenterLogs,
@@ -108,6 +109,13 @@ router.post(
   isCaptainOrViceCaptain,
   validateAdminEmailSend,
   previewAdminEmailSend
+);
+
+router.get(
+  '/teams/:teamId/admin-email/templates',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  listManualAdminEmailTemplates
 );
 
 router.post(

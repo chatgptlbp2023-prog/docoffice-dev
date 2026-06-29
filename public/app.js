@@ -71,6 +71,9 @@ const state = {
   adminTournamentApplicationTournamentId: '',
   adminTournamentApplicationDrafts: {},
   adminEmailTemplate: 'event_created',
+  adminEmailTemplates: [],
+  adminEmailTemplatesLoading: false,
+  adminEmailTemplatesLoaded: false,
   adminEmailEventId: '',
   adminEmailPreview: null,
   adminEmailLoading: false,
@@ -138,13 +141,36 @@ const TEAM_DRAW_STRATEGY_OPTIONS = Object.freeze([
   { value: 'optimized', label: 'Optimalizált próbálgatás' }
 ]);
 
+const DEFAULT_ADMIN_EMAIL_TEMPLATES = Object.freeze([
+  {
+    key: 'event_created',
+    label: 'Uj esemeny',
+    description: 'Az esemeny kihirdetese ujraindithato.',
+    recipientsDescription: 'Aktiv, ertesitheto csapattagok.',
+    triggerDescription: 'Published esemeny letrehozasakor vagy kezi ujrakuldeskor.',
+    contentDescription: 'Esemenyadatok es gyors akciogombok.',
+    requiresEvent: true
+  }
+]);
+
 const EMAIL_TEMPLATE_LABELS = Object.freeze({
-  event_created: 'Uj esemeny'
+  event_created: 'Uj esemeny',
+  event_created_scheduled: 'Utemezett uj esemeny',
+  new_member_event_catchup: 'Uj tag felzarkoztato',
+  team_draw_published: 'Csapatleosztas kesz',
+  event_updated: 'Idopont/helyszin valtozas',
+  event_cancelled: 'Esemeny torolve',
+  weather_alert: 'Idojarasi figyelmeztetes',
+  team_break_reminder: 'Szabi emlekezteto'
 });
 
 const EMAIL_STATUS_LABELS = Object.freeze({
   pending: 'utemezve',
   sent: 'elkuldve',
+  delivered: 'kezbesitve',
+  bounced: 'visszapattant',
+  complained: 'spam panasz',
+  rejected: 'elutasitva',
   skipped: 'kihagyva',
   failed: 'hiba'
 });
@@ -160,6 +186,12 @@ const EMAIL_REASON_LABELS = Object.freeze({
   provider_skipped: 'szolgaltato kihagyta',
   missing_payload: 'hianyzo email tartalom',
   send_error: 'kuldesi hiba'
+});
+
+const EMAIL_ACTION_LABELS = Object.freeze({
+  register: 'Jelentkezem',
+  skip: 'Kihagyom',
+  vacation_one_week: 'Szabin vagyok (1 het)'
 });
 
 function getTeamStorageKeyForUser(userId) {
@@ -9898,10 +9930,21 @@ function renderAdminStatisticsPanel() {
   `;
 }
 
+function getAdminEmailTemplates() {
+  return state.adminEmailTemplates.length ? state.adminEmailTemplates : DEFAULT_ADMIN_EMAIL_TEMPLATES;
+}
+
+function getSelectedAdminEmailTemplate() {
+  const templates = getAdminEmailTemplates();
+  return templates.find(item => String(item.key) === String(state.adminEmailTemplate))
+    || templates[0]
+    || DEFAULT_ADMIN_EMAIL_TEMPLATES[0];
+}
+
 function getAdminEmailCandidateEvents(events = state.adminEvents || []) {
   const now = Date.now();
   return [...(events || [])]
-    .filter(event => event.status === 'published')
+    .filter(event => ['published', 'cancelled', 'finished'].includes(String(event.status || '')))
     .sort((left, right) => {
       const leftTs = getEventStartTimestamp(left);
       const rightTs = getEventStartTimestamp(right);
@@ -9940,6 +9983,7 @@ function ensureAdminEmailSelectedEvent() {
 function renderAdminEmailPreviewCard() {
   const preview = state.adminEmailPreview;
   const selectedEvent = getAdminEmailSelectedEvent();
+  const selectedTemplate = getSelectedAdminEmailTemplate();
 
   if (state.adminEmailLoading) {
     return `
@@ -9950,11 +9994,16 @@ function renderAdminEmailPreviewCard() {
     `;
   }
 
-  if (!selectedEvent) {
-    return emptyState('Nincs valaszthato published esemeny.', 'Uj esemeny emailt csak published esemenyhez lehet ujrakuldeni.');
+  if (selectedTemplate?.requiresEvent !== false && !selectedEvent) {
+    return emptyState('Nincs valaszthato esemeny.', 'Ehhez a sablonhoz esemenyt kell valasztani.');
   }
 
-  if (!preview || String(preview.event?.id || '') !== String(selectedEvent.id)) {
+  const previewMatchesTemplate = String(preview?.template || '') === String(state.adminEmailTemplate || selectedTemplate?.key || '');
+  const previewMatchesEvent = selectedTemplate?.requiresEvent === false
+    ? true
+    : String(preview?.event?.id || '') === String(selectedEvent?.id || '');
+
+  if (!preview || !previewMatchesTemplate || !previewMatchesEvent) {
     return `
       <div class="event-card top-space">
         <div class="row between align-center wrap gap">
@@ -9967,23 +10016,57 @@ function renderAdminEmailPreviewCard() {
   }
 
   const summary = preview.recipientSummary || {};
-  const event = preview.event || selectedEvent;
+  const event = preview.event || selectedEvent || {};
+  const sendability = preview.sendability || {};
+  const hasExplicitSendability = Object.prototype.hasOwnProperty.call(sendability, 'sendable');
+  const sendable = hasExplicitSendability
+    ? sendability.sendable === true
+    : Number(summary.recipientCount || preview.expectedRecipientCount || 0) > 0;
+  const sendabilityReasons = sendability.reasons || [];
+  const excludedReasons = preview.excludedReasons || {};
+  const excludedReasonsHtml = Object.keys(excludedReasons).length
+    ? Object.entries(excludedReasons)
+      .map(([reason, count]) => `${escapeHtml(getEmailReasonLabel(reason))}: ${escapeHtml(String(count))}`)
+      .join(' · ')
+    : 'Nincs kulon kizart ok.';
 
   return `
     <div class="event-card top-space">
       <div class="row between align-center wrap gap">
         <div>
           <div class="small muted">Elonezeti informacio</div>
-          <strong>${escapeHtml(event.title || selectedEvent.title || 'Nevtelen esemeny')}</strong>
+          <strong>${escapeHtml(preview.templateLabel || selectedTemplate?.label || getEmailTemplateLabel(preview.template) || 'Email sablon')}</strong>
+          <div class="small muted top-space">${escapeHtml(preview.description || selectedTemplate?.description || '')}</div>
         </div>
-        <span class="badge ${Number(summary.recipientCount || 0) > 0 ? 'badge-success' : 'badge-warning'}">
-          ${escapeHtml(String(summary.recipientCount || 0))} cimzett
+        <span class="badge ${sendable ? 'badge-success' : 'badge-warning'}">
+          ${escapeHtml(String(preview.expectedRecipientCount ?? summary.recipientCount ?? 0))} cimzett · ${sendable ? 'kuldheto' : 'nem kuldheto'}
         </span>
       </div>
       <div class="grid two-col inner-grid top-space">
         <div class="detail-box">
-          <div class="detail-label">Idopont</div>
-          <div class="detail-value">${escapeHtml(formatDateTime(event.start_at || selectedEvent.start_at))}</div>
+          <div class="detail-label">Kik kapjak</div>
+          <div class="detail-value">${escapeHtml(preview.recipientsDescription || selectedTemplate?.recipientsDescription || '-')}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Mikor megy ki</div>
+          <div class="detail-value">Kezi inditaskor azonnal. Eredeti trigger: ${escapeHtml(preview.triggerDescription || selectedTemplate?.triggerDescription || '-')}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Tartalom / cel</div>
+          <div class="detail-value">${escapeHtml(preview.contentDescription || selectedTemplate?.contentDescription || '-')}</div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Kuldhetoseg</div>
+          <div class="detail-value">
+            ${sendable ? 'A feltetelek teljesulnek.' : escapeHtml(sendabilityReasons.join(' ') || 'A sablon most nem kuldheto.')}
+          </div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-label">Esemeny</div>
+          <div class="detail-value">
+            ${escapeHtml(event.title || selectedEvent?.title || '-')}<br />
+            <span class="small muted">${escapeHtml(formatDateTime(event.start_at || selectedEvent?.start_at))}</span>
+          </div>
         </div>
         <div class="detail-box">
           <div class="detail-label">Helyszin</div>
@@ -9991,19 +10074,22 @@ function renderAdminEmailPreviewCard() {
         </div>
         <div class="detail-box">
           <div class="detail-label">Varhato cimzettek</div>
-          <div class="detail-value">${escapeHtml(String(summary.recipientCount || 0))}</div>
+          <div class="detail-value">${escapeHtml(String(preview.expectedRecipientCount ?? summary.recipientCount ?? 0))}</div>
         </div>
         <div class="detail-box">
           <div class="detail-label">Kizart cimzettek</div>
-          <div class="detail-value">${escapeHtml(String(summary.excludedCount || 0))}</div>
+          <div class="detail-value">
+            ${escapeHtml(String(preview.excludedRecipientCount ?? summary.excludedCount ?? 0))}
+            <div class="small muted top-space">${excludedReasonsHtml}</div>
+          </div>
         </div>
         <div class="detail-box">
           <div class="detail-label">Szabin kizart</div>
-          <div class="detail-value">${escapeHtml(String(summary.excludedBreakCount || 0))}</div>
+          <div class="detail-value">${escapeHtml(String(summary.excludedBreakCount || excludedReasons.on_break || 0))}</div>
         </div>
         <div class="detail-box">
           <div class="detail-label">Passziv kizart</div>
-          <div class="detail-value">${escapeHtml(String(summary.excludedPassiveCount || 0))}</div>
+          <div class="detail-value">${escapeHtml(String(summary.excludedPassiveCount || excludedReasons.passive || 0))}</div>
         </div>
       </div>
       <div class="row gap wrap top-space">
@@ -10011,7 +10097,7 @@ function renderAdminEmailPreviewCard() {
           class="btn"
           type="button"
           data-admin-email-action="send"
-          ${state.adminEmailSending || Number(summary.recipientCount || 0) <= 0 ? 'disabled' : ''}
+          ${state.adminEmailSending || !sendable ? 'disabled' : ''}
         >
           ${state.adminEmailSending ? 'Kuldes folyamatban...' : 'Email kikuldese'}
         </button>
@@ -10034,8 +10120,14 @@ function renderAdminEmailPanel() {
     return;
   }
 
+  if (!state.adminEmailTemplatesLoaded && !state.adminEmailTemplatesLoading) {
+    loadAdminEmailTemplates({ silent: true });
+  }
+
   const candidateEvents = getAdminEmailCandidateEvents();
   const selectedEvent = ensureAdminEmailSelectedEvent();
+  const templates = getAdminEmailTemplates();
+  const selectedTemplate = getSelectedAdminEmailTemplate();
 
   const messageHtml = state.adminEmailMessage
     ? `<div class="message ${state.adminEmailMessage.type || 'info'} top-space">${escapeHtml(state.adminEmailMessage.text)}</div>`
@@ -10048,18 +10140,22 @@ function renderAdminEmailPanel() {
           <strong>Rendszer-email ujrakuldes</strong>
           <div class="small muted top-space">Nem hoz letre uj esemenyt, csak a valasztott rendszer-email sablont inditja ujra kontrollaltan.</div>
         </div>
-        <span class="badge badge-muted">admin eszkoz</span>
+        <span class="badge badge-muted">${state.adminEmailTemplatesLoading ? 'sablonlista toltodik' : 'admin eszkoz'}</span>
       </div>
       <div class="grid two-col inner-grid top-space">
         <label class="label">
           Email sablon
           <select data-admin-email-template>
-            <option value="event_created" ${state.adminEmailTemplate === 'event_created' ? 'selected' : ''}>Uj esemeny</option>
+            ${templates.map(template => `
+              <option value="${escapeAttribute(template.key)}" ${state.adminEmailTemplate === template.key ? 'selected' : ''}>
+                ${escapeHtml(template.label || getEmailTemplateLabel(template.key))}
+              </option>
+            `).join('')}
           </select>
         </label>
         <label class="label">
           Esemeny
-          <select data-admin-email-event ${candidateEvents.length ? '' : 'disabled'}>
+          <select data-admin-email-event ${candidateEvents.length && selectedTemplate?.requiresEvent !== false ? '' : 'disabled'}>
             ${candidateEvents.map(event => `
               <option value="${escapeAttribute(event.id)}" ${String(event.id) === String(state.adminEmailEventId || selectedEvent?.id || '') ? 'selected' : ''}>
                 ${escapeHtml(`${event.title || 'Nevtelen esemeny'} - ${formatDateTime(event.start_at)}`)}
@@ -10069,7 +10165,7 @@ function renderAdminEmailPanel() {
         </label>
       </div>
       <div class="small muted top-space">
-        A kuldes a meglevo uj esemeny email sablont hasznalja, es nem keruli meg a szabi/passziv vagy notifyTeamOnCreate szuresokat.
+        A kuldes nem keruli meg a szabi/passziv, hianyzo email vagy sablonhoz tartozo ertesitesi szuresokat.
       </div>
     </div>
     ${renderAdminEmailPreviewCard()}
@@ -10077,10 +10173,35 @@ function renderAdminEmailPanel() {
   `;
 }
 
+async function loadAdminEmailTemplates({ silent = false } = {}) {
+  if (!state.currentTeamId || state.adminEmailTemplatesLoading) return;
+
+  state.adminEmailTemplatesLoading = true;
+  try {
+    const result = await api(`/teams/${state.currentTeamId}/admin-email/templates`, { method: 'GET' });
+    state.adminEmailTemplates = Array.isArray(result.templates) && result.templates.length
+      ? result.templates
+      : [...DEFAULT_ADMIN_EMAIL_TEMPLATES];
+    state.adminEmailTemplatesLoaded = true;
+    if (!state.adminEmailTemplates.some(template => template.key === state.adminEmailTemplate)) {
+      state.adminEmailTemplate = state.adminEmailTemplates[0]?.key || 'event_created';
+      state.adminEmailPreview = null;
+    }
+  } catch (error) {
+    state.adminEmailTemplates = [...DEFAULT_ADMIN_EMAIL_TEMPLATES];
+    state.adminEmailTemplatesLoaded = true;
+    if (!silent) showMessage(error.message, 'error');
+  } finally {
+    state.adminEmailTemplatesLoading = false;
+    renderAdminEmailPanel();
+  }
+}
+
 async function loadAdminEmailPreview({ silent = false } = {}) {
   ensureAdminEmailSelectedEvent();
 
-  if (!state.currentTeamId || !state.adminEmailEventId) {
+  const selectedTemplate = getSelectedAdminEmailTemplate();
+  if (!state.currentTeamId || (selectedTemplate?.requiresEvent !== false && !state.adminEmailEventId)) {
     if (!silent) showMessage('Valassz csapatot es esemenyt.', 'warning');
     return;
   }
@@ -10094,7 +10215,7 @@ async function loadAdminEmailPreview({ silent = false } = {}) {
       method: 'POST',
       body: JSON.stringify({
         template: state.adminEmailTemplate || 'event_created',
-        eventId: state.adminEmailEventId
+        eventId: selectedTemplate?.requiresEvent === false ? '' : state.adminEmailEventId
       })
     });
     state.adminEmailPreview = result;
@@ -10113,7 +10234,8 @@ async function loadAdminEmailPreview({ silent = false } = {}) {
 }
 
 async function sendAdminEmail() {
-  if (!state.currentTeamId || !state.adminEmailEventId) {
+  const selectedTemplate = getSelectedAdminEmailTemplate();
+  if (!state.currentTeamId || (selectedTemplate?.requiresEvent !== false && !state.adminEmailEventId)) {
     showMessage('Valassz csapatot es esemenyt.', 'warning');
     return;
   }
@@ -10127,7 +10249,7 @@ async function sendAdminEmail() {
       method: 'POST',
       body: JSON.stringify({
         template: state.adminEmailTemplate || 'event_created',
-        eventId: state.adminEmailEventId
+        eventId: selectedTemplate?.requiresEvent === false ? '' : state.adminEmailEventId
       })
     });
     const message = `Email kikuldes lefutott: ${result.sentCount || 0} elkuldve, ${result.skippedCount || 0} kihagyva, ${result.failedCount || 0} hiba.`;
@@ -10161,14 +10283,37 @@ function getEmailReasonLabel(reason) {
   return EMAIL_REASON_LABELS[String(reason || '')] || String(reason || '-');
 }
 
+function getEmailActionLabel(actionType) {
+  return EMAIL_ACTION_LABELS[String(actionType || '')] || String(actionType || '-');
+}
+
 function renderEmailStatusBadge(status) {
   const normalized = String(status || '');
   const badgeClass =
-    normalized === 'sent' ? 'badge-success' :
-    normalized === 'failed' ? 'badge-danger' :
+    ['sent', 'delivered'].includes(normalized) ? 'badge-success' :
+    ['failed', 'bounced', 'complained', 'rejected'].includes(normalized) ? 'badge-danger' :
     normalized === 'skipped' ? 'badge-warning' :
     'badge-muted';
   return `<span class="badge ${badgeClass}">${escapeHtml(getEmailStatusLabel(normalized))}</span>`;
+}
+
+function renderEmailActionSummary(recipient) {
+  if (!recipient?.action_type) {
+    return '<div class="small muted top-space">Interakcio: meg nincs</div>';
+  }
+
+  return `
+    <div class="small top-space">
+      Interakcio:
+      <strong>${escapeHtml(getEmailActionLabel(recipient.action_type))}</strong>
+      ${recipient.action_acted_at ? ` · ${escapeHtml(formatDateTime(recipient.action_acted_at))}` : ''}
+    </div>
+    ${
+      recipient.action_status || recipient.action_message
+        ? `<div class="small muted top-space">${escapeHtml([recipient.action_status, recipient.action_message].filter(Boolean).join(' · '))}</div>`
+        : ''
+    }
+  `;
 }
 
 function renderAdminEmailCenterSchedules(schedules = []) {
@@ -10223,6 +10368,7 @@ function renderAdminEmailCenterLogList(logs = []) {
                 <span class="badge badge-warning">${escapeHtml(String(log.skipped_count || 0))} kihagyva</span>
                 <span class="badge badge-danger">${escapeHtml(String(log.failed_count || 0))} hiba</span>
                 <span class="badge badge-muted">${escapeHtml(String(log.total_count || 0))} osszes</span>
+                ${Number(log.action_count || 0) > 0 ? `<span class="badge badge-muted">${escapeHtml(String(log.action_count || 0))} interakcio</span>` : ''}
               </div>
             </div>
           </button>
@@ -10262,6 +10408,7 @@ function renderAdminEmailCenterRecipients() {
               <div class="small muted top-space">${escapeHtml(recipient.recipient_email || '-')}</div>
               ${recipient.reason ? `<div class="small muted top-space">Ok: ${escapeHtml(getEmailReasonLabel(recipient.reason))}</div>` : ''}
               ${recipient.error_message ? `<div class="small text-danger top-space">Hiba: ${escapeHtml(recipient.error_message)}</div>` : ''}
+              ${renderEmailActionSummary(recipient)}
             </div>
             <div class="text-right">
               ${renderEmailStatusBadge(recipient.status)}
@@ -12822,6 +12969,9 @@ async function loadTeam(teamId) {
     state.teamRole = currentMember?.role || null;
     state.teamSkillSettings = null;
     state.adminEmailEventId = '';
+    state.adminEmailTemplates = [];
+    state.adminEmailTemplatesLoading = false;
+    state.adminEmailTemplatesLoaded = false;
     state.adminEmailPreview = null;
     state.adminEmailMessage = null;
     state.adminEmailLoading = false;

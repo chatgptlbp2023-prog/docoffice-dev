@@ -39,7 +39,11 @@ describe('Admin manual email send', () => {
   }
 
   beforeAll(async () => {
-    for (const fileName of ['2026-06-29_email_delivery_logs.sql', '2026-06-29_email_delivery_batch_id.sql']) {
+    for (const fileName of [
+      '2026-04-03_event_team_draw_status_machine.sql',
+      '2026-06-29_email_delivery_logs.sql',
+      '2026-06-29_email_delivery_batch_id.sql'
+    ]) {
       const migrationSql = fs.readFileSync(
         path.join(__dirname, '..', 'db', 'migrations', fileName),
         'utf8'
@@ -95,7 +99,8 @@ describe('Admin manual email send', () => {
     adminId,
     title = 'Manual email meccs',
     status = 'published',
-    notifyTeamOnCreate = true
+    notifyTeamOnCreate = true,
+    notificationPreferences = null
   }) {
     const eventId = randomUUID();
     created.events.push(eventId);
@@ -121,7 +126,7 @@ describe('Admin manual email send', () => {
       insert into event_settings (id, event_id, notification_preferences)
       values ($1, $2, $3::jsonb)
       `,
-      [randomUUID(), eventId, JSON.stringify({ notifyTeamOnCreate })]
+      [randomUUID(), eventId, JSON.stringify(notificationPreferences || { notifyTeamOnCreate })]
     );
 
     return eventId;
@@ -136,6 +141,8 @@ describe('Admin manual email send', () => {
   afterEach(async () => {
     if (created.events.length > 0) {
       await pool.query(`delete from email_delivery_logs where event_id = any($1::uuid[])`, [created.events]);
+      await pool.query(`delete from event_team_draws where event_id = any($1::uuid[])`, [created.events]);
+      await pool.query(`delete from event_registrations where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from event_settings where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from events where id = any($1::uuid[])`, [created.events]);
     }
@@ -196,12 +203,39 @@ describe('Admin manual email send', () => {
     const eventId = await createEvent({ teamId, adminId });
     const token = await login(adminEmail);
 
+    const templatesRes = await request(app)
+      .get(`/api/teams/${teamId}/admin-email/templates`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(templatesRes.status).toBe(200);
+    const templateKeys = templatesRes.body.templates.map(item => item.key);
+    expect(templateKeys).toEqual(expect.arrayContaining([
+      'event_created',
+      'event_created_scheduled',
+      'new_member_event_catchup',
+      'team_draw_published',
+      'event_updated',
+      'event_cancelled',
+      'weather_alert',
+      'team_break_reminder'
+    ]));
+    expect(templateKeys).not.toContain('capacity_full');
+    expect(templateKeys).not.toContain('new_registration');
+
     const previewRes = await request(app)
       .post(`/api/teams/${teamId}/admin-email/preview`)
       .set('Authorization', `Bearer ${token}`)
       .send({ template: 'event_created', eventId });
 
     expect(previewRes.status).toBe(200);
+    expect(previewRes.body.templateLabel).toBe('Uj esemeny');
+    expect(previewRes.body.description).toBeTruthy();
+    expect(previewRes.body.recipientsDescription).toBeTruthy();
+    expect(previewRes.body.triggerDescription).toBeTruthy();
+    expect(previewRes.body.contentDescription).toBeTruthy();
+    expect(previewRes.body.sendability.sendable).toBe(true);
+    expect(previewRes.body.expectedRecipientCount).toBe(2);
+    expect(previewRes.body.excludedRecipientCount).toBe(2);
     expect(previewRes.body.recipientSummary.recipientCount).toBe(2);
     expect(previewRes.body.recipientSummary.excludedBreakCount).toBe(1);
     expect(previewRes.body.recipientSummary.excludedPassiveCount).toBe(1);
@@ -218,6 +252,20 @@ describe('Admin manual email send', () => {
     expect(recipients).toEqual([adminEmail, memberEmail].sort());
     expect(recipients).not.toContain(breakEmail);
     expect(recipients).not.toContain(passiveEmail);
+
+    const auditResult = await pool.query(
+      `
+      select recipient_email, status, metadata
+      from email_delivery_logs
+      where event_id = $1
+        and template = 'event_created'
+      order by recipient_email asc
+      `,
+      [eventId]
+    );
+    expect(auditResult.rows).toHaveLength(4);
+    expect(auditResult.rows.filter(row => row.status === 'sent')).toHaveLength(2);
+    expect(auditResult.rows.every(row => row.metadata.manualResend === true)).toBe(true);
   });
 
   test('normal member cannot use manual admin email endpoint', async () => {
@@ -237,6 +285,114 @@ describe('Admin manual email send', () => {
 
     expect(res.status).toBe(403);
     expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  test('manual admin email rejects non-resendable and non-sendable templates', async () => {
+    const adminEmail = `admin_template_reject_${randomUUID()}@example.com`;
+    const adminId = await createUser({ name: 'Admin', email: adminEmail });
+    const teamId = await createTeam({ adminId });
+    await addMembership({ teamId, userId: adminId, role: 'team_admin' });
+    const eventId = await createEvent({ teamId, adminId });
+    const token = await login(adminEmail);
+
+    const nonResendPreview = await request(app)
+      .post(`/api/teams/${teamId}/admin-email/preview`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ template: 'capacity_full', eventId });
+    expect(nonResendPreview.status).toBe(400);
+
+    const eventUpdatedPreview = await request(app)
+      .post(`/api/teams/${teamId}/admin-email/preview`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ template: 'event_updated', eventId });
+    expect(eventUpdatedPreview.status).toBe(200);
+    expect(eventUpdatedPreview.body.sendability.sendable).toBe(false);
+    expect(eventUpdatedPreview.body.sendability.reasons.join(' ')).toContain('korabbi');
+
+    const eventUpdatedSend = await request(app)
+      .post(`/api/teams/${teamId}/admin-email/send`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ template: 'event_updated', eventId });
+    expect(eventUpdatedSend.status).toBe(400);
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  test('team admin can manually resend published team draw email with audit metadata', async () => {
+    const runId = randomUUID();
+    const adminEmail = `draw_admin_${runId}@example.com`;
+    const memberEmail = `draw_member_${runId}@example.com`;
+    const adminId = await createUser({ name: 'Admin', email: adminEmail });
+    const memberId = await createUser({ name: 'Member', email: memberEmail });
+    const teamId = await createTeam({ adminId });
+    await addMembership({ teamId, userId: adminId, role: 'team_admin' });
+    await addMembership({ teamId, userId: memberId });
+    const eventId = await createEvent({
+      teamId,
+      adminId,
+      notificationPreferences: {
+        notifyTeamOnCreate: true,
+        notifyTeamDrawPublished: true
+      }
+    });
+
+    await pool.query(
+      `
+      insert into event_registrations (
+        id, event_id, team_id, user_id, registration_status, registered_at, created_at, updated_at
+      )
+      values
+        ($1, $3, $4, $5, 'going', now(), now(), now()),
+        ($2, $3, $4, $6, 'waiting_list', now(), now(), now())
+      `,
+      [randomUUID(), randomUUID(), eventId, teamId, adminId, memberId]
+    );
+
+    await pool.query(
+      `
+      insert into event_team_draws (
+        event_id, team_a_json, team_b_json, totals_json, settings_json,
+        within_tolerance, status, published_at, created_by_user_id, created_at, updated_at
+      )
+      values (
+        $1, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, '{}'::jsonb,
+        true, 'published', now(), $2, now(), now()
+      )
+      `,
+      [eventId, adminId]
+    );
+
+    const token = await login(adminEmail);
+    const previewRes = await request(app)
+      .post(`/api/teams/${teamId}/admin-email/preview`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ template: 'team_draw_published', eventId });
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.sendability.sendable).toBe(true);
+    expect(previewRes.body.expectedRecipientCount).toBe(2);
+
+    const sendRes = await request(app)
+      .post(`/api/teams/${teamId}/admin-email/send`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ template: 'team_draw_published', eventId });
+
+    expect(sendRes.status).toBe(200);
+    expect(sendRes.body.sentCount).toBe(2);
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+
+    const auditResult = await pool.query(
+      `
+      select recipient_email, status, metadata
+      from email_delivery_logs
+      where event_id = $1
+        and template = 'team_draw_published'
+      order by recipient_email asc
+      `,
+      [eventId]
+    );
+    expect(auditResult.rows).toHaveLength(2);
+    expect(auditResult.rows.every(row => row.status === 'sent')).toBe(true);
+    expect(auditResult.rows.every(row => row.metadata.manualResend === true)).toBe(true);
   });
 
   test('manual admin email rejects foreign, draft and notification-disabled events', async () => {
