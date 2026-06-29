@@ -122,6 +122,8 @@ describe('Event email actions E2E', () => {
     expect(response.status).toBe(200);
     expect(response.text).toContain('Jelentkezés rögzítve');
     expect(response.text).toContain('Sikeres jelentkezes');
+    expect(response.text).toContain('Lap bezárása');
+    expect(response.text).not.toContain('setTimeout');
 
     const registrationResult = await pool.query(
       `

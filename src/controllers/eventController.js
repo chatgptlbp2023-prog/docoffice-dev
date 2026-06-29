@@ -58,19 +58,32 @@ function renderEmailActionResultPage({ title, message, tone = 'success' }) {
             color: #475569;
             font-size: 14px;
           }
+          .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+          }
+          button {
+            border: 0;
+            border-radius: 999px;
+            background: ${accent};
+            color: #ffffff;
+            cursor: pointer;
+            font-weight: 700;
+            padding: 10px 16px;
+          }
         </style>
       </head>
       <body>
         <div class="card">
           <h1>${escapeHtml(title)}</h1>
           <p>${escapeHtml(message)}</p>
-          <p class="muted">Ha ez a lap nem záródik be magától, nyugodtan becsukhatod.</p>
+          <p class="muted">A művelet eredménye rögzítve lett. Ezt a lapot nyugodtan bezárhatod.</p>
+          <div class="actions">
+            <button type="button" onclick="window.close()">Lap bezárása</button>
+          </div>
         </div>
-        <script>
-          setTimeout(function () {
-            window.close();
-          }, 120);
-        </script>
       </body>
     </html>
   `;

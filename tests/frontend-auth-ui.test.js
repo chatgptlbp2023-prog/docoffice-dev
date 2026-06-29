@@ -1996,6 +1996,7 @@ describe('Frontend auth UI smoke tests', () => {
         { id: 'event-1', title: 'Keddi foci', status: 'published', start_at: '2026-07-01T18:00:00.000Z', location_name: 'Teszt palya' },
         { id: 'event-2', title: 'Piszkozat', status: 'draft', start_at: '2026-07-08T18:00:00.000Z', location_name: 'Teszt palya' }
       ];
+      state.adminEmailEventId = 'torolt-esemeny';
       applyRoleAwareUi();
     `);
 
@@ -2012,6 +2013,13 @@ describe('Frontend auth UI smoke tests', () => {
     expect(emailPanel.textContent).toContain('12 cimzett');
     expect(emailPanel.textContent).toContain('Passziv kizart');
 
+    const previewCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/admin-email/preview'));
+    expect(previewCall).toBeTruthy();
+    expect(JSON.parse(previewCall[1].body)).toEqual({
+      template: 'event_created',
+      eventId: 'event-1'
+    });
+
     emailPanel.querySelector('[data-admin-email-action="send"]').dispatchEvent(
       new window.MouseEvent('click', { bubbles: true })
     );
@@ -2024,6 +2032,115 @@ describe('Frontend auth UI smoke tests', () => {
       eventId: 'event-1'
     });
     expect(emailPanel.textContent).toContain('12 elkuldve');
+  });
+
+  test('az admin Email központ listázza az ütemezéseket, naplókat és címzett részleteket', async () => {
+    const { window, document, fetchMock } = await bootFrontend();
+
+    fetchMock.mockImplementation(async (url) => {
+      const target = String(url);
+      if (target.includes('/email-center/schedules')) {
+        return createJsonResponse({
+          ok: true,
+          schedules: [{
+            id: 'schedule-1',
+            template: 'event_created',
+            event_id: 'event-1',
+            event_title: 'Keddi foci',
+            scheduled_at: '2026-07-01T16:00:00.000Z',
+            status: 'pending',
+            expected_recipient_count: 12
+          }]
+        });
+      }
+      if (target.includes('/email-center/logs/batch-1/recipients')) {
+        return createJsonResponse({
+          ok: true,
+          groupId: 'batch-1',
+          recipients: [
+            {
+              recipient_email: 'anna@example.com',
+              recipient_name: 'Anna',
+              status: 'sent',
+              provider_message_id: 'provider-1',
+              updated_at: '2026-06-30T10:01:00.000Z'
+            },
+            {
+              recipient_email: 'bela@example.com',
+              recipient_name: 'Bela',
+              status: 'skipped',
+              reason: 'on_break',
+              updated_at: '2026-06-30T10:01:00.000Z'
+            },
+            {
+              recipient_email: 'cili@example.com',
+              recipient_name: 'Cili',
+              status: 'failed',
+              error_message: 'SMTP timeout',
+              updated_at: '2026-06-30T10:01:00.000Z'
+            }
+          ]
+        });
+      }
+      if (target.includes('/email-center/logs')) {
+        return createJsonResponse({
+          ok: true,
+          logs: [{
+            group_id: 'batch-1',
+            template: 'event_created',
+            event_id: 'event-1',
+            event_title: 'Keddi foci',
+            first_created_at: '2026-06-30T10:00:00.000Z',
+            last_updated_at: '2026-06-30T10:01:00.000Z',
+            sent_count: 10,
+            skipped_count: 1,
+            failed_count: 1,
+            total_count: 12
+          }]
+        });
+      }
+      return createJsonResponse({});
+    });
+
+    window.setAuth('demo-admin-token', {
+      id: 'admin-user',
+      name: 'Admin',
+      email: 'admin@example.com',
+      can_create_team: true
+    });
+    window.switchView('adminView');
+    window.eval(`
+      state.currentTeam = { id: 'team-1', name: 'Teszt FC', cash_module_enabled: true };
+      state.currentTeamId = 'team-1';
+      state.teamRole = 'team_admin';
+      applyRoleAwareUi();
+    `);
+
+    const emailCenterButton = document.querySelector('[data-admin-workspace="emailCenter"]');
+    expect(emailCenterButton).toBeTruthy();
+
+    emailCenterButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await flushMicrotasks();
+
+    const emailCenterPanel = document.querySelector('[data-admin-workspace-panel="emailCenter"]');
+    expect(emailCenterPanel.hidden).toBe(false);
+    expect(emailCenterPanel.textContent).toContain('Email kozpont');
+    expect(emailCenterPanel.textContent).toContain('Keddi foci');
+    expect(emailCenterPanel.textContent).toContain('12 varhato cimzett');
+    expect(emailCenterPanel.textContent).toContain('10 elkuldve');
+    expect(emailCenterPanel.textContent).toContain('1 kihagyva');
+    expect(emailCenterPanel.textContent).toContain('1 hiba');
+
+    emailCenterPanel.querySelector('[data-email-center-group="batch-1"]').dispatchEvent(
+      new window.MouseEvent('click', { bubbles: true })
+    );
+    await flushMicrotasks();
+
+    expect(emailCenterPanel.textContent).toContain('anna@example.com');
+    expect(emailCenterPanel.textContent).toContain('bela@example.com');
+    expect(emailCenterPanel.textContent).toContain('szabin van');
+    expect(emailCenterPanel.textContent).toContain('SMTP timeout');
+    expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/email-center/logs/batch-1/recipients'))).toBe(true);
   });
 
   test('a csapatkapitány eléri az elérhető tornák szűrőit és listáját', async () => {

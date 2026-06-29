@@ -2,6 +2,7 @@ const teamService = require('../services/teamService');
 const teamRulesService = require('../services/teamRulesService');
 const teamBreakActionService = require('../services/teamBreakActionService');
 const adminEmailService = require('../services/adminEmailService');
+const emailCenterService = require('../services/emailCenterService');
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -382,6 +383,71 @@ async function sendAdminEmail(req, res) {
   }
 }
 
+async function listEmailCenterSchedules(req, res) {
+  try {
+    const result = await emailCenterService.listEmailCenterSchedules({
+      teamId: req.params.teamId
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Email kozpont utemezes hiba:',
+      'Szerverhiba email utemezesek lekerdezese kozben.'
+    );
+  }
+}
+
+async function listEmailCenterLogs(req, res) {
+  try {
+    const result = await emailCenterService.listEmailCenterLogs({
+      teamId: req.params.teamId,
+      limit: req.query.limit,
+      template: req.query.template,
+      eventId: req.query.eventId,
+      status: req.query.status
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Email kozpont naplo hiba:',
+      'Szerverhiba email naplo lekerdezese kozben.'
+    );
+  }
+}
+
+async function listEmailCenterLogRecipients(req, res) {
+  try {
+    const result = await emailCenterService.listEmailCenterLogRecipients({
+      teamId: req.params.teamId,
+      groupId: req.params.groupId
+    });
+
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleServiceError(
+      res,
+      error,
+      'Email kozpont cimzett reszletek hiba:',
+      'Szerverhiba email cimzett reszletek lekerdezese kozben.'
+    );
+  }
+}
+
 async function handleTeamBreakEmailAction(req, res) {
   try {
     const result = await teamBreakActionService.executeTeamBreakActionToken(req.params.token);
@@ -430,5 +496,8 @@ module.exports = {
   updateTeamMemberActivityStatus,
   previewAdminEmailSend,
   sendAdminEmail,
+  listEmailCenterSchedules,
+  listEmailCenterLogs,
+  listEmailCenterLogRecipients,
   handleTeamBreakEmailAction
 };

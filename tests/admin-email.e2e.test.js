@@ -4,6 +4,8 @@ jest.mock('../src/services/emailService', () => ({
 
 const request = require('supertest');
 const bcrypt = require('bcryptjs');
+const fs = require('fs');
+const path = require('path');
 const { randomUUID } = require('crypto');
 
 const app = require('../src/index');
@@ -35,6 +37,16 @@ describe('Admin manual email send', () => {
 
     return userId;
   }
+
+  beforeAll(async () => {
+    for (const fileName of ['2026-06-29_email_delivery_logs.sql', '2026-06-29_email_delivery_batch_id.sql']) {
+      const migrationSql = fs.readFileSync(
+        path.join(__dirname, '..', 'db', 'migrations', fileName),
+        'utf8'
+      );
+      await pool.query(migrationSql);
+    }
+  });
 
   async function login(email) {
     const res = await request(app)
@@ -123,16 +135,19 @@ describe('Admin manual email send', () => {
 
   afterEach(async () => {
     if (created.events.length > 0) {
+      await pool.query(`delete from email_delivery_logs where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from event_settings where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from events where id = any($1::uuid[])`, [created.events]);
     }
 
     if (created.teams.length > 0) {
+      await pool.query(`delete from email_delivery_logs where team_id = any($1::uuid[])`, [created.teams]);
       await pool.query(`delete from team_members where team_id = any($1::uuid[])`, [created.teams]);
       await pool.query(`delete from teams where id = any($1::uuid[])`, [created.teams]);
     }
 
     if (created.users.length > 0) {
+      await pool.query(`delete from email_delivery_logs where recipient_user_id = any($1::uuid[])`, [created.users]);
       await pool.query(`delete from users where id = any($1::uuid[])`, [created.users]);
     }
 
@@ -257,4 +272,3 @@ describe('Admin manual email send', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 });
-

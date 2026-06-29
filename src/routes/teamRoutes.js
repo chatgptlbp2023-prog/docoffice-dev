@@ -15,6 +15,9 @@ const {
   updateTeamMemberActivityStatus,
   previewAdminEmailSend,
   sendAdminEmail,
+  listEmailCenterSchedules,
+  listEmailCenterLogs,
+  listEmailCenterLogRecipients,
   handleTeamBreakEmailAction
 } = require('../controllers/teamController');
 
@@ -113,6 +116,27 @@ router.post(
   isCaptainOrViceCaptain,
   validateAdminEmailSend,
   sendAdminEmail
+);
+
+router.get(
+  '/teams/:teamId/email-center/schedules',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  listEmailCenterSchedules
+);
+
+router.get(
+  '/teams/:teamId/email-center/logs',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  listEmailCenterLogs
+);
+
+router.get(
+  '/teams/:teamId/email-center/logs/:groupId/recipients',
+  requireAuth,
+  isCaptainOrViceCaptain,
+  listEmailCenterLogRecipients
 );
 
 router.post(

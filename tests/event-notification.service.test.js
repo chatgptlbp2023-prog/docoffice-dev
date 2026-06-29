@@ -3,6 +3,8 @@ jest.mock('../src/services/emailService', () => ({
 }));
 
 const { randomUUID } = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const pool = require('../src/config/db');
 const { sendEmail } = require('../src/services/emailService');
 const eventNotificationService = require('../src/services/eventNotificationService');
@@ -14,6 +16,16 @@ describe('Event notification service', () => {
     teams: [],
     events: []
   };
+
+  beforeAll(async () => {
+    for (const fileName of ['2026-06-29_email_delivery_logs.sql', '2026-06-29_email_delivery_batch_id.sql']) {
+      const migrationSql = fs.readFileSync(
+        path.join(__dirname, '..', 'db', 'migrations', fileName),
+        'utf8'
+      );
+      await pool.query(migrationSql);
+    }
+  });
 
   async function createUser(name, email) {
     const userId = randomUUID();
@@ -42,6 +54,29 @@ describe('Event notification service', () => {
     );
   }
 
+  async function getEventEmailLogs(eventId) {
+    const result = await pool.query(
+      `
+      select
+        recipient_user_id,
+        recipient_email,
+        template,
+        status,
+        reason,
+        provider_message_id,
+        error_message,
+        metadata
+      from email_delivery_logs
+      where event_id = $1
+        and template = 'event_created'
+      order by recipient_email asc, created_at asc
+      `,
+      [eventId]
+    );
+
+    return result.rows;
+  }
+
   beforeEach(() => {
     sendEmail.mockReset();
     sendEmail.mockResolvedValue({ status: 'sent', messageId: 'msg-1' });
@@ -50,6 +85,7 @@ describe('Event notification service', () => {
 
   afterEach(async () => {
     if (created.events.length > 0) {
+      await pool.query(`delete from email_delivery_logs where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from event_registrations where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from event_settings where event_id = any($1::uuid[])`, [created.events]);
       await pool.query(`delete from events where id = any($1::uuid[])`, [created.events]);
@@ -57,12 +93,14 @@ describe('Event notification service', () => {
     }
 
     if (created.teams.length > 0) {
+      await pool.query(`delete from email_delivery_logs where team_id = any($1::uuid[])`, [created.teams]);
       await pool.query(`delete from team_invites where team_id = any($1::uuid[])`, [created.teams]);
       await pool.query(`delete from team_members where team_id = any($1::uuid[])`, [created.teams]);
       await pool.query(`delete from teams where id = any($1::uuid[])`, [created.teams]);
     }
 
     if (created.users.length > 0) {
+      await pool.query(`delete from email_delivery_logs where recipient_user_id = any($1::uuid[])`, [created.users]);
       await pool.query(`delete from users where id = any($1::uuid[])`, [created.users]);
     }
 
@@ -148,6 +186,11 @@ describe('Event notification service', () => {
     expect(payload.text).toContain('Belepes a feluletre: https://app.example.com/');
     expect(payload.text).toContain('Jelentkezem: https://app.example.com/api/event-email-actions/');
     expect(payload.text).toContain('Szabin vagyok (1 hét): https://app.example.com/api/event-email-actions/');
+    const auditLogs = await getEventEmailLogs(eventId);
+    expect(auditLogs).toHaveLength(2);
+    expect(auditLogs.map(row => row.status)).toEqual(['sent', 'sent']);
+    expect(auditLogs.map(row => row.recipient_email).sort()).toEqual(recipients);
+    expect(auditLogs.every(row => row.provider_message_id === 'msg-1')).toBe(true);
   });
 
   test('uj esemeny email nem megy ki szabadsagon levo csapattagnak', async () => {
@@ -214,12 +257,31 @@ describe('Event notification service', () => {
     });
 
     expect(result.sentCount).toBe(2);
+    expect(result.skippedCount).toBe(1);
     const recipients = sendEmail.mock.calls.map(call => call[0].to).sort();
     expect(recipients).toEqual([
       `captain_break_${runId}@example.com`,
       `member_break_${runId}@example.com`
     ].sort());
     expect(recipients).not.toContain(`break_member_${runId}@example.com`);
+
+    const auditLogs = await getEventEmailLogs(eventId);
+    expect(auditLogs).toHaveLength(3);
+    expect(auditLogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recipient_email: `break_member_${runId}@example.com`,
+        status: 'skipped',
+        reason: 'on_break'
+      }),
+      expect.objectContaining({
+        recipient_email: `captain_break_${runId}@example.com`,
+        status: 'sent'
+      }),
+      expect.objectContaining({
+        recipient_email: `member_break_${runId}@example.com`,
+        status: 'sent'
+      })
+    ]));
   });
 
   test('uj esemeny email nem megy ki passziv csapattagnak', async () => {
@@ -285,12 +347,31 @@ describe('Event notification service', () => {
     });
 
     expect(result.sentCount).toBe(2);
+    expect(result.skippedCount).toBe(1);
     const recipients = sendEmail.mock.calls.map(call => call[0].to).sort();
     expect(recipients).toEqual([
       `captain_passive_${runId}@example.com`,
       `member_passive_${runId}@example.com`
     ].sort());
     expect(recipients).not.toContain(`passive_member_${runId}@example.com`);
+
+    const auditLogs = await getEventEmailLogs(eventId);
+    expect(auditLogs).toHaveLength(3);
+    expect(auditLogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recipient_email: `passive_member_${runId}@example.com`,
+        status: 'skipped',
+        reason: 'passive'
+      }),
+      expect.objectContaining({
+        recipient_email: `captain_passive_${runId}@example.com`,
+        status: 'sent'
+      }),
+      expect.objectContaining({
+        recipient_email: `member_passive_${runId}@example.com`,
+        status: 'sent'
+      })
+    ]));
   });
 
   test('uj esemeny email draft vagy kikapcsolt notifyTeamOnCreate mellett nem megy ki', async () => {
@@ -350,6 +431,97 @@ describe('Event notification service', () => {
     expect(draftResult).toBeNull();
     expect(disabledResult).toBeNull();
     expect(sendEmail).not.toHaveBeenCalled();
+
+    const draftSentLogs = await pool.query(
+      `
+      select count(*)::int as count
+      from email_delivery_logs
+      where event_id = $1
+        and template = 'event_created'
+        and status = 'sent'
+      `,
+      [draftEventId]
+    );
+    const disabledSentLogs = await pool.query(
+      `
+      select count(*)::int as count
+      from email_delivery_logs
+      where event_id = $1
+        and template = 'event_created'
+        and status = 'sent'
+      `,
+      [disabledEventId]
+    );
+
+    expect(draftSentLogs.rows[0].count).toBe(0);
+    expect(disabledSentLogs.rows[0].count).toBe(0);
+    expect(await getEventEmailLogs(draftEventId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'skipped', reason: 'event_not_published' })
+    ]));
+    expect(await getEventEmailLogs(disabledEventId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'skipped', reason: 'notification_disabled' })
+    ]));
+  });
+
+  test('uj esemeny email kuldesi hiba failed audit logot keszit', async () => {
+    const runId = randomUUID();
+    const adminId = await createUser('Captain', `captain_failed_${runId}@example.com`);
+    const teamId = randomUUID();
+    const eventId = randomUUID();
+    created.teams.push(teamId);
+    created.events.push(eventId);
+
+    sendEmail.mockRejectedValueOnce(new Error('SMTP timeout'));
+
+    await pool.query(
+      `
+      insert into teams (id, name, created_by_user_id, status, created_at, updated_at)
+      values ($1, $2, $3, 'active', now(), now())
+      `,
+      [teamId, 'Failed Email FC', adminId]
+    );
+
+    await addMembership(teamId, adminId, 'team_admin');
+
+    await pool.query(
+      `
+      insert into events (
+        id, team_id, created_by_user_id, title, description, start_at, location_name, location_address, min_players, max_players, status, published_at, created_at, updated_at
+      )
+      values (
+        $1, $2, $3, 'Hibas email meccs', 'Email hiba teszt', now() + interval '2 days', 'Hiba palya', '1111 Budapest, Hiba utca 1.', 5, 12, 'published', now(), now(), now()
+      )
+      `,
+      [eventId, teamId, adminId]
+    );
+
+    await pool.query(
+      `
+      insert into event_settings (
+        id, event_id, notification_preferences
+      )
+      values (
+        $1, $2, '{"notifyTeamOnCreate":true}'::jsonb
+      )
+      `,
+      [randomUUID(), eventId]
+    );
+
+    const result = await eventNotificationService.notifyEventCreated({
+      eventId,
+      actorUserId: adminId
+    });
+
+    expect(result.sentCount).toBe(0);
+    expect(result.failedCount).toBe(1);
+
+    const auditLogs = await getEventEmailLogs(eventId);
+    expect(auditLogs).toHaveLength(1);
+    expect(auditLogs[0]).toEqual(expect.objectContaining({
+      recipient_email: `captain_failed_${runId}@example.com`,
+      status: 'failed',
+      error_message: 'SMTP timeout'
+    }));
   });
 
   test('ujonnan csatlakozo tag catch-up emailt kap a kozelgo esemenyekrol', async () => {

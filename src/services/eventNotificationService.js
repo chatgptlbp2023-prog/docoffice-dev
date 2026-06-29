@@ -1,5 +1,7 @@
+const { randomUUID } = require('crypto');
 const { pool } = require('./dbService');
 const { sendEmail } = require('./emailService');
+const emailAuditLogService = require('./emailAuditLogService');
 const { normalizeNotificationPreferences } = require('../utils/notificationPreferences');
 const { buildEventPaymentSummary } = require('../utils/eventPricing');
 const {
@@ -20,6 +22,7 @@ const ACTIVE_EVENT_REGISTRATION_STATUSES = ['going', 'waiting_list', 'waiting_li
 const ALL_EVENT_NOTIFICATION_STATUSES = ['going', 'waiting_list', 'waiting_list_rank', 'cancelled'];
 const EVENT_TIMEZONE = 'Europe/Budapest';
 const DEFAULT_NEW_MEMBER_CATCHUP_EVENT_LIMIT = 5;
+const EVENT_CREATED_EMAIL_TEMPLATE = 'event_created';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -50,6 +53,15 @@ function uniqueRecipients(rows = [], { excludeUserIds = [] } = {}) {
   }
 
   return recipients;
+}
+
+function normalizeRecipientEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function buildMissingEmailAuditAddress(member) {
+  const userId = String(member?.user_id || '').trim();
+  return userId ? `missing:${userId}` : 'missing:unknown';
 }
 
 function formatEventDateTime(value) {
@@ -135,7 +147,6 @@ async function getEventNotificationContext(eventId) {
     join users u on u.id = tm.user_id
     where tm.team_id = $1
       and tm.membership_status = 'active'
-      and nullif(trim(u.email), '') is not null
     `,
     [event.team_id]
   );
@@ -278,6 +289,262 @@ function isTeamMemberOnBreak(member, referenceDate = new Date()) {
 
 function isTeamMemberPassive(member) {
   return Boolean(member?.passive_since);
+}
+
+function buildEventCreatedRecipient(member) {
+  return {
+    userId: String(member?.user_id || ''),
+    name: member?.name || '',
+    email: normalizeRecipientEmail(member?.email)
+  };
+}
+
+function getEventCreatedSkipReason(member, referenceDate = new Date()) {
+  if (isTeamMemberPassive(member)) return 'passive';
+  if (isTeamMemberOnBreak(member, referenceDate)) return 'on_break';
+  return null;
+}
+
+function buildSkippedAuditRecipient(member, reason) {
+  const email = normalizeRecipientEmail(member?.email);
+  return {
+    userId: member?.user_id || null,
+    name: member?.name || '',
+    email: email || buildMissingEmailAuditAddress(member),
+    reason,
+    hasRealEmail: Boolean(email)
+  };
+}
+
+function buildEventCreatedAudience(context, {
+  forcedSkipReason = null,
+  referenceDate = new Date()
+} = {}) {
+  const emailGroups = new Map();
+  const recipients = [];
+  const skipped = [];
+
+  for (const member of context?.teamMembers || []) {
+    const email = normalizeRecipientEmail(member?.email);
+
+    if (!email) {
+      skipped.push(buildSkippedAuditRecipient(member, 'missing_email'));
+      continue;
+    }
+
+    if (!emailGroups.has(email)) {
+      emailGroups.set(email, []);
+    }
+    emailGroups.get(email).push(member);
+  }
+
+  for (const members of emailGroups.values()) {
+    if (forcedSkipReason) {
+      skipped.push(buildSkippedAuditRecipient(members[0], forcedSkipReason));
+      continue;
+    }
+
+    const sendableMember = members.find(member => !getEventCreatedSkipReason(member, referenceDate));
+    if (sendableMember) {
+      recipients.push(buildEventCreatedRecipient(sendableMember));
+      continue;
+    }
+
+    const firstMember = members[0];
+    skipped.push(buildSkippedAuditRecipient(
+      firstMember,
+      getEventCreatedSkipReason(firstMember, referenceDate) || 'no_recipients'
+    ));
+  }
+
+  return {
+    recipients,
+    skipped
+  };
+}
+
+function buildEventCreatedAuditBase(context) {
+  return {
+    teamId: context?.event?.team_id || null,
+    eventId: context?.event?.id || null,
+    deliveryBatchId: context?.deliveryBatchId || null,
+    template: EVENT_CREATED_EMAIL_TEMPLATE
+  };
+}
+
+async function runEmailAuditSafely(action, label) {
+  try {
+    return await action();
+  } catch (error) {
+    console.error(`Email audit log ${label} hiba:`, error);
+    return null;
+  }
+}
+
+async function createEventCreatedSkippedLogs(context, skippedRecipients = [], extraMetadata = {}) {
+  const deliveries = [];
+  const base = buildEventCreatedAuditBase(context);
+
+  for (const recipient of skippedRecipients) {
+    await runEmailAuditSafely(
+      () => emailAuditLogService.createSkippedEmailLog({
+        ...base,
+        recipientUserId: recipient.userId || null,
+        recipientEmail: recipient.email,
+        reason: recipient.reason,
+        metadata: {
+          flow: EVENT_CREATED_EMAIL_TEMPLATE,
+          eventStatus: context?.event?.status || null,
+          notifyTeamOnCreate: context?.notificationPreferences?.notifyTeamOnCreate === true,
+          hasRealEmail: recipient.hasRealEmail === true,
+          ...extraMetadata
+        }
+      }),
+      `skipped:${EVENT_CREATED_EMAIL_TEMPLATE}:${recipient.reason}`
+    );
+
+    deliveries.push({
+      email: recipient.hasRealEmail ? recipient.email : null,
+      status: 'skipped',
+      reason: recipient.reason
+    });
+  }
+
+  return deliveries;
+}
+
+async function sendEventCreatedEmailsWithAudit(context, recipients, preSkippedDeliveries = []) {
+  const results = [...preSkippedDeliveries];
+  const base = buildEventCreatedAuditBase(context);
+
+  for (const recipient of recipients) {
+    const auditLog = await runEmailAuditSafely(
+      () => emailAuditLogService.createEmailLog({
+        ...base,
+        recipientUserId: recipient.userId || null,
+        recipientEmail: recipient.email,
+        status: 'pending',
+        metadata: {
+          flow: EVENT_CREATED_EMAIL_TEMPLATE,
+          eventStatus: context?.event?.status || null,
+          notifyTeamOnCreate: context?.notificationPreferences?.notifyTeamOnCreate === true
+        }
+      }),
+      `pending:${EVENT_CREATED_EMAIL_TEMPLATE}`
+    );
+
+    try {
+      const payload = buildEventCreatedEmail(context, recipient);
+
+      if (!payload || !payload.subject) {
+        if (auditLog?.id) {
+          await runEmailAuditSafely(
+            () => emailAuditLogService.markEmailLogSkipped({
+              id: auditLog.id,
+              reason: 'missing_payload',
+              metadata: { flow: EVENT_CREATED_EMAIL_TEMPLATE }
+            }),
+            `missing_payload:${EVENT_CREATED_EMAIL_TEMPLATE}`
+          );
+        }
+
+        results.push({
+          email: recipient.email,
+          status: 'skipped',
+          reason: 'missing_payload'
+        });
+        continue;
+      }
+
+      const delivery = await sendEmail({
+        to: recipient.email,
+        subject: payload.subject,
+        text: payload.text,
+        html: payload.html
+      });
+      const rawDeliveryStatus = String(delivery?.status || 'sent');
+      const deliveryStatus = ['sent', 'skipped', 'failed'].includes(rawDeliveryStatus)
+        ? rawDeliveryStatus
+        : 'failed';
+      const normalizedDelivery = {
+        ...(delivery || {}),
+        status: deliveryStatus
+      };
+
+      if (deliveryStatus === 'sent') {
+        if (auditLog?.id) {
+          await runEmailAuditSafely(
+            () => emailAuditLogService.markEmailLogSent({
+              id: auditLog.id,
+              providerMessageId: normalizedDelivery.messageId || null,
+              metadata: {
+                accepted: normalizedDelivery.accepted || [],
+                rejected: normalizedDelivery.rejected || []
+              }
+            }),
+            `sent:${EVENT_CREATED_EMAIL_TEMPLATE}`
+          );
+        }
+      } else if (deliveryStatus === 'skipped') {
+        if (auditLog?.id) {
+          await runEmailAuditSafely(
+            () => emailAuditLogService.markEmailLogSkipped({
+              id: auditLog.id,
+              reason: normalizedDelivery.reason || 'provider_skipped',
+              metadata: { flow: EVENT_CREATED_EMAIL_TEMPLATE }
+            }),
+            `provider_skipped:${EVENT_CREATED_EMAIL_TEMPLATE}`
+          );
+        }
+      } else if (auditLog?.id) {
+        await runEmailAuditSafely(
+          () => emailAuditLogService.markEmailLogFailed({
+            id: auditLog.id,
+            errorMessage: normalizedDelivery.error || normalizedDelivery.reason || 'email_provider_failed',
+            metadata: { flow: EVENT_CREATED_EMAIL_TEMPLATE }
+          }),
+          `provider_failed:${EVENT_CREATED_EMAIL_TEMPLATE}`
+        );
+      }
+
+      results.push({
+        email: recipient.email,
+        ...normalizedDelivery
+      });
+    } catch (error) {
+      console.error(`event_created:${context?.event?.id || 'unknown'} email send error:`, error);
+      if (auditLog?.id) {
+        await runEmailAuditSafely(
+          () => emailAuditLogService.markEmailLogFailed({
+            id: auditLog.id,
+            errorMessage: error.message,
+            metadata: { flow: EVENT_CREATED_EMAIL_TEMPLATE }
+          }),
+          `failed:${EVENT_CREATED_EMAIL_TEMPLATE}`
+        );
+      }
+
+      results.push({
+        email: recipient.email,
+        status: 'failed',
+        reason: 'send_error',
+        error: error.message
+      });
+    }
+  }
+
+  const sentCount = results.filter(item => item.status === 'sent').length;
+  const skippedCount = results.filter(item => item.status === 'skipped').length;
+  const failedCount = results.filter(item => item.status === 'failed').length;
+
+  console.log(`event_created:${context?.event?.id || 'unknown'}: sent=${sentCount} skipped=${skippedCount} failed=${failedCount}`);
+
+  return {
+    sentCount,
+    skippedCount,
+    failedCount,
+    deliveries: results
+  };
 }
 
 function buildActiveRegistrationNames(context) {
@@ -545,17 +812,29 @@ function buildEventCancelledEmail(context) {
 
 async function notifyEventCreated({ eventId, actorUserId = null }) {
   const context = await getEventNotificationContext(eventId);
-  if (!context || context.event.status !== 'published') return null;
-  if (context.notificationPreferences.notifyTeamOnCreate !== true) return null;
-  const recipients = uniqueRecipients(
-    context.teamMembers.filter(member => !isTeamMemberOnBreak(member) && !isTeamMemberPassive(member))
-  );
-  if (!recipients.length) return null;
-  return sendBulkEmails(
-    recipients,
-    recipient => buildEventCreatedEmail(context, recipient),
-    `event_created:${eventId}`
-  );
+  if (!context) return null;
+  context.deliveryBatchId = randomUUID();
+
+  if (context.event.status !== 'published') {
+    const audience = buildEventCreatedAudience(context, { forcedSkipReason: 'event_not_published' });
+    await createEventCreatedSkippedLogs(context, audience.skipped, {
+      actorUserId,
+      eventStatus: context.event.status || null
+    });
+    return null;
+  }
+
+  if (context.notificationPreferences.notifyTeamOnCreate !== true) {
+    const audience = buildEventCreatedAudience(context, { forcedSkipReason: 'notification_disabled' });
+    await createEventCreatedSkippedLogs(context, audience.skipped, { actorUserId });
+    return null;
+  }
+
+  const audience = buildEventCreatedAudience(context);
+  const skippedDeliveries = await createEventCreatedSkippedLogs(context, audience.skipped, { actorUserId });
+  if (!audience.recipients.length) return null;
+
+  return sendEventCreatedEmailsWithAudit(context, audience.recipients, skippedDeliveries);
 }
 
 function mergeEmailSummary(target, source, eventId) {
