@@ -697,7 +697,7 @@ function getGoogleAuthConfig(req, res) {
 }
 
 function getGoogleMapsConfig(req, res) {
-  const apiKey = String(process.env.GOOGLE_MAPS_BROWSER_API_KEY || '').trim();
+  const apiKey = String(process.env.GOOGLE_MAPS_BROWSER_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '').trim();
 
   return res.status(200).json({
     ok: true,

@@ -307,7 +307,7 @@ describe('Event state and edit rules E2E', () => {
       .set('Authorization', `Bearer ${team_adminToken}`)
       .send({
         title: 'Rejthető esemény',
-        startAt: '2026-05-05T18:00:00.000Z',
+        startAt: buildStableFutureIsoDate({ daysAhead: 22 }),
         locationName: 'Rejtett pálya',
         minPlayers: 10,
         playersOnFieldTotal: 10,
@@ -345,7 +345,7 @@ describe('Event state and edit rules E2E', () => {
       .set('Authorization', `Bearer ${team_adminToken}`)
       .send({
         title: 'Fix díjas esemény',
-        startAt: '2026-06-10T18:00:00.000Z',
+        startAt: buildStableFutureIsoDate({ daysAhead: 23 }),
         locationName: 'Fix pálya',
         minPlayers: 10,
         playersOnFieldTotal: 10,
@@ -374,7 +374,7 @@ describe('Event state and edit rules E2E', () => {
       .set('Authorization', `Bearer ${team_adminToken}`)
       .send({
         title: 'Osztott díjas esemény',
-        startAt: '2026-06-11T18:00:00.000Z',
+        startAt: buildStableFutureIsoDate({ daysAhead: 24 }),
         locationName: 'Osztott pálya',
         minPlayers: 2,
         playersOnFieldTotal: 2,

@@ -5,13 +5,19 @@ const EVENT_TIMEZONE = 'Europe/Budapest';
 const MAX_HOURLY_FORECAST_DAYS = 5;
 const SEVERE_WEATHER_ICON_CODES = new Set([12, 13, 14, 15, 16, 17, 18, 24, 25, 26, 29, 41, 42]);
 const OPEN_METEO_SEVERE_WEATHER_CODES = new Set([95, 96, 99]);
+const {
+  getEventLocationCoordinates,
+  persistEventLocationGeo,
+  resolveEventLocationGeo
+} = require('./googleGeocodingService');
 
 const WEATHER_UNAVAILABLE_MESSAGES = Object.freeze({
   missing_location: 'Az eseményhez nincs megadva használható helyszín.',
   outside_forecast_window: 'Az órás előrejelzés az esemény előtt kb. 5 nappal lesz elérhető.',
   past_event: 'Múltbeli eseményhez már nem kérünk időjárás-előrejelzést.',
   missing_api_key: 'Az időjárás szolgáltatás nincs bekonfigurálva.',
-  geocode_failed: 'Ehhez a helyszínhez nem sikerült koordinátát találni. Adj meg várost és irányítószámot is.',
+  missing_geocoding_api_key: 'A cím alapú helymeghatározás nincs bekonfigurálva.',
+  geocode_failed: 'Ehhez a címhez nem sikerült koordinátát találni. Válassz címet a Google találatok közül.',
   forecast_not_found: 'Ehhez az időponthoz nem találtunk órás előrejelzést.',
   provider_error: 'Az időjárás szolgáltató most nem elérhető. Próbáld meg később.'
 });
@@ -137,7 +143,7 @@ function getConfiguredWeatherProvider() {
 }
 
 function buildWeatherLocationQuery(event = {}) {
-  return String(event.location_address || event.location_name || '').trim();
+  return String(event.location_formatted_address || event.location_address || event.location_name || '').trim();
 }
 
 function hasPreciseWeatherAddress(event = {}) {
@@ -402,14 +408,7 @@ function findNearestOpenMeteoForecastEntry(hourly = {}, targetIso) {
   };
 }
 
-async function fetchOpenMeteoForecastForEvent(event, query) {
-  let location;
-  try {
-    location = await geocodeLocationOpenMeteo(query);
-  } catch {
-    return buildWeatherUnavailable('provider_error');
-  }
-
+async function fetchOpenMeteoForecastForEvent(event, location) {
   if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) {
     return buildWeatherUnavailable('geocode_failed');
   }
@@ -440,7 +439,7 @@ async function fetchOpenMeteoForecastForEvent(event, query) {
     available: true,
     provider: 'Open-Meteo',
     providerKey: 'open_meteo',
-    locationLabel: location.label || query,
+    locationLabel: location.label || location.formattedAddress || buildWeatherLocationQuery(event),
     forecastTime: nearestEntry.time,
     temperature: Number(nearestEntry.temperature ?? 0),
     precipitationProbability: Number(nearestEntry.precipitationProbability ?? 0),
@@ -450,6 +449,42 @@ async function fetchOpenMeteoForecastForEvent(event, query) {
     weatherIcon: iconMeta.icon,
     usedPreciseAddress: hasPreciseWeatherAddress(event)
   };
+}
+
+async function resolveOpenMeteoLocation(event) {
+  const storedCoordinates = getEventLocationCoordinates(event);
+  if (storedCoordinates) {
+    return {
+      ...storedCoordinates,
+      label: storedCoordinates.formattedAddress || buildWeatherLocationQuery(event)
+    };
+  }
+
+  try {
+    const geo = await resolveEventLocationGeo(event, { throwOnFailure: true });
+    if (!geo) {
+      return buildWeatherUnavailable('geocode_failed');
+    }
+
+    if (event?.id) {
+      try {
+        await persistEventLocationGeo(event.id, geo);
+      } catch (error) {
+        console.warn('Event location geocode persist failed:', error?.message || error);
+      }
+    }
+
+    return {
+      ...geo,
+      label: geo.formattedAddress || buildWeatherLocationQuery(event)
+    };
+  } catch (error) {
+    if (error?.code === 'missing_google_api_key') {
+      return buildWeatherUnavailable('missing_geocoding_api_key');
+    }
+
+    return buildWeatherUnavailable('provider_error');
+  }
 }
 
 async function fetchAccuWeatherForecastForEvent(event, query, forecastWindow) {
@@ -525,7 +560,7 @@ async function fetchEventWeatherForecast(event) {
   }
 
   const query = buildWeatherLocationQuery(event);
-  if (!query) {
+  if (!query && !getEventLocationCoordinates(event)) {
     return buildWeatherUnavailable('missing_location');
   }
 
@@ -540,7 +575,11 @@ async function fetchEventWeatherForecast(event) {
 
   const provider = getConfiguredWeatherProvider();
   if (provider === 'open_meteo') {
-    return fetchOpenMeteoForecastForEvent(event, query);
+    const location = await resolveOpenMeteoLocation(event);
+    if (location?.available === false) {
+      return location;
+    }
+    return fetchOpenMeteoForecastForEvent(event, location);
   }
 
   return fetchAccuWeatherForecastForEvent(event, query, forecastWindow);

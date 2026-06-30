@@ -14,6 +14,10 @@ const {
   normalizePaymentLinkUrl,
   validatePaymentLinkConfig
 } = require('../utils/paymentLinks');
+const {
+  resolveEventLocationGeo,
+  toEventLocationGeoColumns
+} = require('./googleGeocodingService');
 
 const EVENT_STATUS = Object.freeze({
   DRAFT: 'draft',
@@ -342,7 +346,8 @@ async function insertGeneratedEvent(client, {
   maxPlayers,
   normalizedInitialStatus,
   normalizedSubstitutesCount,
-  normalizedNotificationPreferences
+  normalizedNotificationPreferences,
+  locationGeoColumns
 }) {
   const pricingConfig = resolvePricingConfig({
     pricingMode: data.pricingMode,
@@ -363,6 +368,11 @@ async function insertGeneratedEvent(client, {
       start_at,
       location_name,
       location_address,
+      location_latitude,
+      location_longitude,
+      location_place_id,
+      location_formatted_address,
+      location_geocoded_at,
       min_players,
       max_players,
       status,
@@ -390,6 +400,11 @@ async function insertGeneratedEvent(client, {
       $12,
       $13,
       $14,
+      $15,
+      $16,
+      $17,
+      $18,
+      $19,
       false,
       now(),
       now()
@@ -404,6 +419,11 @@ async function insertGeneratedEvent(client, {
       startAt.toISOString(),
       normalizeString(data.locationName),
       normalizeString(data.locationAddress),
+      locationGeoColumns.locationLatitude,
+      locationGeoColumns.locationLongitude,
+      locationGeoColumns.locationPlaceId,
+      locationGeoColumns.locationFormattedAddress,
+      locationGeoColumns.locationGeocodedAt,
       data.minPlayers,
       maxPlayers,
       normalizedInitialStatus,
@@ -501,6 +521,10 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
     startAt,
     locationName,
     locationAddress,
+    locationLatitude,
+    locationLongitude,
+    locationPlaceId,
+    locationFormattedAddress,
     minPlayers,
     playersOnFieldTotal,
     substitutesEnabled,
@@ -566,6 +590,17 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
   if (paymentLinkError) {
     throw new AppError(400, paymentLinkError);
   }
+
+  const locationGeoColumns = toEventLocationGeoColumns(
+    await resolveEventLocationGeo({
+      locationName,
+      locationAddress,
+      locationLatitude,
+      locationLongitude,
+      locationPlaceId,
+      locationFormattedAddress
+    })
+  );
 
   const occurrenceDates = buildOccurrenceDates({
     startAtDate,
@@ -750,7 +785,8 @@ async function createEventSeries({ teamId, createdByUserId, data }) {
         maxPlayers,
         normalizedInitialStatus,
         normalizedSubstitutesCount,
-        normalizedNotificationPreferences
+        normalizedNotificationPreferences,
+        locationGeoColumns
       });
 
       generatedEvents.push({

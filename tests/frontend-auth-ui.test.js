@@ -2761,6 +2761,14 @@ describe('Frontend auth UI smoke tests', () => {
     document.getElementById('eventTitle').value = 'Pontos címes foci';
     document.getElementById('eventStartAt').value = '2026-06-12T18:00';
     document.getElementById('eventLocationAddress').value = '1183 Budapest, Ferihegyi út 140';
+    window.eval(`
+      state.eventLocationPlace = {
+        formattedAddress: '1183 Budapest, Ferihegyi út 140',
+        placeId: 'place-1',
+        latitude: 47.436,
+        longitude: 19.19
+      };
+    `);
     document.getElementById('eventMinPlayers').value = '8';
     document.getElementById('eventPlayersOnField').value = '10';
     document.getElementById('createEventForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
@@ -2773,6 +2781,10 @@ describe('Frontend auth UI smoke tests', () => {
     const payload = JSON.parse(eventCall[1].body);
     expect(payload.locationAddress).toBe('1183 Budapest, Ferihegyi út 140');
     expect(payload.locationName).toBe('1183 Budapest, Ferihegyi út 140');
+    expect(payload.locationLatitude).toBe(47.436);
+    expect(payload.locationLongitude).toBe(19.19);
+    expect(payload.locationPlaceId).toBe('place-1');
+    expect(payload.locationFormattedAddress).toBe('1183 Budapest, Ferihegyi út 140');
   });
 
   test('a helyszín megjelenítés nem duplázza az azonos helyszínnevet és pontos címet', async () => {

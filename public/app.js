@@ -41,6 +41,7 @@ const state = {
   countdownTimer: null,
   googleAuthConfig: null,
   googleMapsConfig: null,
+  eventLocationPlace: null,
   versionInfo: null,
   pendingInviteToken: initialUrlParams.get('invite') || '',
   pendingLinkedTeamId: initialUrlParams.get('teamId') || '',
@@ -3322,6 +3323,7 @@ function resetUnifiedAdminEventForm() {
   if (locationAddressInput) {
     locationAddressInput.value = '';
   }
+  state.eventLocationPlace = null;
   document.getElementById('eventLocation').value = '';
   document.getElementById('eventStatus').value = 'published';
   document.getElementById('eventPricingMode').value = EVENT_PRICING_MODES.FREE;
@@ -3354,6 +3356,17 @@ function populateUnifiedAdminEventForm(event) {
   if (locationAddressInput) {
     locationAddressInput.value = event.location_address || event.location_name || '';
   }
+  state.eventLocationPlace = (
+    event.location_latitude != null &&
+    event.location_longitude != null
+  )
+    ? {
+        formattedAddress: event.location_formatted_address || event.location_address || event.location_name || '',
+        placeId: event.location_place_id || '',
+        latitude: Number(event.location_latitude),
+        longitude: Number(event.location_longitude)
+      }
+    : null;
   document.getElementById('eventMinPlayers').value = event.min_players ?? '';
   document.getElementById('eventPlayersOnField').value = event.players_on_field_total ?? '';
   document.getElementById('eventRulesText').value = event.rules_text || '';
@@ -4125,6 +4138,31 @@ function getLocationSearchQuery() {
   return address || locationName || '';
 }
 
+function readEventLocationGeoPayload(locationAddressValue) {
+  const selectedPlace = state.eventLocationPlace;
+  const currentAddress = String(locationAddressValue || '').trim();
+  if (!selectedPlace || !currentAddress) {
+    return {};
+  }
+
+  const selectedAddress = String(selectedPlace.formattedAddress || '').trim();
+  const sameAddress = normalizeLocationText(selectedAddress) === normalizeLocationText(currentAddress);
+  if (!sameAddress) {
+    return {};
+  }
+
+  if (!Number.isFinite(Number(selectedPlace.latitude)) || !Number.isFinite(Number(selectedPlace.longitude))) {
+    return {};
+  }
+
+  return {
+    locationLatitude: Number(selectedPlace.latitude),
+    locationLongitude: Number(selectedPlace.longitude),
+    locationPlaceId: selectedPlace.placeId || null,
+    locationFormattedAddress: selectedPlace.formattedAddress || currentAddress
+  };
+}
+
 function openEventLocationInGoogleMaps() {
   const url = buildMapsSearchUrlForQuery(getLocationSearchQuery());
   if (!url) {
@@ -4175,16 +4213,30 @@ function bindEventLocationAutocomplete() {
   }
 
   const autocomplete = new window.google.maps.places.Autocomplete(addressInput, {
-    fields: ['formatted_address', 'name'],
+    fields: ['formatted_address', 'geometry', 'name', 'place_id'],
     componentRestrictions: { country: 'hu' }
+  });
+
+  addressInput.addEventListener('input', () => {
+    state.eventLocationPlace = null;
   });
 
   autocomplete.addListener('place_changed', () => {
     const place = autocomplete.getPlace();
+    const latitude = Number(place?.geometry?.location?.lat?.());
+    const longitude = Number(place?.geometry?.location?.lng?.());
     if (place?.formatted_address) {
       addressInput.value = place.formatted_address;
     }
     locationInput.value = (place?.name || place?.formatted_address || addressInput.value || '').trim();
+    state.eventLocationPlace = Number.isFinite(latitude) && Number.isFinite(longitude)
+      ? {
+          formattedAddress: place?.formatted_address || addressInput.value || '',
+          placeId: place?.place_id || '',
+          latitude,
+          longitude
+        }
+      : null;
     setLocationAssistStatus('Google címválasztás aktív. Válassz egy találatot a listából.', 'success');
   });
 
@@ -15639,6 +15691,7 @@ async function handleCreateEvent(event) {
     startAt: toIsoFromInput(startAtInputValue),
     locationName: locationNameValue,
     locationAddress: locationAddressValue,
+    ...readEventLocationGeoPayload(locationAddressValue),
     minPlayers: Number(document.getElementById('eventMinPlayers').value),
     playersOnFieldTotal: Number(document.getElementById('eventPlayersOnField').value),
     substitutesEnabled,
@@ -15691,6 +15744,10 @@ async function handleCreateEvent(event) {
             startAt: basePayload.startAt,
             locationName: basePayload.locationName,
             locationAddress: basePayload.locationAddress,
+            locationLatitude: basePayload.locationLatitude,
+            locationLongitude: basePayload.locationLongitude,
+            locationPlaceId: basePayload.locationPlaceId,
+            locationFormattedAddress: basePayload.locationFormattedAddress,
             rulesText: basePayload.rulesText,
             fixedPricePerPerson: basePayload.fixedPricePerPerson,
             totalEventCost: basePayload.totalEventCost,
@@ -15705,6 +15762,10 @@ async function handleCreateEvent(event) {
             startAt: basePayload.startAt,
             locationName: basePayload.locationName,
             locationAddress: basePayload.locationAddress,
+            locationLatitude: basePayload.locationLatitude,
+            locationLongitude: basePayload.locationLongitude,
+            locationPlaceId: basePayload.locationPlaceId,
+            locationFormattedAddress: basePayload.locationFormattedAddress,
             minPlayers: basePayload.minPlayers,
             playersOnFieldTotal: basePayload.playersOnFieldTotal,
             substitutesEnabled: basePayload.substitutesEnabled,

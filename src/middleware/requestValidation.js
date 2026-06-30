@@ -653,6 +653,10 @@ function validateCreateEvent(req, res, next) {
   if (totalEventCost.error) return badRequest(res, totalEventCost.error);
   const perPlayerFee = validateInteger(req.body.perPlayerFee, 'A perPlayerFee', { min: 0, max: 500 });
   if (perPlayerFee.error) return badRequest(res, perPlayerFee.error);
+  const locationLatitude = validateNumber(req.body.locationLatitude, 'A locationLatitude', { min: -90, max: 90 });
+  if (locationLatitude.error) return badRequest(res, locationLatitude.error);
+  const locationLongitude = validateNumber(req.body.locationLongitude, 'A locationLongitude', { min: -180, max: 180 });
+  if (locationLongitude.error) return badRequest(res, locationLongitude.error);
   const pricingMode = normalizePricingMode(req.body.pricingMode) || (req.body.pricePerPlayer != null ? 'fixed_per_person' : 'free');
   const pricingError = validatePricingConfig({
     pricingMode,
@@ -665,6 +669,8 @@ function validateCreateEvent(req, res, next) {
   for (const [field, label, maxLength] of [
     ['description', 'A description', 2000],
     ['locationAddress', 'A locationAddress', 255],
+    ['locationPlaceId', 'A locationPlaceId', 255],
+    ['locationFormattedAddress', 'A locationFormattedAddress', 500],
     ['fieldSize', 'A fieldSize', 50],
     ['fieldQuality', 'A fieldQuality', 50],
     ['surfaceType', 'A surfaceType', 50],
@@ -682,6 +688,8 @@ function validateCreateEvent(req, res, next) {
   req.body.title = title.value;
   req.body.startAt = startAt.value;
   req.body.locationName = locationName.value;
+  req.body.locationLatitude = locationLatitude.value ?? null;
+  req.body.locationLongitude = locationLongitude.value ?? null;
   req.body.notificationPreferences = notificationPreferences.value;
   req.body.pricingMode = pricingMode;
   req.body.fixedPricePerPerson = req.body.fixedPricePerPerson ?? req.body.pricePerPlayer ?? null;
@@ -715,6 +723,10 @@ function validateUpdateEvent(req, res, next) {
     'startAt',
     'locationName',
     'locationAddress',
+    'locationLatitude',
+    'locationLongitude',
+    'locationPlaceId',
+    'locationFormattedAddress',
     'minPlayers',
     'playersOnFieldTotal',
     'substitutesEnabled',
@@ -767,6 +779,8 @@ function validateUpdateEvent(req, res, next) {
   for (const [field, label, maxLength] of [
     ['description', 'A description', 2000],
     ['locationAddress', 'A locationAddress', 255],
+    ['locationPlaceId', 'A locationPlaceId', 255],
+    ['locationFormattedAddress', 'A locationFormattedAddress', 500],
     ['fieldSize', 'A fieldSize', 50],
     ['fieldQuality', 'A fieldQuality', 50],
     ['surfaceType', 'A surfaceType', 50],
@@ -805,6 +819,16 @@ function validateUpdateEvent(req, res, next) {
 
   if (Object.prototype.hasOwnProperty.call(req.body, 'hiddenFromAdminList')) {
     const result = validateBoolean(req.body.hiddenFromAdminList, 'A hiddenFromAdminList', { required: true });
+    if (result.error) return badRequest(res, result.error);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'locationLatitude')) {
+    const result = validateNumber(req.body.locationLatitude, 'A locationLatitude', { min: -90, max: 90 });
+    if (result.error) return badRequest(res, result.error);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'locationLongitude')) {
+    const result = validateNumber(req.body.locationLongitude, 'A locationLongitude', { min: -180, max: 180 });
     if (result.error) return badRequest(res, result.error);
   }
 

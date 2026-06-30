@@ -24,6 +24,10 @@ const {
   validatePaymentLinkConfig
 } = require('../utils/paymentLinks');
 const { buildRulesAcceptanceState } = require('./teamRulesService');
+const {
+  resolveEventLocationGeo,
+  toEventLocationGeoColumns
+} = require('./googleGeocodingService');
 
 const EVENT_STATUS = Object.freeze({
   DRAFT: 'draft',
@@ -196,6 +200,10 @@ async function createEvent({ teamId, createdByUserId, data }) {
     startAt,
     locationName,
     locationAddress,
+    locationLatitude,
+    locationLongitude,
+    locationPlaceId,
+    locationFormattedAddress,
     minPlayers,
     playersOnFieldTotal,
     substitutesEnabled,
@@ -291,6 +299,16 @@ async function createEvent({ teamId, createdByUserId, data }) {
     substitutesEnabled,
     substitutesCount
   });
+  const locationGeoColumns = toEventLocationGeoColumns(
+    await resolveEventLocationGeo({
+      locationName,
+      locationAddress,
+      locationLatitude,
+      locationLongitude,
+      locationPlaceId,
+      locationFormattedAddress
+    })
+  );
 
   return withTransaction(async client => {
     const teamCheck = await client.query(
@@ -322,6 +340,11 @@ async function createEvent({ teamId, createdByUserId, data }) {
         start_at,
         location_name,
         location_address,
+        location_latitude,
+        location_longitude,
+        location_place_id,
+        location_formatted_address,
+        location_geocoded_at,
         min_players,
         max_players,
         status,
@@ -342,6 +365,11 @@ async function createEvent({ teamId, createdByUserId, data }) {
         $9,
         $10,
         $11,
+        $12,
+        $13,
+        $14,
+        $15,
+        $16,
         now(),
         now()
       )
@@ -355,6 +383,11 @@ async function createEvent({ teamId, createdByUserId, data }) {
         startAt,
         String(locationName).trim(),
         locationAddress || null,
+        locationGeoColumns.locationLatitude,
+        locationGeoColumns.locationLongitude,
+        locationGeoColumns.locationPlaceId,
+        locationGeoColumns.locationFormattedAddress,
+        locationGeoColumns.locationGeocodedAt,
         minPlayers,
         maxPlayers,
         normalizedInitialStatus,
@@ -619,6 +652,10 @@ async function updateEvent({ eventId, data }) {
       startAt,
       locationName,
       locationAddress,
+      locationLatitude,
+      locationLongitude,
+      locationPlaceId,
+      locationFormattedAddress,
       minPlayers,
       playersOnFieldTotal,
       substitutesEnabled,
@@ -651,6 +688,11 @@ async function updateEvent({ eventId, data }) {
         start_at,
         location_name,
         location_address,
+        location_latitude,
+        location_longitude,
+        location_place_id,
+        location_formatted_address,
+        location_geocoded_at,
         min_players,
         max_players,
         hidden_from_admin_list,
@@ -738,6 +780,10 @@ async function updateEvent({ eventId, data }) {
       'startAt',
       'locationName',
       'locationAddress',
+      'locationLatitude',
+      'locationLongitude',
+      'locationPlaceId',
+      'locationFormattedAddress',
       'minPlayers',
       'playersOnFieldTotal',
       'substitutesEnabled',
@@ -764,6 +810,10 @@ async function updateEvent({ eventId, data }) {
       'startAt',
       'locationName',
       'locationAddress',
+      'locationLatitude',
+      'locationLongitude',
+      'locationPlaceId',
+      'locationFormattedAddress',
       'rulesText',
       'paymentNotes',
       'paymentLinkProvider',
@@ -877,6 +927,33 @@ async function updateEvent({ eventId, data }) {
           ? normalizeNotificationPreferences(notificationPreferences)
           : normalizeNotificationPreferences(currentEvent.notification_preferences)
     };
+    const locationTextChanged =
+      String(nextEvent.locationName || '') !== String(currentEvent.location_name || '') ||
+      String(nextEvent.locationAddress || '') !== String(currentEvent.location_address || '');
+    const locationGeoRequested = [
+      'locationLatitude',
+      'locationLongitude',
+      'locationPlaceId',
+      'locationFormattedAddress'
+    ].some(field => Object.prototype.hasOwnProperty.call(data, field));
+    const locationGeoColumns = locationTextChanged || locationGeoRequested
+      ? toEventLocationGeoColumns(
+          await resolveEventLocationGeo({
+            locationName: nextEvent.locationName,
+            locationAddress: nextEvent.locationAddress,
+            locationLatitude,
+            locationLongitude,
+            locationPlaceId,
+            locationFormattedAddress
+          })
+        )
+      : {
+          locationLatitude: currentEvent.location_latitude,
+          locationLongitude: currentEvent.location_longitude,
+          locationPlaceId: currentEvent.location_place_id,
+          locationFormattedAddress: currentEvent.location_formatted_address,
+          locationGeocodedAt: currentEvent.location_geocoded_at
+        };
 
     if (!nextEvent.title || !String(nextEvent.title).trim()) {
       throw new AppError(400, 'A title nem lehet üres.');
@@ -969,9 +1046,14 @@ async function updateEvent({ eventId, data }) {
           start_at = $4,
           location_name = $5,
           location_address = $6,
-          min_players = $7,
-          max_players = $8,
-          hidden_from_admin_list = $9,
+          location_latitude = $7,
+          location_longitude = $8,
+          location_place_id = $9,
+          location_formatted_address = $10,
+          location_geocoded_at = $11,
+          min_players = $12,
+          max_players = $13,
+          hidden_from_admin_list = $14,
           updated_at = now()
       where id = $1
       returning *
@@ -983,6 +1065,11 @@ async function updateEvent({ eventId, data }) {
         nextEvent.startAt,
         String(nextEvent.locationName).trim(),
         nextEvent.locationAddress || null,
+        locationGeoColumns.locationLatitude,
+        locationGeoColumns.locationLongitude,
+        locationGeoColumns.locationPlaceId,
+        locationGeoColumns.locationFormattedAddress,
+        locationGeoColumns.locationGeocodedAt,
         nextEvent.minPlayers,
         maxPlayers,
         nextEvent.hiddenFromAdminList === true
@@ -1065,6 +1152,11 @@ async function getEventById(eventId, userId = null) {
       e.published_at,
       e.location_name,
       e.location_address,
+      e.location_latitude,
+      e.location_longitude,
+      e.location_place_id,
+      e.location_formatted_address,
+      e.location_geocoded_at,
       e.min_players,
       e.max_players,
       e.hidden_from_admin_list,
@@ -1454,6 +1546,11 @@ async function getEventsByTeamId(teamId, userId = null) {
       e.published_at,
       e.location_name,
       e.location_address,
+      e.location_latitude,
+      e.location_longitude,
+      e.location_place_id,
+      e.location_formatted_address,
+      e.location_geocoded_at,
       e.min_players,
       e.max_players,
       e.hidden_from_admin_list,
